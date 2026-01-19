@@ -10,6 +10,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 load_dotenv()
 
 app = FastAPI(
@@ -17,6 +20,17 @@ app = FastAPI(
     description="A RAG-powered analytics tool for querying store data using natural language.",
     version="1.0.0"
 )
+
+# Mount static files
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+@app.get("/")
+async def read_index():
+    return FileResponse(os.path.join(static_dir, "index.html"))
 
 # --- Models ---
 class QueryRequest(BaseModel):

@@ -1,117 +1,116 @@
-# Computer Store RAG Agent (Hugging Face Edition)
+# Computer Store AI Analytics Dashboard (Hugging Face Edition)
 
-This project implements a Retrieval-Augmented Generation (RAG) agent capable of interacting with a computer store's SQL database. It uses **Hugging Face's Inference API** (defaulting to `Qwen/Qwen2.5-72B-Instruct`) to translate natural language questions into SQL queries, execute them, and provide answering based on the data.
+This project implements a Retrieval-Augmented Generation (RAG) agent capable of interacting with a computer store's SQL database. It uses **Hugging Face's Inference API** (defaulting to `Qwen/Qwen2.5-72B-Instruct`) to act as a **Senior Data Analyst**, translating natural language questions into SQL, generating visualizations, and providing deep insights.
 
-## Features
+## 🚀 Quick Start: The Dashboard
 
-- **Text-to-SQL Conversion**: Converts user questions into SQL queries using state-of-the-art open models.
-- **Database Interaction**: Automatically inspects database schemas and executes queries.
-- **Modular Design**: Separated concerns into database management, tool definitions, and agent logic.
-- **Data Persistence**: Uses a local SQLite database (`identifier.sqlite.db`).
+The easiest way to use the agent is through the modern web dashboard.
 
-## Project Structure
+1.  **Start the Server**:
+    ```bash
+    python3 -m uvicorn api:app --host 0.0.0.0 --port 8000 --app-dir src
+    ```
+2.  **Open in Browser**:
+    👉 **[http://localhost:8000](http://localhost:8000)**
+
+---
+
+## ✨ Features
+
+- **Text-to-SQL Conversion**: Advanced translation of complex questions into optimized SQL queries.
+- **Data Visualization**: Automatically generates JSON for charts (Bar, Line, Pie) via **Chart.js** integration.
+- **Data Analyst Persona**: Acts as a senior analyst providing context, explanations, and visual trends.
+- **Dynamic Databases**: Query any SQLite database file on the fly by specifying its path.
+- **Premium Frontend**: A custom responsive dashboard with glassmorphism UI/UX.
+- **Full REST API**: Integrated FastAPI backend for organizational integration.
+
+## 📁 Project Structure
 
 ```text
 rag-ai-agent/
 ├── src/
-│   ├── main.py         # Application entry point (HF Inference Client)
-│   ├── database.py     # Database connection and schema management
-│   └── tools.py        # GenAI tool definitions (JSON Schemas)
-├── requirements.txt    # Project dependencies
-├── identifier.sqlite.db # SQLite database file (created automatically)
+│   ├── api.py          # FastAPI Server (REST Endpoints)
+│   ├── main.py         # Core Agent Logic & Analyst Persona
+│   ├── database.py     # Schema Management & SQLite Connection
+│   ├── tools.py        # Tool Definitions (JSON Schemas)
+│   └── static/         # Frontend Dashboard
+│       └── index.html  # Premium Web Interface
+├── requirements.txt    # Project dependencies (FastAPI, HF Client)
+├── identifier.sqlite.db # Primary SQLite database
 └── README.md           # Project documentation
 ```
 
-## Prerequisites
+## 🛠️ Installation
 
-- Python 3.12+
-- A **Hugging Face Token** with access to the Inference API.
-
-## Installation
-
-1.  **Clone the repository** (if you haven't already).
-
-2.  **Install dependencies**:
+1.  **Install dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
 
-3.  **Set up Environment Variables**:
-    Create a `.env` file in the root directory and add your Hugging Face Token:
+2.  **Set up Environment Variables**:
+    Create a `.env` file in the root directory:
     ```env
     HF_TOKEN=your_hf_token_here
     ```
 
-    > **Note**: The `.env` file is ignored by git to protect your credentials.
+---
 
-## Running as an API
+## 📡 API Reference
 
-The agent can also be run as a FastAPI service, making it suitable for organizational analytics.
+### Endpoints
 
-### Start the API Server
+- **`GET /`**: Serves the Analytics Dashboard.
+- **`GET /health`**: System status check.
+- **`GET /tables`**: Returns database schema information.
+- **`POST /query`**: The heart of the analyst.
+  - **Body**: 
+    ```json
+    {
+      "query": "Show me a pie chart of sales by staff member.",
+      "db_path": "optional/path/to/other.db"
+    }
+    ```
+  - **Returns**: Textual analysis and a `visualization` object for charts.
 
-```bash
-python3 -m uvicorn src.api:app --host 0.0.0.0 --port 8000 --app-dir src
+- **`GET /analytics`**: Internal logs for query auditing.
+
+---
+
+## 🎨 Visualization Capability
+
+When you ask for a graph or trend, the agent identifies the correct aggregation and returns a structured payload:
+
+```json
+"visualization": {
+  "type": "bar",
+  "labels": ["Laptop", "Keyboard", "Mouse"],
+  "data": [799.99, 129.99, 29.99]
+}
 ```
 
-### API Endpoints
+The frontend dashboard automatically picks this up and renders a beautiful, interactive chart.
 
-- **`GET /health`**: Check system status.
-- **`GET /tables`**: List all database tables and their schemas.
-- **`POST /query`**: Ask a natural language question.
-  - Body: `{"query": "Show me a bar chart of product prices.", "db_path": "path/to/db.sqlite"}`
-  - Returns: `{"response": "...", "visualization": {"type": "bar", ...}}`
-- **`GET /analytics`**: Retrieve query logs and usage statistics.
+---
 
-### Data Visualization
+## 🧠 How it Works
 
-When acting as a **Data Analyst**, the agent can generate structured data for charts. Simply ask:
-*"Show me a bar chart of product sales"* or *"Visualize the trend of orders."*
+The system uses a **Multi-Turn RAG Loop**:
+1.  **Schema Awareness**: The agent explores tables using `list_tables` and `describe_table`.
+2.  **Tool Execution**: It executes multi-step SQL queries to gather nested data.
+3.  **Synthesis**: The Senior Data Analyst persona translates results into actionable insights and visual data.
+4.  **Logging**: Every query is tracked for organizational performance monitoring.
 
-The API will return a `visualization` object that can be directly consumed by frontend charting libraries like Chart.js or Recharts.
+## 📊 Database Schema
 
-### Dynamic Databases
+Default tables include:
+- **Products**: Catalog of items and prices.
+- **Staff**: Sales personnel details.
+- **Orders**: Transaction records linking staff and products.
 
-The API supports connecting to different SQLite databases on the fly. Pass the `db_path` in the `/query` request body to analyze external data sources.
+---
 
-### Example Request
+## 🤝 Contribution & Customization
 
-```bash
-curl -X POST http://localhost:8000/query \
-     -H "Content-Type: application/json" \
-     -d '{"query": "Who is the top salesperson?"}'
-```
-
-## How it Works
-
-The system uses a **multi-turn RAG loop**:
-1.  **Natural Language Query**: The user asks a question via CLI or API.
-2.  **Tool Selection**: The model (Qwen 2.5) identifies which SQL tools are needed (`list_tables`, `describe_table`, `execute_query`).
-3.  **Execution**: The agent executes the SQL and feeds the results back to the model.
-4.  **Answer**: The model synthesizes the final answer based on the data.
-5.  **Logging**: The API version logs the query and tools used for internal analytics.
-
-## Usage
-
-Run the main script to start the agent:
-
-```bash
-python3 src/main.py
-```
-
-The script will:
-1.  Initialize the SQLite database.
-2.  Connect to the Hugging Face Inference API.
-3.  Run example queries using `Qwen/Qwen2.5-72B-Instruct`.
-
-## Database Schema
-
-The database consists of three tables:
-- **Products**: `product_id`, `product_name`, `price`
-- **Staff**: `staff_id`, `first_name`, `last_name`
-- **Orders**: `order_id`, `customer_name`, `staff_id`, `product_id`
-
-## Customization
-
--   **Adding more data**: Modify `src/database.py` in the `_seed_data` method.
--   **Changing the model**: Update `MODEL_NAME` in `src/main.py`.
+-   **Persona**: Modify `SYSTEM_PROMPT` in `src/main.py`.
+-   **Database**: Add more initial data in `src/database.py`.
+-   **API**: Extend endpoints in `src/api.py`.

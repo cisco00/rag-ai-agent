@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analytics Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --accent: #22d3ee;
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-image: radial-gradient(circle at top right, #1e1b4b, transparent), 
+                              radial-gradient(circle at bottom left, #0f172a, transparent);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            width: 100%;
+        }
+
+        header {
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 3rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #818cf8, #22d3ee);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-dim);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 1.5rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent);
+        }
+
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--text-dim);
+        }
+
+        textarea, input {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--glass-border);
+            border-radius: 0.75rem;
+            padding: 0.75rem;
+            color: white;
+            font-size: 1rem;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        textarea:focus, input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+
+        button {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 0.75rem;
+            padding: 0.875rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 1rem;
+        }
+
+        button:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        #tables {
+            list-style: none;
+        }
+
+        .table-item {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--glass-border);
+            font-size: 0.9rem;
+        }
+
+        .table-item:last-child {
+            border-bottom: none;
+        }
+
+        .table-name {
+            font-weight: 600;
+            color: var(--accent);
+            display: block;
+        }
+
+        .table-schema {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            font-family: monospace;
+        }
+
+        .response-area {
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .response-text {
+            white-space: pre-wrap;
+            font-size: 1.05rem;
+        }
+
+        canvas {
+            max-width: 100% !important;
+            margin-top: 1rem;
+        }
+
+        .loader {
+            display: none;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .health-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-bottom: 1rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4ade80;
+        }
+        
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Analytics AI</h1>
+            <p class="subtitle">Natural Language Database Explorer & Visualizer</p>
+        </header>
+
+        <div class="health-indicator">
+            <div class="status-dot" id="health-dot"></div>
+            <span id="health-text">Checking API status...</span>
+        </div>
+
+        <div class="grid">
+            <section class="left-col">
+                <div class="card" style="margin-bottom: 2rem;">
+                    <div class="card-title">🔍 Explorer</div>
+                    <div class="input-group">
+                        <label for="query">Ask a Question</label>
+                        <textarea id="query" rows="3" placeholder="e.g. Visualize product prices as a bar chart..."></textarea>
+                    </div>
+                    <div class="input-group">
+                        <label for="db_path">Database Path (Optional)</label>
+                        <input type="text" id="db_path" placeholder="identifier.sqlite.db">
+                    </div>
+                    <button id="run-btn">Execute Analysis</button>
+                    <div class="loader" id="loader"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">📊 Database Schema</div>
+                    <ul id="tables">
+                        <li class="table-item">Loading tables...</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section class="right-col">
+                <div class="card response-area" id="response-card" style="display: none;">
+                    <div class="card-title">✨ Analyst Insights</div>
+                    <div class="response-text" id="response-text"></div>
+                    <div id="chart-container">
+                        <canvas id="vizChart"></canvas>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        let myChart = null;
+
+        async function checkHealth() {
+            try {
+                const res = await fetch('/health');
+                const data = await res.json();
+                const dot = document.getElementById('health-dot');
+                const text = document.getElementById('health-text');
+                if (data.status === 'healthy') {
+                    dot.style.background = '#4ade80';
+                    text.innerText = 'API Online';
+                } else {
+                    dot.style.background = '#f87171';
+                    text.innerText = 'API Offline';
+                }
+            } catch (e) {
+                document.getElementById('health-dot').style.background = '#f87171';
+                document.getElementById('health-text').innerText = 'API Unreachable';
+            }
+        }
+
+        async function loadTables() {
+            const list = document.getElementById('tables');
+            try {
+                const res = await fetch('/tables');
+                const data = await res.json();
+                list.innerHTML = '';
+                for (const [table, schema] of Object.entries(data.schemas)) {
+                    if (table === 'sqlite_sequence') continue;
+                    const li = document.createElement('li');
+                    li.className = 'table-item';
+                    li.innerHTML = `
+                        <span class="table-name">${table}</span>
+                        <span class="table-schema">${schema.map(s => s[0]).join(', ')}</span>
+                    `;
+                    list.appendChild(li);
+                }
+            } catch (e) {
+                list.innerText = 'Error loading tables.';
+            }
+        }
+
+        document.getElementById('run-btn').addEventListener('click', async () => {
+            const query = document.getElementById('query').value;
+            const db_path = document.getElementById('db_path').value;
+            const btn = document.getElementById('run-btn');
+            const loader = document.getElementById('loader');
+            const responseCard = document.getElementById('response-card');
+            const responseText = document.getElementById('response-text');
+            const chartCanvas = document.getElementById('vizChart');
+
+            if (!query) return;
+
+            btn.disabled = true;
+            loader.style.display = 'block';
+            responseCard.style.display = 'none';
+
+            try {
+                const res = await fetch('/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, db_path: db_path || undefined })
+                });
+                const data = await res.json();
+
+                responseCard.style.display = 'flex';
+                responseText.innerText = data.response;
+
+                if (data.visualization) {
+                    renderChart(data.visualization);
+                } else {
+                    if (myChart) myChart.destroy();
+                    chartCanvas.style.display = 'none';
+                }
+
+            } catch (e) {
+                alert('Analysis failed: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        });
+
+        function renderChart(viz) {
+            const ctx = document.getElementById('vizChart').getContext('2d');
+            document.getElementById('vizChart').style.display = 'block';
+            
+            if (myChart) myChart.destroy();
+
+            const chartColors = [
+                'rgba(99, 102, 241, 0.8)',
+                'rgba(34, 211, 238, 0.8)',
+                'rgba(129, 140, 248, 0.8)',
+                'rgba(167, 139, 250, 0.8)',
+                'rgba(244, 114, 182, 0.8)'
+            ];
+
+            myChart = new Chart(ctx, {
+                type: viz.type,
+                data: {
+                    labels: viz.labels,
+                    datasets: [{
+                        label: 'Value',
+                        data: viz.data,
+                        backgroundColor: viz.type === 'pie' ? chartColors : chartColors[0],
+                        borderColor: 'rgba(255, 255, 255, 0.1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            display: viz.type === 'pie',
+                            labels: { color: '#94a3b8' }
+                        }
+                    },
+                    scales: viz.type !== 'pie' ? {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    } : {}
+                }
+            });
+        }
+
+        checkHealth();
+        loadTables();
+    </script>
+</body>
+</html>
