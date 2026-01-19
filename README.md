@@ -59,8 +59,20 @@ python3 -m uvicorn src.api:app --host 0.0.0.0 --port 8000 --app-dir src
 - **`GET /health`**: Check system status.
 - **`GET /tables`**: List all database tables and their schemas.
 - **`POST /query`**: Ask a natural language question.
-  - Body: `{"query": "What is the cheapest product?"}`
+  - Body: `{"query": "Show me a bar chart of product prices.", "db_path": "path/to/db.sqlite"}`
+  - Returns: `{"response": "...", "visualization": {"type": "bar", ...}}`
 - **`GET /analytics`**: Retrieve query logs and usage statistics.
+
+### Data Visualization
+
+When acting as a **Data Analyst**, the agent can generate structured data for charts. Simply ask:
+*"Show me a bar chart of product sales"* or *"Visualize the trend of orders."*
+
+The API will return a `visualization` object that can be directly consumed by frontend charting libraries like Chart.js or Recharts.
+
+### Dynamic Databases
+
+The API supports connecting to different SQLite databases on the fly. Pass the `db_path` in the `/query` request body to analyze external data sources.
 
 ### Example Request
 

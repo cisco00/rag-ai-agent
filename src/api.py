@@ -22,13 +22,16 @@ app = FastAPI(
 class QueryRequest(BaseModel):
     query: str
     history: Optional[List[dict]] = None
+    db_path: Optional[str] = None
 
 class QueryResponse(BaseModel):
     query: str
     response: str
+    visualization: Optional[dict] = None
     status: str
 
 # --- State ---
+DEFAULT_DB = "identifier.sqlite.db"
 agent = None
 
 @app.on_event("startup")
@@ -36,10 +39,10 @@ async def startup_event():
     global agent
     hf_token = os.environ.get("HF_TOKEN")
     if not hf_token:
-        # In a real app we might want to log this properly
         print("CRITICAL: HF_TOKEN not found in environment.")
         return
-    agent = AnalyticsAgent(hf_token)
+    # Initialize with default DB
+    agent = AnalyticsAgent(hf_token, db_path=DEFAULT_DB)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -52,31 +55,58 @@ async def health_check():
     return {"status": "healthy", "agent_initialized": agent is not None}
 
 @app.get("/tables")
-async def get_tables():
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
+async def get_tables(db_path: Optional[str] = None):
+    hf_token = os.environ.get("HF_TOKEN")
     
-    tables = agent.db.list_tables()
-    schemas = {}
-    for table in tables:
-        schemas[table] = agent.db.describe_table(table)
+    # Use specified DB or default agent
+    target_agent = agent
+    is_transient = False
     
-    return {"tables": tables, "schemas": schemas}
+    if db_path and db_path != DEFAULT_DB:
+        target_agent = AnalyticsAgent(hf_token, db_path=db_path)
+        is_transient = True
 
-@app.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest):
-    if not agent:
+    if not target_agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
     
     try:
-        response_text = agent.run_query(request.query, request.history)
+        tables = target_agent.db.list_tables()
+        schemas = {}
+        for table in tables:
+            schemas[table] = target_agent.db.describe_table(table)
+        return {"tables": tables, "schemas": schemas}
+    finally:
+        if is_transient:
+            target_agent.close()
+
+@app.post("/query", response_model=QueryResponse)
+async def execute_query(request: QueryRequest):
+    hf_token = os.environ.get("HF_TOKEN")
+    
+    # Use specified DB or default agent
+    target_agent = agent
+    is_transient = False
+    
+    if request.db_path and request.db_path != DEFAULT_DB:
+        target_agent = AnalyticsAgent(hf_token, db_path=request.db_path)
+        is_transient = True
+
+    if not target_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    
+    try:
+        result = target_agent.run_query(request.query, request.history)
         return QueryResponse(
             query=request.query,
-            response=response_text,
+            response=result["text"],
+            visualization=result["visualization"],
             status="success"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if is_transient:
+            target_agent.close()
 
 @app.get("/analytics")
 async def get_analytics():

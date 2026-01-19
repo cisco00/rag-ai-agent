@@ -2,15 +2,16 @@ import sqlite3
 import os
 
 class DatabaseManager:
-    def __init__(self, db_name="identifier.sqlite.db"):
-        self.db_name = db_name
+    def __init__(self, db_path="identifier.sqlite.db", initialize=True):
+        self.db_path = db_path
         self.conn = None
         self._connect()
-        self._initialize_db()
+        if initialize:
+            self._initialize_db()
 
     def _connect(self):
         """Establish a connection to the database."""
-        self.conn = sqlite3.connect(self.db_name)
+        self.conn = sqlite3.connect(self.db_path)
 
     def _initialize_db(self):
         """Create tables and seed initial data if they don't exist."""
