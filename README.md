@@ -44,6 +44,41 @@ rag-ai-agent/
 
     > **Note**: The `.env` file is ignored by git to protect your credentials.
 
+## Running as an API
+
+The agent can also be run as a FastAPI service, making it suitable for organizational analytics.
+
+### Start the API Server
+
+```bash
+python3 -m uvicorn src.api:app --host 0.0.0.0 --port 8000 --app-dir src
+```
+
+### API Endpoints
+
+- **`GET /health`**: Check system status.
+- **`GET /tables`**: List all database tables and their schemas.
+- **`POST /query`**: Ask a natural language question.
+  - Body: `{"query": "What is the cheapest product?"}`
+- **`GET /analytics`**: Retrieve query logs and usage statistics.
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8000/query \
+     -H "Content-Type: application/json" \
+     -d '{"query": "Who is the top salesperson?"}'
+```
+
+## How it Works
+
+The system uses a **multi-turn RAG loop**:
+1.  **Natural Language Query**: The user asks a question via CLI or API.
+2.  **Tool Selection**: The model (Qwen 2.5) identifies which SQL tools are needed (`list_tables`, `describe_table`, `execute_query`).
+3.  **Execution**: The agent executes the SQL and feeds the results back to the model.
+4.  **Answer**: The model synthesizes the final answer based on the data.
+5.  **Logging**: The API version logs the query and tools used for internal analytics.
+
 ## Usage
 
 Run the main script to start the agent:
