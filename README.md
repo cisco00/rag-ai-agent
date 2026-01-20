@@ -1,4 +1,4 @@
-# Commercial AI Analytics API (Multi-Tenant)
+# Vantage AI: Commercial Analytics Portal
 
 This project is a production-ready, RAG-powered analytics tool for organizations. It allows companies to register, connect their own databases (SQL Server, PostgreSQL, MySQL, SQLite), and leverage AI-powered insights via a secure, authenticated API.
 

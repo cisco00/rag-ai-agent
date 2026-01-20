@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 app = FastAPI(
-    title="Commercial Analytics API",
+    title="Vantage AI",
     description="A multi-tenant RAG-powered analytics tool for organizations.",
     version="2.0.0"
 )
