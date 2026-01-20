@@ -114,6 +114,50 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel.")
         
+        # Store original row count for reporting
+        original_rows = len(df)
+        
+        # DATA CLEANING FUNCTION
+        def clean_dataframe(df):
+            """Clean dataframe by handling missing and null values"""
+            cleaning_report = []
+            
+            # 1. Drop columns that are entirely null
+            null_cols = df.columns[df.isnull().all()].tolist()
+            if null_cols:
+                df = df.drop(columns=null_cols)
+                cleaning_report.append(f"Removed {len(null_cols)} empty columns")
+            
+            # 2. Drop rows where more than 50% of values are null
+            threshold = len(df.columns) * 0.5
+            df = df.dropna(thresh=threshold)
+            
+            # 3. Handle remaining nulls by column type
+            for col in df.columns:
+                null_count = df[col].isnull().sum()
+                if null_count > 0:
+                    # For numeric columns, fill with median
+                    if pd.api.types.is_numeric_dtype(df[col]):
+                        median_val = df[col].median()
+                        df[col].fillna(median_val, inplace=True)
+                        cleaning_report.append(f"Filled {null_count} nulls in '{col}' with median ({median_val})")
+                    
+                    # For categorical/text columns, fill with mode or 'Unknown'
+                    else:
+                        if df[col].mode().empty:
+                            df[col].fillna('Unknown', inplace=True)
+                            cleaning_report.append(f"Filled {null_count} nulls in '{col}' with 'Unknown'")
+                        else:
+                            mode_val = df[col].mode()[0]
+                            df[col].fillna(mode_val, inplace=True)
+                            cleaning_report.append(f"Filled {null_count} nulls in '{col}' with mode ('{mode_val}')")
+            
+            return df, cleaning_report
+        
+        # Apply cleaning
+        df, cleaning_report = clean_dataframe(df)
+        cleaned_rows = len(df)
+        
         # Clean col names for SQL
         df.columns = [c.replace(' ', '_').replace('(', '').replace(')', '').lower() for c in df.columns]
         
@@ -127,7 +171,17 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         
         if success:
             FILE_DB_CACHE[org.api_key] = f"sqlite:///{temp_db_path}"
-            return {"status": "success", "message": f"File '{filename}' uploaded and processed.", "table_name": "uploaded_data"}
+            return {
+                "status": "success", 
+                "message": f"File '{filename}' uploaded and processed.", 
+                "table_name": "uploaded_data",
+                "cleaning_summary": {
+                    "original_rows": original_rows,
+                    "cleaned_rows": cleaned_rows,
+                    "rows_removed": original_rows - cleaned_rows,
+                    "actions": cleaning_report
+                }
+            }
         else:
             raise Exception("Failed to load dataframe into SQL")
             
