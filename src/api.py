@@ -11,7 +11,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report
 from database import DatabaseManager
 
 from fastapi.staticfiles import StaticFiles
@@ -185,6 +185,66 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         agent.close()
+
+@app.post("/share")
+async def share_report(request: QueryRequest, org=Depends(get_current_org)):
+    """Create a shareable link for an analysis result"""
+    # Determine which DB to use
+    conn_str = None
+    if request.use_file and org.api_key in FILE_DB_CACHE:
+        conn_str = FILE_DB_CACHE[org.api_key]
+    else:
+        conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
+        
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
+    
+    hf_token = os.environ.get("HF_TOKEN")
+    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
+    
+    try:
+        result = agent.run_query(request.query, request.history)
+        
+        # Create shared report
+        shared_report = create_shared_report(
+            org_id=org.id,
+            query=request.query,
+            response=result["text"],
+            visualization=result["visualization"]
+        )
+        
+        # Generate shareable URL
+        base_url = "http://localhost:8000"  # In production, use request.base_url
+        share_url = f"{base_url}/shared/{shared_report.id}"
+        
+        return {
+            "status": "success",
+            "share_url": share_url,
+            "report_id": shared_report.id,
+            "expires_at": shared_report.expires_at.isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        agent.close()
+
+@app.get("/shared/{report_id}")
+async def get_shared(report_id: str):
+    """Public endpoint to view shared reports (no auth required)"""
+    import json
+    
+    report = get_shared_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found or expired")
+    
+    visualization = json.loads(report.visualization) if report.visualization else None
+    
+    return {
+        "query": report.query,
+        "response": report.response,
+        "visualization": visualization,
+        "created_at": report.created_at.isoformat()
+    }
 
 if __name__ == "__main__":
     import uvicorn
