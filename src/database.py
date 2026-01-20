@@ -48,6 +48,17 @@ class DatabaseManager:
             print(f"Error listing tables: {e}")
             return []
 
+    def load_dataframe(self, df, table_name: str):
+        """Load a pandas DataFrame into a temporary table in the database."""
+        print(f" - DB CALL: load_dataframe into {table_name}")
+        try:
+            df.to_sql(table_name, self.engine, if_exists='replace', index=False)
+            self.inspector = inspect(self.engine) # Refresh inspector
+            return True
+        except Exception as e:
+            print(f"Error loading dataframe: {e}")
+            return False
+
     def close(self):
         """SQLAlchemy engine handles connection pooling, but we can dispose if needed."""
         self.engine.dispose()

@@ -5,3 +5,6 @@ uvicorn
 pydantic
 sqlalchemy
 httpx
+pandas
+openpyxl
+python-multipart

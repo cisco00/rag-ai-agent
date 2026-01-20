@@ -1,5 +1,7 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+import pandas as pd
+import io
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, UploadFile, File
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from typing import List, Optional
@@ -10,10 +12,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
 from models import init_admin_db, create_org, get_org_by_api_key, update_org_db
+from database import DatabaseManager
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -40,6 +42,10 @@ if not os.path.exists(static_dir):
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Temporary store for file-based database paths
+# In a real production app, this would be in a cache or persistent DB
+FILE_DB_CACHE = {}
+
 @app.on_event("startup")
 async def startup_event():
     init_admin_db()
@@ -59,6 +65,7 @@ class ConfigRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     history: Optional[List[dict]] = None
+    use_file: Optional[bool] = False
 
 class QueryResponse(BaseModel):
     query: str
@@ -71,10 +78,6 @@ async def get_current_org(x_api_key: str = Header(...)):
     org = get_org_by_api_key(x_api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Invalid API Key")
-    if not org.db_connection_string:
-         # For new orgs, we might allow them to hit /config but nothing else
-         # However, to keep it simple, we'll just check it in the endpoints
-         pass
     return org
 
 # --- Endpoints ---
@@ -94,7 +97,42 @@ async def register(request: RegisterRequest):
 @app.post("/config")
 async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
     update_org_db(org.api_key, request.connection_string)
+    # Clear file cache if they switch to a real DB
+    FILE_DB_CACHE.pop(org.api_key, None)
     return {"status": "success", "message": "Database connection string updated."}
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)):
+    content = await file.read()
+    filename = file.filename
+    
+    try:
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(content))
+        elif filename.endswith(('.xls', '.xlsx')):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel.")
+        
+        # Clean col names for SQL
+        df.columns = [c.replace(' ', '_').replace('(', '').replace(')', '').lower() for c in df.columns]
+        
+        # Create a unique in-memory database for this org's file
+        temp_db_path = f"file_db_{org.api_key}.sqlite"
+        db_manager = DatabaseManager(connection_string=f"sqlite:///{temp_db_path}")
+        
+        # Load into table named 'uploaded_data'
+        success = db_manager.load_dataframe(df, "uploaded_data")
+        db_manager.close()
+        
+        if success:
+            FILE_DB_CACHE[org.api_key] = f"sqlite:///{temp_db_path}"
+            return {"status": "success", "message": f"File '{filename}' uploaded and processed.", "table_name": "uploaded_data"}
+        else:
+            raise Exception("Failed to load dataframe into SQL")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 @app.get("/health")
 async def health_check():
@@ -102,28 +140,38 @@ async def health_check():
 
 @app.get("/tables")
 async def get_tables(org=Depends(get_current_org)):
-    if not org.db_connection_string:
-        raise HTTPException(status_code=400, detail="Database connection not configured for this organization.")
+    # Check if there's an active file first
+    conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
+    
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
     hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=org.db_connection_string)
+    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
     
     try:
         tables = agent.db.list_tables()
         schemas = {}
         for table in tables:
             schemas[table] = agent.db.describe_table(table)
-        return {"tables": tables, "schemas": schemas}
+        return {"tables": tables, "schemas": schemas, "is_file": org.api_key in FILE_DB_CACHE}
     finally:
         agent.close()
 
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
-    if not org.db_connection_string:
-        raise HTTPException(status_code=400, detail="Database connection not configured for this organization.")
+    # Determine which DB to use
+    conn_str = None
+    if request.use_file and org.api_key in FILE_DB_CACHE:
+        conn_str = FILE_DB_CACHE[org.api_key]
+    else:
+        conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
+        
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
     hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=org.db_connection_string)
+    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
     
     try:
         result = agent.run_query(request.query, request.history)

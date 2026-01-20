@@ -35,6 +35,7 @@
         .grad-text {
             background: linear-gradient(to right, #818cf8, #22d3ee);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
     </style>
@@ -178,16 +179,50 @@
             const [query, setQuery] = useState('');
             const [loading, setLoading] = useState(false);
             const [result, setResult] = useState(null);
+            const [isFileActive, setIsFileActive] = useState(false);
+            const [uploadStatus, setUploadStatus] = useState('');
             const chartRef = useRef(null);
             const myChart = useRef(null);
+            const fileInputRef = useRef(null);
 
             const loadTables = async (key) => {
                 try {
                     const res = await fetch('/tables', { headers: { 'X-API-KEY': key } });
                     if (res.status === 401) { logout(); return; }
                     const data = await res.json();
-                    if (res.ok) setTables(data.schemas);
+                    if (res.ok) {
+                        setTables(data.schemas);
+                        setIsFileActive(data.is_file || false);
+                    }
                 } catch (e) { console.error('Failed to load tables', e); }
+            };
+
+            const handleFileUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setUploadStatus('Uploading...');
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const res = await fetch('/upload', {
+                        method: 'POST',
+                        headers: { 'X-API-KEY': apiKey },
+                        body: formData
+                    });
+
+                    if (res.ok) {
+                        setUploadStatus('✓ File uploaded successfully!');
+                        loadTables(apiKey);
+                        setTimeout(() => setUploadStatus(''), 3000);
+                    } else {
+                        const data = await res.json();
+                        setUploadStatus(`Error: ${data.detail}`);
+                    }
+                } catch (e) {
+                    setUploadStatus('Upload failed');
+                }
             };
 
             const logout = () => {
@@ -207,7 +242,7 @@
                     const res = await fetch('/query', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
-                        body: JSON.stringify({ query })
+                        body: JSON.stringify({ query, use_file: isFileActive })
                     });
                     if (res.status === 401) { logout(); return; }
                     const data = await res.json();
@@ -274,6 +309,15 @@
                             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
                             API System Active
                         </div>
+                        {isFileActive && (
+                            <>
+                                <div className="w-px h-4 bg-white/10"></div>
+                                <div className="flex items-center gap-2 text-cyan-400">
+                                    <span>📄</span>
+                                    File Mode Active
+                                </div>
+                            </>
+                        )}
                         <div className="flex-1 h-px bg-white/5"></div>
                         <button onClick={logout} className="text-cyan-400 hover:text-cyan-300">Change API Key</button>
                     </div>
@@ -297,6 +341,28 @@
                                 >
                                     {loading ? 'Analyzing Data...' : 'Run Intelligence'}
                                 </button>
+                            </div>
+
+                            <div className="glass p-8 rounded-3xl shadow-xl">
+                                <h3 className="font-outfit text-xl font-bold mb-6 text-emerald-400">📁 Upload Data</h3>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    accept=".csv,.xlsx,.xls"
+                                    onChange={handleFileUpload}
+                                    className="hidden"
+                                />
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="w-full py-4 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-xl transition-all transform hover:-translate-y-1"
+                                >
+                                    Choose Excel/CSV File
+                                </button>
+                                {uploadStatus && (
+                                    <div className="mt-4 text-sm text-center text-slate-300">
+                                        {uploadStatus}
+                                    </div>
+                                )}
                             </div>
 
                             <div className="glass p-8 rounded-3xl shadow-xl">
