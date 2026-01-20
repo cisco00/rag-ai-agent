@@ -1,116 +1,79 @@
-# Computer Store AI Analytics Dashboard (Hugging Face Edition)
+# Commercial AI Analytics API (Multi-Tenant)
 
-This project implements a Retrieval-Augmented Generation (RAG) agent capable of interacting with a computer store's SQL database. It uses **Hugging Face's Inference API** (defaulting to `Qwen/Qwen2.5-72B-Instruct`) to act as a **Senior Data Analyst**, translating natural language questions into SQL, generating visualizations, and providing deep insights.
+This project is a production-ready, RAG-powered analytics tool for organizations. It allows companies to register, connect their own databases (SQL Server, PostgreSQL, MySQL, SQLite), and leverage AI-powered insights via a secure, authenticated API.
 
-## 🚀 Quick Start: The Dashboard
+## 🚀 Commercial Quick Start
 
-The easiest way to use the agent is through the modern web dashboard.
+### 1. Start the Server
+```bash
+export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+python3 src/api.py
+```
 
-1.  **Start the Server**:
-    ```bash
-    python3 -m uvicorn api:app --host 0.0.0.0 --port 8000 --app-dir src
-    ```
-2.  **Open in Browser**:
-    👉 **[http://localhost:8000](http://localhost:8000)**
+### 2. Register Your Organization
+First, register your company to get an **API Key**:
+```bash
+curl -X POST http://localhost:8000/register -H "Content-Type: application/json" -d '{"name": "Acme Corp"}'
+```
+> [!IMPORTANT]
+> Save the `api_key` returned. You must include it in all subsequent requests as the `X-API-KEY` header.
+
+### 3. Configure Your Database
+Connect your organization's database by providing a SQLAlchemy-compatible connection string:
+```bash
+curl -X POST http://localhost:8000/config \
+     -H "X-API-KEY: your_api_key_here" \
+     -H "Content-Type: application/json" \
+     -d '{"connection_string": "sqlite:////absolute/path/to/your/database.db"}'
+```
 
 ---
 
-## ✨ Features
+## ✨ Commercial Features
 
-- **Text-to-SQL Conversion**: Advanced translation of complex questions into optimized SQL queries.
-- **Data Visualization**: Automatically generates JSON for charts (Bar, Line, Pie) via **Chart.js** integration.
-- **Data Analyst Persona**: Acts as a senior analyst providing context, explanations, and visual trends.
-- **Dynamic Databases**: Query any SQLite database file on the fly by specifying its path.
-- **Premium Frontend**: A custom responsive dashboard with glassmorphism UI/UX.
-- **Full REST API**: Integrated FastAPI backend for organizational integration.
+- **Multi-Tenancy**: Complete isolation of organizations, their configurations, and data.
+- **API-Key Security**: Every request is authenticated via the `X-API-KEY` header.
+- **Universal DB Support**: Powered by **SQLAlchemy**, connect to PostgreSQL, MySQL, SQLite, and more.
+- **Text-to-SQL & Visualization**: Organizations can query their proprietary data using natural language and receive formatted chart data.
+- **Admin Metadata Storage**: Separate `admin.db` for managing organizational accounts and API keys.
 
 ## 📁 Project Structure
 
 ```text
 rag-ai-agent/
 ├── src/
-│   ├── api.py          # FastAPI Server (REST Endpoints)
-│   ├── main.py         # Core Agent Logic & Analyst Persona
-│   ├── database.py     # Schema Management & SQLite Connection
-│   ├── tools.py        # Tool Definitions (JSON Schemas)
-│   └── static/         # Frontend Dashboard
-│       └── index.html  # Premium Web Interface
-├── requirements.txt    # Project dependencies (FastAPI, HF Client)
-├── identifier.sqlite.db # Primary SQLite database
-└── README.md           # Project documentation
+│   ├── api.py          # FastAPI Server (Commercial Endpoints)
+│   ├── models.py       # Admin DB Models (Orgs, API Keys)
+│   ├── main.py         # Multi-tenant Agent Logic
+│   ├── database.py     # SQLAlchemy Database Manager
+│   ├── tools.py        # Database Tool Definitions
+│   └── static/         # Frontend Dashboard (Internal Demo)
+├── admin.db            # Administrative Database (Orgs & Keys)
+├── identifier.sqlite.db # Sample Customer Database
+├── requirements.txt    # Project dependencies
+└── README.md           # Documentation
 ```
-
-## 🛠️ Installation
-
-1.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-2.  **Set up Environment Variables**:
-    Create a `.env` file in the root directory:
-    ```env
-    HF_TOKEN=your_hf_token_here
-    ```
-
----
 
 ## 📡 API Reference
 
+### Auth Header
+All endpoints (except `/register` and `/health`) require:
+`X-API-KEY: <your_secret_key>`
+
 ### Endpoints
 
-- **`GET /`**: Serves the Analytics Dashboard.
-- **`GET /health`**: System status check.
-- **`GET /tables`**: Returns database schema information.
-- **`POST /query`**: The heart of the analyst.
-  - **Body**: 
-    ```json
-    {
-      "query": "Show me a pie chart of sales by staff member.",
-      "db_path": "optional/path/to/other.db"
-    }
-    ```
-  - **Returns**: Textual analysis and a `visualization` object for charts.
-
-- **`GET /analytics`**: Internal logs for query auditing.
+- **`POST /register`**: Create a new organization.
+- **`POST /config`**: Set the connection string for your organization's database.
+- **`GET /tables`**: Explore the schema of your connected database.
+- **`POST /query`**: Ask questions about your data.
+  - **Body**: `{"query": "What are our top 5 products by revenue?"}`
+  - **Returns**: Analysis + `visualization` (chart) data.
 
 ---
 
-## 🎨 Visualization Capability
+## 🛠️ Requirements
 
-When you ask for a graph or trend, the agent identifies the correct aggregation and returns a structured payload:
-
-```json
-"visualization": {
-  "type": "bar",
-  "labels": ["Laptop", "Keyboard", "Mouse"],
-  "data": [799.99, 129.99, 29.99]
-}
-```
-
-The frontend dashboard automatically picks this up and renders a beautiful, interactive chart.
-
----
-
-## 🧠 How it Works
-
-The system uses a **Multi-Turn RAG Loop**:
-1.  **Schema Awareness**: The agent explores tables using `list_tables` and `describe_table`.
-2.  **Tool Execution**: It executes multi-step SQL queries to gather nested data.
-3.  **Synthesis**: The Senior Data Analyst persona translates results into actionable insights and visual data.
-4.  **Logging**: Every query is tracked for organizational performance monitoring.
-
-## 📊 Database Schema
-
-Default tables include:
-- **Products**: Catalog of items and prices.
-- **Staff**: Sales personnel details.
-- **Orders**: Transaction records linking staff and products.
-
----
-
-## 🤝 Contribution & Customization
-
--   **Persona**: Modify `SYSTEM_PROMPT` in `src/main.py`.
--   **Database**: Add more initial data in `src/database.py`.
--   **API**: Extend endpoints in `src/api.py`.
+- Python 3.10+
+- SQLAlchemy
+- FastAPI & Uvicorn
+- Hugging Face API Token (set in `.env`)

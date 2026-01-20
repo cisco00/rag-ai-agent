@@ -1,409 +1,360 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Analytics Dashboard</title>
+    <title>Commercial Analytics Portal (React)</title>
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- UI Tools -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&family=Inter:wght@400;600&display=swap"
+        rel="stylesheet">
+
     <style>
-        :root {
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --bg: #0f172a;
-            --card-bg: rgba(30, 41, 59, 0.7);
-            --text: #f8fafc;
-            --text-dim: #94a3b8;
-            --accent: #22d3ee;
-            --glass-border: rgba(255, 255, 255, 0.1);
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
         body {
             font-family: 'Inter', sans-serif;
-            background-color: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            background-image: radial-gradient(circle at top right, #1e1b4b, transparent), 
-                              radial-gradient(circle at bottom left, #0f172a, transparent);
+            background-color: #0f172a;
+            color: #f8fafc;
         }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-            width: 100%;
-        }
-
-        header {
-            margin-bottom: 3rem;
-            text-align: center;
-        }
-
-        h1 {
+        .font-outfit {
             font-family: 'Outfit', sans-serif;
-            font-size: 3rem;
-            font-weight: 700;
+        }
+
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .grad-text {
             background: linear-gradient(to right, #818cf8, #22d3ee);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 0.5rem;
         }
-
-        .subtitle {
-            font-size: 1.1rem;
-            color: var(--text-dim);
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 2fr;
-            gap: 2rem;
-        }
-
-        @media (max-width: 900px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .card {
-            background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--glass-border);
-            border-radius: 1.5rem;
-            padding: 1.5rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        }
-
-        .card-title {
-            font-family: 'Outfit', sans-serif;
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--accent);
-        }
-
-        .input-group {
-            margin-bottom: 1.5rem;
-        }
-
-        label {
-            display: block;
-            font-size: 0.875rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            color: var(--text-dim);
-        }
-
-        textarea, input {
-            width: 100%;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid var(--glass-border);
-            border-radius: 0.75rem;
-            padding: 0.75rem;
-            color: white;
-            font-size: 1rem;
-            transition: all 0.2s;
-            font-family: inherit;
-        }
-
-        textarea:focus, input:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-        }
-
-        button {
-            width: 100%;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 0.75rem;
-            padding: 0.875rem;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 1rem;
-        }
-
-        button:hover {
-            background: var(--primary-hover);
-            transform: translateY(-1px);
-        }
-
-        #tables {
-            list-style: none;
-        }
-
-        .table-item {
-            padding: 0.75rem;
-            border-bottom: 1px solid var(--glass-border);
-            font-size: 0.9rem;
-        }
-
-        .table-item:last-child {
-            border-bottom: none;
-        }
-
-        .table-name {
-            font-weight: 600;
-            color: var(--accent);
-            display: block;
-        }
-
-        .table-schema {
-            color: var(--text-dim);
-            font-size: 0.8rem;
-            font-family: monospace;
-        }
-
-        .response-area {
-            min-height: 200px;
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
-
-        .response-text {
-            white-space: pre-wrap;
-            font-size: 1.05rem;
-        }
-
-        canvas {
-            max-width: 100% !important;
-            margin-top: 1rem;
-        }
-
-        .loader {
-            display: none;
-            border: 3px solid rgba(255, 255, 255, 0.1);
-            border-top: 3px solid var(--primary);
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-            margin: 10px auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .health-indicator {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.8rem;
-            color: var(--text-dim);
-            margin-bottom: 1rem;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #4ade80;
-        }
-        
     </style>
 </head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Analytics AI</h1>
-            <p class="subtitle">Natural Language Database Explorer & Visualizer</p>
-        </header>
 
-        <div class="health-indicator">
-            <div class="status-dot" id="health-dot"></div>
-            <span id="health-text">Checking API status...</span>
-        </div>
+<body class="bg-slate-950 min-h-screen">
+    <div id="root"></div>
 
-        <div class="grid">
-            <section class="left-col">
-                <div class="card" style="margin-bottom: 2rem;">
-                    <div class="card-title">🔍 Explorer</div>
-                    <div class="input-group">
-                        <label for="query">Ask a Question</label>
-                        <textarea id="query" rows="3" placeholder="e.g. Visualize product prices as a bar chart..."></textarea>
-                    </div>
-                    <div class="input-group">
-                        <label for="db_path">Database Path (Optional)</label>
-                        <input type="text" id="db_path" placeholder="identifier.sqlite.db">
-                    </div>
-                    <button id="run-btn">Execute Analysis</button>
-                    <div class="loader" id="loader"></div>
-                </div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-                <div class="card">
-                    <div class="card-title">📊 Database Schema</div>
-                    <ul id="tables">
-                        <li class="table-item">Loading tables...</li>
-                    </ul>
-                </div>
-            </section>
+        // --- COMPONENTS ---
 
-            <section class="right-col">
-                <div class="card response-area" id="response-card" style="display: none;">
-                    <div class="card-title">✨ Analyst Insights</div>
-                    <div class="response-text" id="response-text"></div>
-                    <div id="chart-container">
-                        <canvas id="vizChart"></canvas>
-                    </div>
-                </div>
-            </section>
-        </div>
-    </div>
+        const AuthOverlay = ({ onAuthSuccess }) => {
+            const [isReg, setIsReg] = useState(false);
+            const [val, setVal] = useState('');
+            const [error, setError] = useState('');
 
-    <script>
-        let myChart = null;
-
-        async function checkHealth() {
-            try {
-                const res = await fetch('/health');
-                const data = await res.json();
-                const dot = document.getElementById('health-dot');
-                const text = document.getElementById('health-text');
-                if (data.status === 'healthy') {
-                    dot.style.background = '#4ade80';
-                    text.innerText = 'API Online';
-                } else {
-                    dot.style.background = '#f87171';
-                    text.innerText = 'API Offline';
+            const handleLogin = () => {
+                if (val) {
+                    localStorage.setItem('X-API-KEY', val);
+                    onAuthSuccess(val);
                 }
-            } catch (e) {
-                document.getElementById('health-dot').style.background = '#f87171';
-                document.getElementById('health-text').innerText = 'API Unreachable';
-            }
-        }
+            };
 
-        async function loadTables() {
-            const list = document.getElementById('tables');
-            try {
-                const res = await fetch('/tables');
-                const data = await res.json();
-                list.innerHTML = '';
-                for (const [table, schema] of Object.entries(data.schemas)) {
-                    if (table === 'sqlite_sequence') continue;
-                    const li = document.createElement('li');
-                    li.className = 'table-item';
-                    li.innerHTML = `
-                        <span class="table-name">${table}</span>
-                        <span class="table-schema">${schema.map(s => s[0]).join(', ')}</span>
-                    `;
-                    list.appendChild(li);
+            const handleReg = async () => {
+                try {
+                    const res = await fetch('/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: val })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        localStorage.setItem('X-API-KEY', data.api_key);
+                        onAuthSuccess(data.api_key);
+                    } else {
+                        setError(data.detail || 'Registration failed');
+                    }
+                } catch (e) {
+                    setError('Network error');
                 }
-            } catch (e) {
-                list.innerText = 'Error loading tables.';
-            }
-        }
+            };
 
-        document.getElementById('run-btn').addEventListener('click', async () => {
-            const query = document.getElementById('query').value;
-            const db_path = document.getElementById('db_path').value;
-            const btn = document.getElementById('run-btn');
-            const loader = document.getElementById('loader');
-            const responseCard = document.getElementById('response-card');
-            const responseText = document.getElementById('response-text');
-            const chartCanvas = document.getElementById('vizChart');
+            return (
+                <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/90 backdrop-blur-md p-6">
+                    <div className="glass max-w-md w-full p-10 rounded-[2rem] text-center shadow-2xl">
+                        <h2 className="font-outfit text-3xl font-bold mb-4">{isReg ? 'Create Account' : 'Secure Access'}</h2>
+                        <p className="text-slate-400 mb-8">{isReg ? 'Enter your organization name to begin.' : 'Please enter your X-API-KEY to proceed.'}</p>
 
-            if (!query) return;
+                        {error && <div className="bg-red-500/20 text-red-300 border border-red-500/30 p-3 rounded-lg text-sm mb-6">{error}</div>}
 
-            btn.disabled = true;
-            loader.style.display = 'block';
-            responseCard.style.display = 'none';
+                        <input
+                            type="text"
+                            className="w-full bg-slate-900 border border-white/10 rounded-xl p-4 text-white mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                            placeholder={isReg ? 'Organization Name' : 'X-API-KEY'}
+                            value={val}
+                            onChange={(e) => setVal(e.target.value)}
+                        />
 
-            try {
-                const res = await fetch('/query', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, db_path: db_path || undefined })
-                });
-                const data = await res.json();
+                        <button
+                            onClick={isReg ? handleReg : handleLogin}
+                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-1"
+                        >
+                            {isReg ? 'Register' : 'Access Portal'}
+                        </button>
 
-                responseCard.style.display = 'flex';
-                responseText.innerText = data.response;
+                        <p className="mt-8 text-sm text-slate-400">
+                            {isReg ? 'Already have a key?' : "Don't have an account?"} {' '}
+                            <button onClick={() => { setIsReg(!isReg); setVal(''); setError(''); }} className="text-cyan-400 hover:underline">
+                                {isReg ? 'Go back' : 'Register here'}
+                            </button>
+                        </p>
+                    </div>
+                </div>
+            );
+        };
 
-                if (data.visualization) {
-                    renderChart(data.visualization);
-                } else {
-                    if (myChart) myChart.destroy();
-                    chartCanvas.style.display = 'none';
+        const SettingsModal = ({ apiKey, onClose, onRefresh }) => {
+            const [conn, setConn] = useState('');
+            const [status, setStatus] = useState({ type: '', msg: '' });
+
+            const handleSave = async () => {
+                try {
+                    const res = await fetch('/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+                        body: JSON.stringify({ connection_string: conn })
+                    });
+                    if (res.ok) {
+                        setStatus({ type: 'success', msg: 'Database connected successfully!' });
+                        onRefresh();
+                    } else {
+                        const data = await res.json();
+                        setStatus({ type: 'error', msg: data.detail || 'Connection failed' });
+                    }
+                } catch (e) {
+                    setStatus({ type: 'error', msg: 'Network error' });
                 }
+            };
 
-            } catch (e) {
-                alert('Analysis failed: ' + e.message);
-            } finally {
-                btn.disabled = false;
-                loader.style.display = 'none';
-            }
-        });
+            return (
+                <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-6">
+                    <div className="glass max-w-xl w-full p-8 rounded-[1.5rem] shadow-2xl">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="font-outfit text-2xl font-bold text-cyan-400">⚙️ Organization Settings</h2>
+                            <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+                        </div>
 
-        function renderChart(viz) {
-            const ctx = document.getElementById('vizChart').getContext('2d');
-            document.getElementById('vizChart').style.display = 'block';
-            
-            if (myChart) myChart.destroy();
+                        {status.msg && (
+                            <div className={`${status.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-red-500/20 text-red-300 border-red-500/30'} border p-4 rounded-xl mb-6 text-sm`}>
+                                {status.msg}
+                            </div>
+                        )}
 
-            const chartColors = [
-                'rgba(99, 102, 241, 0.8)',
-                'rgba(34, 211, 238, 0.8)',
-                'rgba(129, 140, 248, 0.8)',
-                'rgba(167, 139, 250, 0.8)',
-                'rgba(244, 114, 182, 0.8)'
-            ];
+                        <div className="mb-8">
+                            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Database Connection String</label>
+                            <input
+                                type="text"
+                                className="w-full bg-slate-900 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="sqlite:///identifier.sqlite.db"
+                                value={conn}
+                                onChange={(e) => setConn(e.target.value)}
+                            />
+                            <p className="text-[11px] text-slate-500 mt-2">Example: postgresql://user:pass@localhost:5432/dbname</p>
+                        </div>
 
-            myChart = new Chart(ctx, {
-                type: viz.type,
-                data: {
-                    labels: viz.labels,
-                    datasets: [{
-                        label: 'Value',
-                        data: viz.data,
-                        backgroundColor: viz.type === 'pie' ? chartColors : chartColors[0],
-                        borderColor: 'rgba(255, 255, 255, 0.1)',
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            display: viz.type === 'pie',
-                            labels: { color: '#94a3b8' }
-                        }
-                    },
-                    scales: viz.type !== 'pie' ? {
-                        y: {
-                            beginAtZero: true,
-                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                            ticks: { color: '#94a3b8' }
+                        <div className="flex gap-4">
+                            <button onClick={handleSave} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition-all">Save Config</button>
+                            <button onClick={onClose} className="flex-1 border border-white/10 text-slate-300 hover:bg-white/5 font-bold py-3 rounded-xl transition-all">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [apiKey, setApiKey] = useState(localStorage.getItem('X-API-KEY'));
+            const [showSettings, setShowSettings] = useState(false);
+            const [tables, setTables] = useState({});
+            const [query, setQuery] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [result, setResult] = useState(null);
+            const chartRef = useRef(null);
+            const myChart = useRef(null);
+
+            const loadTables = async (key) => {
+                try {
+                    const res = await fetch('/tables', { headers: { 'X-API-KEY': key } });
+                    if (res.status === 401) { logout(); return; }
+                    const data = await res.json();
+                    if (res.ok) setTables(data.schemas);
+                } catch (e) { console.error('Failed to load tables', e); }
+            };
+
+            const logout = () => {
+                localStorage.removeItem('X-API-KEY');
+                setApiKey(null);
+            };
+
+            useEffect(() => {
+                if (apiKey) loadTables(apiKey);
+            }, [apiKey]);
+
+            const runAnalysis = async () => {
+                if (!query) return;
+                setLoading(true);
+                setResult(null);
+                try {
+                    const res = await fetch('/query', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+                        body: JSON.stringify({ query })
+                    });
+                    if (res.status === 401) { logout(); return; }
+                    const data = await res.json();
+                    if (res.ok) {
+                        setResult(data);
+                    } else {
+                        alert(data.detail || 'Analysis failed');
+                    }
+                } catch (e) {
+                    alert('Network error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                if (result?.visualization && chartRef.current) {
+                    if (myChart.current) myChart.current.destroy();
+                    const ctx = chartRef.current.getContext('2d');
+                    const isPie = result.visualization.type === 'pie';
+                    const colors = ['#6366f1', '#22d3ee', '#818cf8', '#a78bfa', '#f472b2'];
+
+                    myChart.current = new Chart(ctx, {
+                        type: result.visualization.type,
+                        data: {
+                            labels: result.visualization.labels,
+                            datasets: [{
+                                label: 'Value',
+                                data: result.visualization.data,
+                                backgroundColor: isPie ? colors : colors[0],
+                                borderColor: 'rgba(255, 255, 255, 0.1)',
+                                borderWidth: 1
+                            }]
                         },
-                        x: {
-                            grid: { display: false },
-                            ticks: { color: '#94a3b8' }
+                        options: {
+                            responsive: true,
+                            plugins: { legend: { display: isPie, labels: { color: '#94a3b8' } } },
+                            scales: isPie ? {} : {
+                                y: { grid: { color: 'rgba(255, 255, 255, 0.1)' }, ticks: { color: '#94a3b8' } },
+                                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                            }
                         }
-                    } : {}
+                    });
                 }
-            });
-        }
+            }, [result]);
 
-        checkHealth();
-        loadTables();
+            if (!apiKey) return <AuthOverlay onAuthSuccess={setApiKey} />;
+
+            return (
+                <div className="container mx-auto px-6 py-12">
+                    <header className="flex flex-col items-center mb-16 relative">
+                        <h1 className="font-outfit text-5xl font-bold grad-text mb-2">Commercial Analytics Portal</h1>
+                        <p className="text-slate-400 text-lg">AI-Powered Insights for Your Organization</p>
+                        <button
+                            onClick={() => setShowSettings(true)}
+                            className="absolute right-0 top-1/2 -translate-y-1/2 p-3 glass rounded-full hover:scale-110 transition-transform text-2xl"
+                        >
+                            ⚙️
+                        </button>
+                    </header>
+
+                    <div className="flex items-center gap-4 mb-8 text-xs font-bold text-slate-500">
+                        <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                            API System Active
+                        </div>
+                        <div className="flex-1 h-px bg-white/5"></div>
+                        <button onClick={logout} className="text-cyan-400 hover:text-cyan-300">Change API Key</button>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* Sidebar */}
+                        <aside className="space-y-8">
+                            <div className="glass p-8 rounded-3xl shadow-xl">
+                                <h3 className="font-outfit text-xl font-bold mb-6 text-indigo-400">🔍 Query Agent</h3>
+                                <textarea
+                                    className="w-full bg-slate-900/50 border border-white/10 rounded-2xl p-4 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-6"
+                                    rows="4"
+                                    placeholder="e.g. Which salesperson closed the most orders?"
+                                    value={query}
+                                    onChange={(e) => setQuery(e.target.value)}
+                                ></textarea>
+                                <button
+                                    disabled={loading}
+                                    onClick={runAnalysis}
+                                    className={`w-full py-4 rounded-xl font-bold text-white shadow-xl transition-all ${loading ? 'bg-slate-700' : 'bg-indigo-600 hover:bg-indigo-500 transform hover:-translate-y-1'}`}
+                                >
+                                    {loading ? 'Analyzing Data...' : 'Run Intelligence'}
+                                </button>
+                            </div>
+
+                            <div className="glass p-8 rounded-3xl shadow-xl">
+                                <h3 className="font-outfit text-xl font-bold mb-6 text-cyan-400">📊 Data Context</h3>
+                                <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                                    {Object.entries(tables).length > 0 ? (
+                                        Object.entries(tables).map(([name, cols]) => (
+                                            <div key={name} className="border-b border-white/5 pb-4 last:border-0">
+                                                <div className="font-bold text-slate-200 flex items-center gap-2">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/50"></span>
+                                                    {name}
+                                                </div>
+                                                <div className="text-[10px] uppercase font-bold text-slate-500 mt-1 tracking-widest leading-relaxed">
+                                                    {cols.map(c => c[0]).join(', ')}
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-slate-500 text-sm">No tables loaded. Configure a database.</div>
+                                    )}
+                                </div>
+                            </div>
+                        </aside>
+
+                        {/* Main Result */}
+                        <main className="lg:col-span-2">
+                            {result ? (
+                                <div className="glass p-10 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-5 duration-700">
+                                    <h3 className="font-outfit text-2xl font-bold text-emerald-400 flex items-center gap-3">
+                                        ✨ Analyst Findings
+                                    </h3>
+                                    <div className="text-slate-200 text-lg leading-relaxed whitespace-pre-wrap">
+                                        {result.response}
+                                    </div>
+                                    {result.visualization && (
+                                        <div className="bg-slate-900/40 p-6 rounded-2xl border border-white/5 shadow-inner">
+                                            <canvas ref={chartRef}></canvas>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="h-full min-h-[400px] border-2 border-dashed border-white/5 rounded-3xl flex flex-col items-center justify-center text-slate-600 p-12 text-center">
+                                    <div className="text-6xl mb-6">🧠</div>
+                                    <div className="font-outfit text-2xl mb-2">Awaiting Instructions</div>
+                                    <p className="max-w-xs">Enter a query on the left to activate the Senior Analyst persona.</p>
+                                </div>
+                            )}
+                        </main>
+                    </div>
+
+                    {showSettings && <SettingsModal apiKey={apiKey} onClose={() => setShowSettings(false)} onRefresh={() => loadTables(apiKey)} />}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
+
 </html>

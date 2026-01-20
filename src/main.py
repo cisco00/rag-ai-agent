@@ -22,8 +22,8 @@ Always act as a professional analyst:
 3. Use list_tables, describe_table, and execute_query to explore and fetch data."""
 
 class AnalyticsAgent:
-    def __init__(self, hf_token: str, db_path: str = "identifier.sqlite.db"):
-        self.db = DatabaseManager(db_path=db_path)
+    def __init__(self, hf_token: str, connection_string: str = "sqlite:///identifier.sqlite.db"):
+        self.db = DatabaseManager(connection_string=connection_string)
         self.tools_schema, self.tool_map = get_db_tools(self.db)
         self.client = InferenceClient(api_key=hf_token)
         self.query_log = []

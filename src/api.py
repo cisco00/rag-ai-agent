@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from typing import List, Optional
@@ -9,16 +9,28 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from fastapi.middleware.cors import CORSMiddleware
+
 load_dotenv()
 
 app = FastAPI(
-    title="Computer Store Analytics API",
-    description="A RAG-powered analytics tool for querying store data using natural language.",
-    version="1.0.0"
+    title="Commercial Analytics API",
+    description="A multi-tenant RAG-powered analytics tool for organizations.",
+    version="2.0.0"
+)
+
+# Add CORS support for React development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # In production, specify the actual origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount static files
@@ -28,15 +40,25 @@ if not os.path.exists(static_dir):
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+@app.on_event("startup")
+async def startup_event():
+    init_admin_db()
+    print("Admin database initialized.")
+
 @app.get("/")
 async def read_index():
     return FileResponse(os.path.join(static_dir, "index.html"))
 
 # --- Models ---
+class RegisterRequest(BaseModel):
+    name: str
+
+class ConfigRequest(BaseModel):
+    connection_string: str
+
 class QueryRequest(BaseModel):
     query: str
     history: Optional[List[dict]] = None
-    db_path: Optional[str] = None
 
 class QueryResponse(BaseModel):
     query: str
@@ -44,72 +66,67 @@ class QueryResponse(BaseModel):
     visualization: Optional[dict] = None
     status: str
 
-# --- State ---
-DEFAULT_DB = "identifier.sqlite.db"
-agent = None
-
-@app.on_event("startup")
-async def startup_event():
-    global agent
-    hf_token = os.environ.get("HF_TOKEN")
-    if not hf_token:
-        print("CRITICAL: HF_TOKEN not found in environment.")
-        return
-    # Initialize with default DB
-    agent = AnalyticsAgent(hf_token, db_path=DEFAULT_DB)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    if agent:
-        agent.close()
+# --- Security ---
+async def get_current_org(x_api_key: str = Header(...)):
+    org = get_org_by_api_key(x_api_key)
+    if not org:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    if not org.db_connection_string:
+         # For new orgs, we might allow them to hit /config but nothing else
+         # However, to keep it simple, we'll just check it in the endpoints
+         pass
+    return org
 
 # --- Endpoints ---
+@app.post("/register")
+async def register(request: RegisterRequest):
+    try:
+        org = create_org(request.name)
+        return {
+            "message": "Organization created successfully",
+            "name": org.name,
+            "api_key": org.api_key,
+            "instruction": "Save your API key. You will need it for all subsequent requests as X-API-KEY header."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
+
+@app.post("/config")
+async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
+    update_org_db(org.api_key, request.connection_string)
+    return {"status": "success", "message": "Database connection string updated."}
+
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "agent_initialized": agent is not None}
+    return {"status": "healthy"}
 
 @app.get("/tables")
-async def get_tables(db_path: Optional[str] = None):
+async def get_tables(org=Depends(get_current_org)):
+    if not org.db_connection_string:
+        raise HTTPException(status_code=400, detail="Database connection not configured for this organization.")
+    
     hf_token = os.environ.get("HF_TOKEN")
-    
-    # Use specified DB or default agent
-    target_agent = agent
-    is_transient = False
-    
-    if db_path and db_path != DEFAULT_DB:
-        target_agent = AnalyticsAgent(hf_token, db_path=db_path)
-        is_transient = True
-
-    if not target_agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
+    agent = AnalyticsAgent(hf_token, connection_string=org.db_connection_string)
     
     try:
-        tables = target_agent.db.list_tables()
+        tables = agent.db.list_tables()
         schemas = {}
         for table in tables:
-            schemas[table] = target_agent.db.describe_table(table)
+            schemas[table] = agent.db.describe_table(table)
         return {"tables": tables, "schemas": schemas}
     finally:
-        if is_transient:
-            target_agent.close()
+        agent.close()
 
 @app.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest):
+async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
+    if not org.db_connection_string:
+        raise HTTPException(status_code=400, detail="Database connection not configured for this organization.")
+    
     hf_token = os.environ.get("HF_TOKEN")
-    
-    # Use specified DB or default agent
-    target_agent = agent
-    is_transient = False
-    
-    if request.db_path and request.db_path != DEFAULT_DB:
-        target_agent = AnalyticsAgent(hf_token, db_path=request.db_path)
-        is_transient = True
-
-    if not target_agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
+    agent = AnalyticsAgent(hf_token, connection_string=org.db_connection_string)
     
     try:
-        result = target_agent.run_query(request.query, request.history)
+        result = agent.run_query(request.query, request.history)
         return QueryResponse(
             query=request.query,
             response=result["text"],
@@ -119,14 +136,7 @@ async def execute_query(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if is_transient:
-            target_agent.close()
-
-@app.get("/analytics")
-async def get_analytics():
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
-    return {"query_count": len(agent.query_log), "logs": agent.query_log}
+        agent.close()
 
 if __name__ == "__main__":
     import uvicorn
