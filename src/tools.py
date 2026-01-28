@@ -1,17 +1,43 @@
-from database import DatabaseManager
+"""
+Database tools for the Analytics Agent.
 
-def get_db_tools(db: DatabaseManager):
+This module provides tool definitions and mappings for the agent to interact
+with databases through function calling.
+"""
+
+from typing import Dict, List, Tuple, Any, Optional
+from database import DatabaseManager
+from logging_config import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
+
+
+def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tuple[List[Dict], Dict[str, Any]]:
     """
-    Returns a dictionary of tool functions and their JSON schemas for Hugging Face.
-    """
+    Returns tool schemas and function mappings for database operations.
     
-    # Define schemas
+    Args:
+        db: DatabaseManager instance
+        tables: Optional list of tables to restrict the agent to.
+    
+    Returns:
+        Tuple of (tools_schema, tool_map)
+        - tools_schema: List of tool definitions for the AI model
+        - tool_map: Dictionary mapping tool names to functions
+    """
+    logger.debug(f"Creating database tools (restricted tables: {tables})")
+    
+    # Define tool schemas for the AI model
     tools_schema = [
         {
             "type": "function",
             "function": {
                 "name": "list_tables",
-                "description": "List all tables in the database.",
+                "description": (
+                    "List all tables in the database. "
+                    "Use this to discover what data is available before querying."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -23,7 +49,10 @@ def get_db_tools(db: DatabaseManager):
             "type": "function",
             "function": {
                 "name": "describe_table",
-                "description": "Look up the table schema.",
+                "description": (
+                    "Get the schema of a specific table, including column names and types. "
+                    "Use this to understand the structure of a table before writing queries."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -40,13 +69,20 @@ def get_db_tools(db: DatabaseManager):
             "type": "function",
             "function": {
                 "name": "execute_query",
-                "description": "Execute an SQL statement, returning the results.",
+                "description": (
+                    "Execute a SQL query and return the results. "
+                    "Use this to retrieve data from the database. "
+                    "Always use SELECT queries for data retrieval."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "sql": {
                             "type": "string",
-                            "description": "The SQL query to execute."
+                            "description": (
+                                "The SQL query to execute. "
+                                "Should be a valid SQL statement for the database type."
+                            )
                         }
                     },
                     "required": ["sql"]
@@ -54,12 +90,94 @@ def get_db_tools(db: DatabaseManager):
             }
         }
     ]
+    
+    # Create wrapper functions with logging
+    def list_tables_with_logging():
+        """List all tables with logging."""
+        logger.info("Tool called: list_tables")
+        try:
+            result = db.list_tables()
+            if tables:
+                # Filter results to only include allowed tables
+                result = [t for t in result if t in tables]
+            logger.debug(f"list_tables returned {len(result)} tables")
+            return result
+        except Exception as e:
+            logger.error(f"list_tables failed: {e}", exc_info=True)
+            raise
+    
+    def describe_table_with_logging(table_name: str):
+        """Describe table with logging."""
+        logger.info(f"Tool called: describe_table(table_name={table_name})")
+        
+        # Check if table is allowed
+        if tables and table_name not in tables:
+            error_msg = f"Table '{table_name}' is not in the list of allowed tables: {tables}"
+            logger.warning(error_msg)
+            return {"error": error_msg}
 
-    # Map names to functions
+        try:
+            result = db.describe_table(table_name)
+            logger.debug(f"describe_table returned {len(result)} columns")
+            return result
+        except Exception as e:
+            logger.error(
+                f"describe_table failed for table '{table_name}': {e}",
+                exc_info=True
+            )
+            raise
+    
+    def execute_query_with_logging(sql: str):
+        """Execute query with logging."""
+        logger.info(f"Tool called: execute_query(sql={sql[:100]}...)")
+        try:
+            result = db.execute_query(sql)
+            logger.debug(f"execute_query returned {len(result)} rows")
+            return result
+        except Exception as e:
+            logger.error(f"execute_query failed: {e}", exc_info=True)
+            raise
+    
+    # Map tool names to functions
     tool_map = {
-        "list_tables": db.list_tables,
-        "describe_table": db.describe_table,
-        "execute_query": db.execute_query
+        "list_tables": list_tables_with_logging,
+        "describe_table": describe_table_with_logging,
+        "execute_query": execute_query_with_logging
     }
-
+    
+    logger.debug(f"Created {len(tools_schema)} database tools")
+    
     return tools_schema, tool_map
+
+
+def validate_tool_call(tool_name: str, arguments: Dict[str, Any]) -> None:
+    """
+    Validate tool call arguments.
+    
+    Args:
+        tool_name: Name of the tool being called
+        arguments: Arguments passed to the tool
+    
+    Raises:
+        ValueError: If validation fails
+    """
+    if tool_name == "describe_table":
+        if "table_name" not in arguments:
+            raise ValueError("describe_table requires 'table_name' argument")
+        if not isinstance(arguments["table_name"], str):
+            raise ValueError("table_name must be a string")
+    
+    elif tool_name == "execute_query":
+        if "sql" not in arguments:
+            raise ValueError("execute_query requires 'sql' argument")
+        if not isinstance(arguments["sql"], str):
+            raise ValueError("sql must be a string")
+        if not arguments["sql"].strip():
+            raise ValueError("sql cannot be empty")
+    
+    elif tool_name == "list_tables":
+        # No arguments required
+        pass
+    
+    else:
+        raise ValueError(f"Unknown tool: {tool_name}")

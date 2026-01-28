@@ -8,3 +8,11 @@ httpx
 pandas
 openpyxl
 python-multipart
+prometheus-fastapi-instrumentator>=7.0.0
+reportlab
+python-pptx
+matplotlib
+pymysql
+psycopg2-binary
+cryptography
+apscheduler

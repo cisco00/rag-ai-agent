@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'vantage_ai_api'
+    metrics_path: '/metrics'
+    static_configs:
+      # If running via docker-compose, use 'host.docker.internal:8000'
+      # If running bare metal, use 'localhost:8000' but from inside docker you likely need host.docker.internal
+      - targets: ['host.docker.internal:8000']

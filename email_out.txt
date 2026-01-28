@@ -1,0 +1,80 @@
+To: idokofrancis66@gmail.com
+Subject: Your New Database & User Details
+
+
+Hello,
+
+A new PostgreSQL database and user have been created for you.
+
+Details:
+Host: localhost
+Port: 5435
+Database Name: vantage_db
+New Username: vantage_user
+New Password: password
+
+Admin Access Used: postgres
+
+You can now use these credentials to connect external tools.
+The Vantage AI Agent is already configured to use this connection.
+
+Regards,
+Vantage AI Team
+        
+
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: give me a summary of all product
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "give me a summary of all product"
+                
+                Analysis:
+                I encountered an error while processing your query: API call failed: Cannot select auto-router when using non-Hugging Face API key.
+                
+                Generated at: 2026-01-27 10:08:43 UTC
+                
+
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: Sales performance of cocoa in Niger state
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "Sales performance of cocoa in Niger state"
+                
+                Analysis:
+                I encountered an error while processing your query: API call failed: Cannot select auto-router when using non-Hugging Face API key.
+                
+                Generated at: 2026-01-27 10:08:43 UTC
+                
+
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: Weekly Sales report 
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "Weekly Sales report "
+                
+                Analysis:
+                I encountered an error while processing your query: API call failed: Cannot select auto-router when using non-Hugging Face API key.
+                
+                Generated at: 2026-01-27 10:33:24 UTC
+                
+
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: Give an analysis of order, products 
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "Give an analysis of order, products "
+                
+                Analysis:
+                I encountered an error while processing your query: API call failed: Cannot select auto-router when using non-Hugging Face API key.
+                
+                Generated at: 2026-01-27 11:49:21 UTC
+                
+

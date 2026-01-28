@@ -9,3 +9,17 @@ env/
 *.sqlite.db
 *.db
 .DS_Store
+
+# Logs
+logs/
+*.log
+
+# Dependencies
+node_modules/
+node-v*/
+
+# Data
+*.sqlite
+
+# Misc
+*.tar.xz

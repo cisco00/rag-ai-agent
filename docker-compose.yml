@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  # Fresh PostgreSQL Database
+  # Access at: localhost:5435
+  vantage-db:
+    image: postgres:15-alpine
+    container_name: vantage_postgres_fresh
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vantage_db
+    ports:
+      - "5435:5432" # Mapped to 5435 to avoid conflict with local postgres
+    volumes:
+      - vantage_pg_data_fresh:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  vantage_pg_data_fresh:
