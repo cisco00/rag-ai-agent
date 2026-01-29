@@ -16,3 +16,4 @@ pymysql
 psycopg2-binary
 cryptography
 apscheduler
+google-generativeai

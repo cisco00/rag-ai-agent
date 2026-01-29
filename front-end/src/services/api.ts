@@ -146,7 +146,7 @@ export const api = {
         return response.json();
     },
 
-    async query(payload: { query: string; history: any[] }, apiKey: string): Promise<any> {
+    async query(payload: { query: string; history: any[]; verify_only?: boolean; confirmed_sql?: string }, apiKey: string): Promise<any> {
         const response = await fetch(`${API_BASE_URL}/query`, {
             method: 'POST',
             headers: {

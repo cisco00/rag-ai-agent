@@ -78,3 +78,17 @@ Subject: Bi-Weekly Insight: Give an analysis of order, products
                 Generated at: 2026-01-27 11:49:21 UTC
                 
 
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: Analysis custom bank churn in france and spain 
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "Analysis custom bank churn in france and spain "
+                
+                Analysis:
+                I encountered an error while processing your query: Both primary and fallback models failed. Primary: Cannot select auto-router when using non-Hugging Face API key., Fallback: 'object'
+                
+                Generated at: 2026-01-28 15:19:46 UTC
+                
+

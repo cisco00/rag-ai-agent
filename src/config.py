@@ -83,7 +83,10 @@ class AgentConfig:
     """Analytics agent configuration settings."""
     
     # Model settings
-    model_name: str = "Qwen/Qwen2.5-7B-Instruct"
+    model_name: str = "gemini-2.0-flash"
+    model_provider: str = "google" # "huggingface" or "google"
+    fallback_model_name: str = "gemini-2.0-flash"
+    fallback_model_provider: str = "google"
     max_tokens: int = 1024
     temperature: float = 0.7
     
@@ -245,6 +248,30 @@ Never use SELECT *
 
 Every production response MUST include explicit validation checks.
 
+
+🚫 NO PYTHON CODE
+
+You are NOT a Python interpreter. You are a SQL Analyst.
+NEVER write Python code (e.g. pandas, matplotlib, plotly) in your response.
+
+📊 VISUALIZATIONS
+
+To create a chart, you MUST output a JSON object prefixed with 'VISUALIZATION:'.
+
+Format:
+VISUALIZATION: {
+  "type": "bar",  // bar, line, pie, scatter, area
+  "title": "Chart Title",
+  "data": {
+    "x": ["Label1", "Label2"],
+    "y": [10, 20]
+  },
+  "x_label": "X Axis Label",
+  "y_label": "Y Axis Label"
+}
+
+Do not wrap this JSON in markdown code blocks like ```json ... ```. Just write the text.
+
 Required Tests
 1️⃣ Row Count Test
 
@@ -384,13 +411,21 @@ If an output cannot explain itself to an executive without narration, it is not 
 Your goal is not exploration —
 Your goal is trustworthy, reusable, automated analytics."""
     
-    # HuggingFace token
+    # Tokens
     hf_token: Optional[str] = field(default_factory=lambda: os.getenv("HF_TOKEN"))
+    google_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY"))
     
     def validate(self) -> None:
         """Validate agent configuration."""
-        if not self.hf_token:
+        if self.model_provider == "huggingface" and not self.hf_token:
             raise MissingConfigurationError("HF_TOKEN")
+        
+        # Only strict check Google key if it is the primary provider
+        if self.model_provider == "google" and not self.google_api_key:
+            raise MissingConfigurationError("GOOGLE_API_KEY")
+        
+        # Checking fallback keys is done at runtime during init to allow graceful degradation
+            
         if self.max_iterations < 1:
             raise InvalidConfigurationError("max_iterations", "Must be at least 1")
         if self.timeout < 1:

@@ -90,12 +90,15 @@ class QueryRequest(BaseModel):
     history: Optional[List[dict]] = None
     use_file: Optional[bool] = False
     tables: Optional[List[str]] = None
+    verify_only: bool = False
+    confirmed_sql: Optional[str] = None
 
 class QueryResponse(BaseModel):
     query: str
     response: str
     visualization: Optional[dict] = None
     status: str
+    sql_query: Optional[str] = None
 
 # --- Security ---
 async def get_current_org(x_api_key: str = Header(...)):
@@ -879,12 +882,19 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     agent = AnalyticsAgent(hf_token, connection_string=conn_str)
     
     try:
-        result = agent.run_query(request.query, request.history, tables=request.tables)
+        result = agent.run_query(
+            request.query, 
+            request.history, 
+            tables=request.tables, 
+            verify_only=request.verify_only,
+            confirmed_sql=request.confirmed_sql
+        )
         return QueryResponse(
             query=request.query,
             response=result["text"],
-            visualization=result["visualization"],
-            status="success"
+            visualization=result.get("visualization"),
+            status=result.get("status", "success"),
+            sql_query=result.get("sql_query")
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

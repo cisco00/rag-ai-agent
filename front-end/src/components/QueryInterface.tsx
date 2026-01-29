@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Loader2, MessageSquare, FileText } from 'lucide-react';
+import { Send, Loader2, MessageSquare, FileText, Play, Code, Check } from 'lucide-react';
 import { api } from '../services/api';
 import Plot from 'react-plotly.js';
 
@@ -7,6 +7,9 @@ interface Message {
     role: 'user' | 'assistant';
     content: string;
     visualization?: any;
+    sql_query?: string;
+    status?: 'success' | 'needs_verification' | 'error';
+    original_query?: string;
 }
 
 import { useLocation } from 'react-router-dom';
@@ -33,24 +36,72 @@ export const QueryInterface: React.FC = () => {
             const apiKey = localStorage.getItem('vantage_api_key');
             if (!apiKey) throw new Error('No API key found');
 
+            // First step: Verification (verify_only=true)
             const result = await api.query({
                 query: userMsg,
-                history: [] // Simplify history for now
+                history: [], // Simplify history for now
+                verify_only: true
             }, apiKey);
 
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: result.response,
-                visualization: result.visualization
+                visualization: result.visualization,
+                sql_query: result.sql_query,
+                status: result.status as any,
+                original_query: userMsg // Store for execution context
             }]);
         } catch (err: any) {
             setMessages(prev => [...prev, {
                 role: 'assistant',
-                content: `Error: ${err.message || 'Something went wrong.'}`
+                content: `Error: ${err.message || 'Something went wrong.'}`,
+                status: 'error'
             }]);
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleRunQuery = async (msgIndex: number, sql: string, originalQuery: string) => {
+        setLoading(true);
+        try {
+            const apiKey = localStorage.getItem('vantage_api_key');
+            if (!apiKey) throw new Error('No API key found');
+
+            // Update local message status to show it's being executed
+            setMessages(prev => prev.map((m, i) =>
+                i === msgIndex ? { ...m, status: 'success' } : m
+            ));
+
+            const result = await api.query({
+                query: originalQuery,
+                history: [],
+                confirmed_sql: sql
+            }, apiKey);
+
+            // Add result message
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: result.response,
+                visualization: result.visualization,
+                status: 'success'
+            }]);
+
+        } catch (err: any) {
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: `Error executing query: ${err.message}`,
+                status: 'error'
+            }]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const updateMessageSql = (index: number, newSql: string) => {
+        setMessages(prev => prev.map((m, i) =>
+            i === index ? { ...m, sql_query: newSql } : m
+        ));
     };
 
     const handleExportPPTX = async (msg: Message) => {
@@ -66,7 +117,7 @@ export const QueryInterface: React.FC = () => {
             // In this simple UI, we can just grab the content of the message.
 
             const blob = await api.exportPPTX({
-                query: "Analysis Export", // Ideally we'd track which query generated this response
+                query: msg.original_query || "Analysis Result",
                 response: msg.content,
                 visualization: msg.visualization,
                 status: "success"
@@ -96,6 +147,32 @@ export const QueryInterface: React.FC = () => {
                             {msg.role === 'assistant' && <MessageSquare size={16} className="msg-icon" />}
                             <div className="text-content">
                                 <p>{msg.content}</p>
+
+                                {msg.sql_query && (
+                                    <div className="sql-card">
+                                        <div className="sql-header">
+                                            <Code size={14} /> Generated SQL
+                                        </div>
+                                        <textarea
+                                            className="sql-display"
+                                            value={msg.sql_query}
+                                            onChange={(e) => updateMessageSql(i, e.target.value)}
+                                            readOnly={msg.status !== 'needs_verification'}
+                                        />
+                                        {msg.status === 'needs_verification' && (
+                                            <div className="sql-actions">
+                                                <button
+                                                    className="run-sql-btn"
+                                                    onClick={() => handleRunQuery(i, msg.sql_query!, msg.original_query!)}
+                                                    disabled={loading}
+                                                >
+                                                    <Play size={14} /> Run Query
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
                                 {msg.visualization && (
                                     <div className="viz-container">
                                         <Plot
@@ -120,7 +197,7 @@ export const QueryInterface: React.FC = () => {
                                         />
                                     </div>
                                 )}
-                                {msg.role === 'assistant' && (
+                                {msg.role === 'assistant' && msg.status !== 'needs_verification' && msg.status !== 'error' && (
                                     <div className="message-actions">
                                         <button
                                             className="action-btn"
@@ -265,6 +342,56 @@ export const QueryInterface: React.FC = () => {
                 }
                 .send-btn:disabled { background: #94a3b8; cursor: not-allowed; }
                 .spin { animation: spin 1s linear infinite; }
+                
+                .sql-card {
+                    margin-top: 1rem;
+                    background: #1e293b;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    width: 100%;
+                }
+                .sql-header {
+                    background: #0f172a;
+                    color: #94a3b8;
+                    padding: 0.5rem 1rem;
+                    font-size: 0.75rem;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.5rem;
+                }
+                .sql-display {
+                    width: 100%;
+                    background: transparent;
+                    color: #e2e8f0;
+                    border: none;
+                    padding: 1rem;
+                    font-family: 'Fira Code', monospace;
+                    font-size: 0.85rem;
+                    resize: vertical;
+                    min-height: 100px;
+                    outline: none;
+                }
+                .sql-actions {
+                    padding: 0.75rem;
+                    border-top: 1px solid #334155;
+                    display: flex;
+                    justify-content: flex-end;
+                }
+                .run-sql-btn {
+                    background: #22c55e;
+                    color: white;
+                    border: none;
+                    padding: 0.5rem 1rem;
+                    border-radius: 6px;
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.5rem;
+                    font-weight: 500;
+                }
+                .run-sql-btn:hover { background: #16a34a; }
+                .run-sql-btn:disabled { opacity: 0.5; cursor: not-allowed; }
             `}</style>
         </div>
     );

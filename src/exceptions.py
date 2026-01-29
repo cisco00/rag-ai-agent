@@ -159,6 +159,16 @@ class ToolExecutionError(AgentError):
         super().__init__(f"Tool '{tool_name}' execution failed: {message}")
 
 
+class VerificationRequired(AgentError):
+    """Raised when a tool execution requires user verification."""
+    
+    def __init__(self, message: str, tool_name: str, tool_args: dict, explanation: str = None):
+        self.tool_name = tool_name
+        self.tool_args = tool_args
+        self.explanation = explanation
+        super().__init__(message)
+
+
 # ============================================================================
 # API Exceptions
 # ============================================================================
