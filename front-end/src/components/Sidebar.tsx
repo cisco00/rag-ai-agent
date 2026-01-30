@@ -9,6 +9,15 @@ export const Sidebar: React.FC = () => {
 
   const isActive = (path: string) => location.pathname === path;
 
+  const [orgName, setOrgName] = React.useState('Organization');
+
+  React.useEffect(() => {
+    const name = localStorage.getItem('vantage_org_name');
+    if (name) {
+      setOrgName(name);
+    }
+  }, []);
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -19,7 +28,7 @@ export const Sidebar: React.FC = () => {
           <span className="sidebar-brand">Vantage AI</span>
         </div>
         <div className="user-info">
-          <span className="username">semicolon</span>
+          <span className="username">{orgName}</span>
         </div>
       </div>
 

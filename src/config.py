@@ -54,7 +54,7 @@ class FileUploadConfig:
     """File upload configuration settings."""
     
     # File size limits
-    max_file_size: int = 50 * 1024 * 1024  # 50MB in bytes
+    max_file_size: int = 800 * 1024 * 1024  # 800MB in bytes
     max_batch_files: int = 20
     
     # Supported file types
@@ -66,7 +66,7 @@ class FileUploadConfig:
     
     # Data validation
     max_columns: int = 1000
-    max_rows: int = 1_000_000
+    max_rows: int = 2_000_000
     
     def validate(self) -> None:
         """Validate file upload configuration."""

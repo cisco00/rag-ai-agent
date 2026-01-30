@@ -536,7 +536,10 @@ async def import_multiple_files(
     from file_uploader import FileUploader
     
     # Create database manager with org's connection string
-    db_manager = DatabaseManager(connection_string=org.db_connection_string)
+    try:
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     uploader = FileUploader(db_manager)
     
     import tempfile
@@ -917,16 +920,17 @@ async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)
     
     # We need to access DatabaseManager directly, not via Agent (Agent wraps it but is for AI)
     # But DatabaseManager handles connection strings.
-    db_manager = DatabaseManager(connection_string=conn_str)
-    
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         new_name = f"{table_name}_copy_{int(time.time())}"
         db_manager.duplicate_table(table_name, new_name)
         return {"status": "success", "new_table": new_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.patch("/tables/{table_name}/cell")
 async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=Depends(get_current_org)):
@@ -937,9 +941,9 @@ async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
         
-    db_manager = DatabaseManager(connection_string=conn_str)
-    
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         success = db_manager.update_cell_value(
             table_name, 
             request.row_id, 
@@ -953,7 +957,8 @@ async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 class FillMissingRequest(BaseModel):
     strategy: str # 'value', 'mean', 'median', 'mode', 'weighted_mean'
@@ -971,8 +976,9 @@ async def fill_missing_values_endpoint(
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         rows_affected = db_manager.fill_missing_values(
             table_name, 
             column_name, 
@@ -984,7 +990,8 @@ async def fill_missing_values_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.delete("/tables/{table_name}")
 async def delete_table_endpoint(table_name: str, org=Depends(get_current_org)):
@@ -998,15 +1005,17 @@ async def delete_table_endpoint(table_name: str, org=Depends(get_current_org)):
     if "_copy_" not in table_name:
         raise HTTPException(status_code=403, detail="Only table copies can be deleted. Original data is protected.")
         
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.drop_table(table_name)
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Error deleting table: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 class RenameColumnRequest(BaseModel):
     old_column: str
@@ -1018,14 +1027,16 @@ async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, 
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.rename_column(table_name, request.old_column, request.new_column)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.delete("/tables/{table_name}/columns/{column_name}")
 async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(get_current_org)):
@@ -1033,14 +1044,16 @@ async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(ge
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.drop_column(table_name, column_name)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.delete("/tables/{table_name}/rows/{row_id}")
 async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_current_org)):
@@ -1048,8 +1061,9 @@ async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_curr
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         # row_id comes as string but might be integer in DB (rowid). Try converting.
         try:
             rid = int(row_id)
@@ -1063,7 +1077,8 @@ async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_curr
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.get("/stats")
 async def get_stats(org=Depends(get_current_org)):
@@ -1074,8 +1089,9 @@ async def get_stats(org=Depends(get_current_org)):
         # If DB not configured, return empty list instead of error for overview
         return {"tables": []}
         
-    db_manager = DatabaseManager(connection_string=conn_str)
+    db_manager = None
     try:
+        db_manager = DatabaseManager(connection_string=conn_str)
         tables = db_manager.list_tables()
         stats_list = []
         for table in tables:
@@ -1086,7 +1102,8 @@ async def get_stats(org=Depends(get_current_org)):
         logger.error(f"Error fetching stats: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        db_manager.close()
+        if db_manager:
+            db_manager.close()
 
 @app.post("/share")
 async def share_report(request: QueryRequest, org=Depends(get_current_org)):
