@@ -258,6 +258,7 @@ class QueryProcessor:
             if not tool_calls:
                 logger.info(f"Query completed in {iteration_count} iterations")
                 final_response_text = response_message.content
+                logger.info(f"Final response text: {final_response_text}")
                 break
             
             # Add assistant message to history
@@ -391,7 +392,8 @@ class AnalyticsAgent:
     def __init__(
         self,
         hf_token: Optional[str] = None,
-        connection_string: Optional[str] = None
+        connection_string: Optional[str] = None,
+        schema_summary: Optional[str] = None
     ):
         """
         Initialize the analytics agent.
@@ -399,6 +401,7 @@ class AnalyticsAgent:
         Args:
             hf_token: HuggingFace API token (deprecated in favor of config)
             connection_string: Database connection string (uses config default if None)
+            schema_summary: Optional pre-fetched schema summary to inject into context
         """
         # Get configuration
         self.config = get_agent_config()
@@ -409,6 +412,7 @@ class AnalyticsAgent:
         
         # Initialize database manager
         self.db = DatabaseManager(connection_string)
+        self.schema_summary = schema_summary
         
         # Get tools
         self.tools_schema, self.tool_map = get_db_tools(self.db)
@@ -476,10 +480,15 @@ class AnalyticsAgent:
         try:
             # Prepare messages
             messages = history if history else []
+            
+            system_prompt = self.config.system_prompt
+            if self.schema_summary:
+                system_prompt += f"\n\nDATABASE SCHEMA CACHE:\n{self.schema_summary}\n\nNOTE: You do NOT need to call list_tables or describe_table for the tables listed above. Use this schema directly."
+            
             if not any(m.get("role") == "system" for m in messages):
                 messages.insert(0, {
                     "role": "system",
-                    "content": self.config.system_prompt
+                    "content": system_prompt
                 })
             
             messages.append({"role": "user", "content": query})

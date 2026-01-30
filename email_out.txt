@@ -116,3 +116,42 @@ Regards,
 Vantage AI Team
         
 
+To: evans@gmail.com
+Subject: Your New Database & User Details
+
+
+Hello,
+
+A new PostgreSQL database and user have been created for you.
+
+Details:
+Host: localhost
+Port: 5435
+Database Name: vantage_db
+New Username: vantage_user
+New Password: 12345
+
+Admin Access Used: postgres
+
+You can now use these credentials to connect external tools.
+The Vantage AI Agent is already configured to use this connection.
+
+Regards,
+Vantage AI Team
+        
+
+To: idokofrancis66@gmail.com
+Subject: Bi-Weekly Insight: Give a weekly average summary of estimated salary 
+
+
+                Hello,
+                
+                Here is your scheduled analysis for: "Give a weekly average summary of estimated salary "
+                
+                Analysis:
+                I need to know which table contains the estimated salary information. Can you tell me which table I should use?
+
+                
+                Generated at: 2026-01-30 13:37:51 UTC
+                
+

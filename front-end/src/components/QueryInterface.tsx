@@ -179,8 +179,8 @@ export const QueryInterface: React.FC = () => {
                                             data={[
                                                 {
                                                     type: msg.visualization.type || 'bar',
-                                                    x: msg.visualization.data.map((d: any) => d.label),
-                                                    y: msg.visualization.data.map((d: any) => d.value),
+                                                    x: msg.visualization.data.x || [],
+                                                    y: msg.visualization.data.y || [],
                                                     marker: { color: '#3b82f6' }
                                                 }
                                             ]}

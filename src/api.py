@@ -78,6 +78,48 @@ FILE_DB_CACHE_LOCK = threading.Lock()  # Thread-safe access to cache
 async def read_index():
     return FileResponse(os.path.join(static_dir, "index.html"))
 
+
+# --- Schema Caching ---
+SCHEMA_CACHE = {}  # {connection_string: schema_summary_str}
+SCHEMA_CACHE_LOCK = threading.Lock()
+
+def get_cached_schema_summary(connection_string: str) -> Optional[str]:
+    """
+    Get or create a schema summary string for a connection string.
+    This speeds up LLM initialization by avoiding repeated list_tables/describe_table calls.
+    """
+    if not connection_string:
+        return None
+        
+    with SCHEMA_CACHE_LOCK:
+        if connection_string in SCHEMA_CACHE:
+            return SCHEMA_CACHE[connection_string]
+            
+    # Cache miss - generate summary
+    logger.info(f"Generating schema summary for cache: {connection_string[:20]}...")
+    try:
+        db_manager = DatabaseManager(connection_string=connection_string)
+        try:
+            tables = db_manager.list_tables()
+            summary_parts = []
+            for table in tables:
+                schema = db_manager.describe_table(table)
+                cols = ", ".join([f"{col[0]} ({col[1]})" for col in schema])
+                summary_parts.append(f"Table '{table}': {cols}")
+            
+            summary = "\n".join(summary_parts)
+            
+            with SCHEMA_CACHE_LOCK:
+                SCHEMA_CACHE[connection_string] = summary
+                
+            return summary
+        finally:
+            db_manager.close()
+    except Exception as e:
+        logger.error(f"Failed to generate schema summary: {e}")
+        return None
+
+
 # --- Models ---
 class RegisterRequest(BaseModel):
     name: str
@@ -884,7 +926,11 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
     hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
+    
+    # Get schema summary (cached)
+    schema_summary = get_cached_schema_summary(conn_str)
+    
+    agent = AnalyticsAgent(hf_token, connection_string=conn_str, schema_summary=schema_summary)
     
     try:
         result = agent.run_query(
