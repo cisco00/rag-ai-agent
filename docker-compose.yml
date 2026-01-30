@@ -16,5 +16,31 @@ services:
       - vantage_pg_data_fresh:/var/lib/postgresql/data
     restart: unless-stopped
 
+  vantage-mysql:
+    image: mysql:8.0
+    container_name: vantage_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: vantage_db
+    ports:
+      - "3307:3306"
+    volumes:
+      - vantage_mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+  vantage-mariadb:
+    image: mariadb:latest
+    container_name: vantage_mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: vantage_db
+    ports:
+      - "3308:3306"
+    volumes:
+      - vantage_mariadb_data:/var/lib/mysql
+    restart: unless-stopped
+
 volumes:
   vantage_pg_data_fresh:
+  vantage_mysql_data:
+  vantage_mariadb_data:

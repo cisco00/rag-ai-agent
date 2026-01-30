@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Loader2, MessageSquare, FileText, Play, Code, Check } from 'lucide-react';
+import { Send, Loader2, MessageSquare, FileText, Play, Code, Check, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { api } from '../services/api';
 import Plot from 'react-plotly.js';
 
@@ -10,6 +10,7 @@ interface Message {
     sql_query?: string;
     status?: 'success' | 'needs_verification' | 'error';
     original_query?: string;
+    vote?: number; // 1 for up, -1 for down
 }
 
 import { useLocation } from 'react-router-dom';
@@ -138,6 +139,30 @@ export const QueryInterface: React.FC = () => {
         }
     };
 
+    const handleFeedback = async (msgIndex: number, vote: number) => {
+        const msg = messages[msgIndex];
+        if (!msg.original_query) return;
+
+        try {
+            const apiKey = localStorage.getItem('vantage_api_key');
+            if (!apiKey) return;
+
+            await api.feedback({
+                query: msg.original_query,
+                response: msg.content,
+                vote: vote
+            }, apiKey);
+
+            // Update UI
+            setMessages(prev => prev.map((m, i) =>
+                i === msgIndex ? { ...m, vote: vote } : m
+            ));
+
+        } catch (err) {
+            console.error("Failed to submit feedback", err);
+        }
+    };
+
     return (
         <div className="chat-interface">
             <div className="messages-area">
@@ -199,6 +224,21 @@ export const QueryInterface: React.FC = () => {
                                 )}
                                 {msg.role === 'assistant' && msg.status !== 'needs_verification' && msg.status !== 'error' && (
                                     <div className="message-actions">
+                                        <button
+                                            className={`action-btn ${msg.vote === 1 ? 'active' : ''}`}
+                                            onClick={() => handleFeedback(i, 1)}
+                                            title="Helpful"
+                                        >
+                                            <ThumbsUp size={14} />
+                                        </button>
+                                        <button
+                                            className={`action-btn ${msg.vote === -1 ? 'active' : ''}`}
+                                            onClick={() => handleFeedback(i, -1)}
+                                            title="Not Helpful"
+                                        >
+                                            <ThumbsDown size={14} />
+                                        </button>
+                                        <div className="divider"></div>
                                         <button
                                             className="action-btn"
                                             onClick={() => handleExportPPTX(msg)}
@@ -312,6 +352,17 @@ export const QueryInterface: React.FC = () => {
                 .action-btn:hover {
                     background: #f1f5f9;
                     color: var(--color-primary);
+                }
+                .action-btn.active {
+                    background: #e0f2fe;
+                    color: var(--color-primary);
+                    border-color: var(--color-primary);
+                }
+                .divider {
+                    width: 1px;
+                    height: 16px;
+                    background: var(--color-border);
+                    margin: 0 0.25rem;
                 }
 
                 .input-area {

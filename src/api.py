@@ -21,7 +21,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
 
@@ -141,6 +141,12 @@ class QueryResponse(BaseModel):
     visualization: Optional[dict] = None
     status: str
     sql_query: Optional[str] = None
+
+class FeedbackRequest(BaseModel):
+    query: str
+    response: str
+    vote: int
+    feedback_text: Optional[str] = None
 
 # --- Security ---
 async def get_current_org(x_api_key: str = Header(...)):
@@ -798,6 +804,21 @@ async def get_tables(org=Depends(get_current_org)):
     finally:
         agent.close()
 
+@app.post("/feedback")
+async def submit_feedback(request: FeedbackRequest, org=Depends(get_current_org)):
+    try:
+        feedback = create_feedback(
+            org_id=org.id,
+            query=request.query,
+            response=request.response,
+            vote=request.vote,
+            feedback_text=request.feedback_text
+        )
+        return {"status": "success", "message": "Feedback submitted successfully", "id": feedback.id}
+    except Exception as e:
+        logger.error(f"Feedback error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to submit feedback")
+
 @app.get("/tables/{table_name}/preview")
 async def preview_table(table_name: str, org=Depends(get_current_org)):
     # Determine which DB to use
@@ -940,6 +961,31 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
             verify_only=request.verify_only,
             confirmed_sql=request.confirmed_sql
         )
+        # Save to history if successful (and not just verifying, unless confirmed)
+        if result.get("status") == "success" and not request.verify_only:
+             try:
+                create_query_history(
+                    org_id=org.id,
+                    query=request.query,
+                    response=result["text"],
+                    visualization=result.get("visualization"),
+                    sql_query=result.get("sql_query")
+                )
+             except Exception as ex:
+                logger.error(f"Failed to save history: {ex}")
+        elif request.confirmed_sql and result.get("status") == "success":
+             # Also save if it was a confirmed execution
+             try:
+                create_query_history(
+                    org_id=org.id,
+                    query=request.query,
+                    response=result["text"],
+                    visualization=result.get("visualization"),
+                    sql_query=request.confirmed_sql
+                )
+             except Exception as ex:
+                logger.error(f"Failed to save history: {ex}")
+
         return QueryResponse(
             query=request.query,
             response=result["text"],
@@ -951,6 +997,16 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         agent.close()
+
+@app.get("/history")
+async def get_history(limit: int = 50, org=Depends(get_current_org)):
+    """Get past queries for the organization"""
+    try:
+        history = get_org_history(org.id, limit)
+        return {"history": history}
+    except Exception as e:
+        logger.error(f"Error fetching history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch history")
 
 class UpdateCellRequest(BaseModel):
     row_id: Any

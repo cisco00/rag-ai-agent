@@ -98,6 +98,51 @@ class ScheduledReport(Base):
     def __repr__(self):
         return f"<ScheduledReport(id={self.id}, org_id={self.org_id}, freq='{self.frequency}')>"
 
+
+class Feedback(Base):
+    """
+    Model for storing user feedback (thumbs up/down).
+    """
+    __tablename__ = 'feedback'
+    
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    query = Column(Text, nullable=False)
+    response = Column(Text, nullable=False)
+    vote = Column(Integer, nullable=False)  # 1 for up, -1 for down
+    feedback_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f"<Feedback(id={self.id}, vote={self.vote})>"
+
+
+class QueryHistory(Base):
+    """
+    Model for storing query history.
+    """
+    __tablename__ = 'query_history'
+    
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    query = Column(Text, nullable=False)
+    response = Column(Text, nullable=False)
+    visualization = Column(Text, nullable=True)  # JSON string
+    sql_query = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f"<QueryHistory(id={self.id}, org_id={self.org_id})>"
+    
+    def get_visualization(self) -> Optional[dict]:
+        """Get visualization data as a dictionary."""
+        if not self.visualization:
+            return None
+        try:
+            return json.loads(self.visualization)
+        except json.JSONDecodeError:
+            return None
+
 # Setup admin database
 ADMIN_DB_URL = os.getenv("ADMIN_DB_URL", "sqlite:///./admin.db")
 
@@ -375,3 +420,103 @@ def get_shared_report(report_id: str) -> Optional[SharedReport]:
     except Exception as e:
         logger.error(f"Failed to get shared report: {e}", exc_info=True)
         raise DatabaseError(f"Failed to get shared report: {str(e)}") from e
+
+
+def create_feedback(
+    org_id: int,
+    query: str,
+    response: str,
+    vote: int,
+    feedback_text: Optional[str] = None
+) -> Feedback:
+    """
+    Create a new feedback entry.
+    
+    Args:
+        org_id: Organization ID
+        query: User query
+        response: Assistant response
+        vote: 1 (up) or -1 (down)
+        feedback_text: Optional text feedback
+    
+    Returns:
+        Created Feedback instance
+    """
+    logger.info(f"Creating feedback for org {org_id}, vote={vote}")
+    
+    try:
+        with get_db() as db:
+            feedback = Feedback(
+                org_id=org_id,
+                query=query,
+                response=response,
+                vote=vote,
+                feedback_text=feedback_text
+            )
+            db.add(feedback)
+            db.flush()
+            db.refresh(feedback)
+            
+            # Detach
+            db.expunge(feedback)
+            return feedback
+            
+    except Exception as e:
+        logger.error(f"Failed to create feedback: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to create feedback: {str(e)}") from e
+
+
+def create_query_history(
+    org_id: int,
+    query: str,
+    response: str,
+    visualization: Optional[dict] = None,
+    sql_query: Optional[str] = None
+) -> QueryHistory:
+    """
+    Create a new query history entry.
+    """
+    logger.info(f"Saving query history for org {org_id}")
+    
+    try:
+        with get_db() as db:
+            history = QueryHistory(
+                org_id=org_id,
+                query=query,
+                response=response,
+                visualization=json.dumps(visualization) if visualization else None,
+                sql_query=sql_query
+            )
+            db.add(history)
+            db.flush()
+            db.refresh(history)
+            db.expunge(history)
+            return history
+            
+    except Exception as e:
+        logger.error(f"Failed to save query history: {e}", exc_info=True)
+        # Don't raise, just log error as this is non-critical
+        return None
+
+
+def get_org_history(org_id: int, limit: int = 50) -> list[QueryHistory]:
+    """
+    Get query history for an organization.
+    """
+    logger.debug(f"Fetching history for org {org_id}")
+    
+    try:
+        with get_db() as db:
+            history = db.query(QueryHistory).filter(
+                QueryHistory.org_id == org_id
+            ).order_by(QueryHistory.created_at.desc()).limit(limit).all()
+            
+            # Detach
+            for item in history:
+                db.expunge(item)
+                
+            return history
+            
+    except Exception as e:
+        logger.error(f"Failed to get query history: {e}", exc_info=True)
+        return []

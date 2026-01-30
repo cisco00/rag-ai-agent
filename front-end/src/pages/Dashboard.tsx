@@ -6,7 +6,8 @@ import { FileImport } from '../components/FileImport';
 import { TableBrowser } from '../components/TableBrowser';
 import { QueryInterface } from '../components/QueryInterface';
 import { TableInspector } from '../components/TableInspector';
-import { LayoutDashboard, FileUp, Database, MessageSquare } from 'lucide-react';
+import { HistoryView } from '../components/HistoryView';
+import { LayoutDashboard, FileUp, Database, MessageSquare, History } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
     const location = useLocation();
@@ -20,6 +21,7 @@ export const Dashboard: React.FC = () => {
         if (path === '/tables') return 'tables';
         if (path === '/import') return 'import';
         if (path === '/overview') return 'overview';
+        if (path === '/history') return 'history';
         return 'overview';
     };
 
@@ -65,6 +67,12 @@ export const Dashboard: React.FC = () => {
                             >
                                 <MessageSquare size={18} /> Query
                             </button>
+                            <button
+                                className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+                                onClick={() => navigate('/history')}
+                            >
+                                <History size={18} /> History
+                            </button>
                         </div>
                     </header>
 
@@ -86,6 +94,12 @@ export const Dashboard: React.FC = () => {
                         {activeTab === 'query' && (
                             <div className="full-view query-view">
                                 <QueryInterface />
+                            </div>
+                        )}
+
+                        {activeTab === 'history' && (
+                            <div className="full-view">
+                                <HistoryView />
                             </div>
                         )}
                     </div>

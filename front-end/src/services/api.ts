@@ -337,5 +337,39 @@ export const api = {
         }
 
         return response.blob();
+    },
+
+    async feedback(payload: { query: string, response: string, vote: number, feedback_text?: string }, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/feedback`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-KEY': apiKey,
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to submit feedback');
+        }
+
+        return response.json();
+    },
+
+    async getHistory(apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/history`, {
+            method: 'GET',
+            headers: {
+                'X-API-KEY': apiKey,
+            },
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to fetch history');
+        }
+
+        return response.json();
     }
 };

@@ -19,6 +19,7 @@ function App() {
         <Route path="/query" element={<Dashboard />} />
         <Route path="/tables" element={<Dashboard />} />
         <Route path="/import" element={<Dashboard />} />
+        <Route path="/history" element={<Dashboard />} />
         <Route path="/scheduled-reports" element={<ScheduledReports />} />
       </Routes>
     </BrowserRouter>
