@@ -790,10 +790,12 @@ async def preview_table(table_name: str, org=Depends(get_current_org)):
                 # SQLite
                 result = conn.execute(text(f"SELECT rowid as _id, * FROM {table_name} LIMIT 50"))
             except Exception:
+                conn.rollback() # Rollback aborted transaction
                 try:
                     # Postgres - cast ctid to text
                     result = conn.execute(text(f"SELECT ctid::text as _id, * FROM {table_name} LIMIT 50"))
                 except Exception:
+                    conn.rollback() # Rollback aborted transaction
                     # Fallback (no editing supported for this table)
                     result = conn.execute(text(f"SELECT * FROM {table_name} LIMIT 50"))
             
@@ -1097,7 +1099,7 @@ async def get_stats(org=Depends(get_current_org)):
         for table in tables:
             stats = db_manager.get_table_stats(table)
             stats_list.append(stats)
-        return {"tables": stats_list}
+        return {"tables": stats_list, "org_name": org.name}
     except Exception as e:
         logger.error(f"Error fetching stats: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

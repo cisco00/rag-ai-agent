@@ -2,6 +2,7 @@
 import React from 'react';
 import { MessageSquare, Table, Upload, Settings, LogOut, Sparkles, Clock } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { api } from '../services/api';
 
 export const Sidebar: React.FC = () => {
   const navigate = useNavigate();
@@ -12,10 +13,30 @@ export const Sidebar: React.FC = () => {
   const [orgName, setOrgName] = React.useState('Organization');
 
   React.useEffect(() => {
-    const name = localStorage.getItem('vantage_org_name');
-    if (name) {
-      setOrgName(name);
-    }
+    const fetchOrgInfo = async () => {
+      const savedName = localStorage.getItem('vantage_org_name');
+      if (savedName) {
+        setOrgName(savedName);
+      }
+
+      const apiKey = localStorage.getItem('vantage_api_key');
+      if (apiKey) {
+        try {
+          // Fetch fresh stats which includes org_name
+          const stats = await api.getStats(apiKey);
+          if (stats.org_name) {
+            setOrgName(stats.org_name);
+            if (stats.org_name !== savedName) {
+              localStorage.setItem('vantage_org_name', stats.org_name);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to refresh org name", e);
+        }
+      }
+    };
+
+    fetchOrgInfo();
   }, []);
 
   return (
