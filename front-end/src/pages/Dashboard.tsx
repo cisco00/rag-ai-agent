@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Overview } from '../components/Overview';
 import { Sidebar } from '../components/Sidebar';
-import { FileImport } from '../components/FileImport';
 import { TableBrowser } from '../components/TableBrowser';
 import { QueryInterface } from '../components/QueryInterface';
 import { TableInspector } from '../components/TableInspector';
@@ -19,7 +18,6 @@ export const Dashboard: React.FC = () => {
         const path = location.pathname;
         if (path === '/query') return 'query';
         if (path === '/tables') return 'tables';
-        if (path === '/import') return 'import';
         if (path === '/overview') return 'overview';
         if (path === '/history') return 'history';
         return 'overview';
@@ -50,12 +48,6 @@ export const Dashboard: React.FC = () => {
                                 <LayoutDashboard size={18} /> Overview
                             </button>
                             <button
-                                className={`tab-btn ${activeTab === 'import' ? 'active' : ''}`}
-                                onClick={() => navigate('/import')}
-                            >
-                                <FileUp size={18} /> Import
-                            </button>
-                            <button
                                 className={`tab-btn ${activeTab === 'tables' ? 'active' : ''}`}
                                 onClick={() => navigate('/tables')}
                             >
@@ -83,7 +75,7 @@ export const Dashboard: React.FC = () => {
                             </div>
                         )}
 
-                        {activeTab === 'import' && <div className="full-view"><FileImport /></div>}
+
 
                         {activeTab === 'tables' && (
                             <div className="full-view">

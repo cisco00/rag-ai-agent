@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, UploadFile, File, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from datetime import datetime, timedelta
 import time
 import logging
@@ -21,7 +21,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
+from analytics import perform_forecast, detect_anomalies
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
 
@@ -129,8 +130,8 @@ class ConfigRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    history: Optional[List[dict]] = None
-    use_file: Optional[bool] = False
+    session_id: Optional[str] = None
+    history: Optional[List[Dict[str, Any]]] = None # Keep for compatibility, but prefer session_id
     tables: Optional[List[str]] = None
     verify_only: bool = False
     confirmed_sql: Optional[str] = None
@@ -147,6 +148,61 @@ class FeedbackRequest(BaseModel):
     response: str
     vote: int
     feedback_text: Optional[str] = None
+
+class DataSourceResponse(BaseModel):
+    id: int
+    name: str
+    source_type: str
+    table_name: Optional[str]
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ApiImportRequest(BaseModel):
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    params: Optional[Dict[str, str]] = None
+    table_name: str
+    if_exists: str = "replace"
+
+class TransformRequest(BaseModel):
+    table_name: str
+    operations: List[Dict[str, Any]] # e.g. [{"type": "filter", "column": "age", "op": ">", "value": 30}]
+    target_table: Optional[str] = None
+
+class ForecastRequest(BaseModel):
+    table_name: str
+    date_column: str
+    value_column: str
+    periods: int = 30
+    freq: str = 'D'
+
+class AnomalyRequest(BaseModel):
+    table_name: str
+    value_column: str
+    contamination: float = 0.05
+
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    id: str
+    title: Optional[str]
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class MessageResponse(BaseModel):
+    id: int
+    role: str
+    content: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
 
 # --- Security ---
 async def get_current_org(x_api_key: str = Header(...)):
@@ -422,8 +478,8 @@ Vantage AI Team
 @app.post("/import")
 async def import_file_to_database(
     file: UploadFile = File(...), 
-    table_name: Optional[str] = None,
-    if_exists: str = 'replace',
+    table_name: Optional[str] = Form(None),
+    if_exists: str = Form('replace'),
     org=Depends(get_current_org)
 ):
     """
@@ -819,6 +875,255 @@ async def submit_feedback(request: FeedbackRequest, org=Depends(get_current_org)
         logger.error(f"Feedback error: {e}")
         raise HTTPException(status_code=500, detail="Failed to submit feedback")
 
+# --- New Data Feature Endpoints ---
+
+@app.get("/data/sources", response_model=List[DataSourceResponse])
+async def list_data_sources(org=Depends(get_current_org)):
+    """List all data sources for the organization."""
+    try:
+        with get_db() as db:
+            sources = db.query(DataSource).filter(DataSource.org_id == org.id).all()
+            return sources
+    except Exception as e:
+        logger.error(f"Failed to list sources: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/import/api")
+async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org)):
+    """Import data from an external API."""
+    import httpx
+    try:
+        # Fetch data
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                params=request.params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            
+        data = response.json()
+        
+        # Convert to DataFrame
+        import pandas as pd
+        # Handle list of dicts or dict with list
+        if isinstance(data, list):
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            # heuristics to find the list
+            found_list = False
+            for key, val in data.items():
+                if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                    df = pd.DataFrame(val)
+                    found_list = True
+                    break
+            if not found_list:
+                 df = pd.DataFrame([data])
+        else:
+             raise HTTPException(status_code=400, detail="Could not parse API response as tabular data")
+             
+        # Save to DB
+        # Create database manager with org's connection string
+        if not org.db_connection_string:
+             # Auto-provision (reuse logic or error)
+             raise HTTPException(status_code=400, detail="Organization has no database configured")
+             
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        success = db_manager.load_dataframe(df, request.table_name, if_exists=request.if_exists)
+        db_manager.close()
+        
+        if success:
+            # Register DataSource
+            with get_db() as db:
+                import json
+                source = DataSource(
+                    org_id=org.id,
+                    name=f"API: {request.url}",
+                    source_type="api",
+                    connection_details=json.dumps({"url": request.url, "method": request.method}),
+                    table_name=request.table_name
+                )
+                db.add(source)
+                db.commit()
+                
+            return {"status": "success", "message": f"Imported {len(df)} rows to table '{request.table_name}'"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save data to database")
+
+    except Exception as e:
+        logger.error(f"API import failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/transform")
+async def transform_data(request: TransformRequest, org=Depends(get_current_org)):
+    """Apply transformations to a table."""
+    try:
+        db_conn = org.db_connection_string
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured")
+            
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        
+        # Load table
+        # WARNING: This loads entire table to memory. In prod use SQL.
+        query = f"SELECT * FROM {request.table_name}"
+        df = pd.read_sql(query, db_manager.get_engine())
+        
+        # Apply operations
+        for op in request.operations:
+            op_type = op.get("type")
+            logger.info(f"Applying operation: {op_type} on {op.get('column')}")
+            if op_type == "filter":
+                col = op["column"]
+                val = op["value"]
+                operator = op.get("op", "==")
+                if operator == ">":
+                    df = df[df[col] > val]
+                elif operator == "<":
+                    df = df[df[col] < val]
+                elif operator == "==":
+                    df = df[df[col] == val]
+            elif op_type == "drop_col":
+                df = df.drop(columns=[op["column"]])
+            elif op_type == "rename_col":
+                df = df.rename(columns={op["column"]: op["new_name"]})
+            elif op_type == "fill_na":
+                df = df.fillna(op["value"])
+            elif op_type == "change_type":
+                col = op["column"]
+                new_type = op["new_type"]
+                logger.info(f"Changing type of {col} to {new_type}")
+                try:
+                    if new_type == "int":
+                        # Use Int64 for nullable integers
+                        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                    elif new_type == "float":
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                    elif new_type == "str":
+                        df[col] = df[col].astype(str)
+                    elif new_type == "datetime":
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    logger.info(f"Successfully changed type of {col}")
+                except Exception as ex:
+                    logger.warning(f"Failed to convert column {col} to {new_type}: {ex}")
+                
+        # Save or Return
+        if request.target_table:
+            success = db_manager.load_dataframe(df, request.target_table, if_exists="replace")
+            db_manager.close()
+            return {"status": "success", "message": f"Transformed data saved to '{request.target_table}'", "rows": len(df)}
+        else:
+            db_manager.close()
+            # Return preview
+            preview_data = df.head(10).to_dict(orient="records")
+            # JSON cannot handle NaN, so replace with None
+            import math
+            cleaned_preview = []
+            for row in preview_data:
+                cleaned_row = {}
+                for k, v in row.items():
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                         cleaned_row[k] = None
+                    else:
+                         cleaned_row[k] = v
+                cleaned_preview.append(cleaned_row)
+            return {"status": "success", "preview": cleaned_preview}
+            
+    except Exception as e:
+        logger.error(f"Transformation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analytics/forecast")
+async def get_forecast(request: ForecastRequest, org=Depends(get_current_org)):
+    """Generate a time-series forecast."""
+    try:
+        db_conn = org.db_connection_string
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured")
+            
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        
+        # Load data (restricted columns)
+        query = f"SELECT {request.date_column}, {request.value_column} FROM {request.table_name}"
+        df = pd.read_sql(query, db_manager.get_engine())
+        db_manager.close()
+        
+        result = perform_forecast(df, request.date_column, request.value_column, request.periods, request.freq)
+        
+        if "error" in result:
+             raise HTTPException(status_code=400, detail=result["error"])
+             
+        return result
+        
+    except Exception as e:
+         logger.error(f"Forecast failed: {e}", exc_info=True)
+         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analytics/anomaly")
+async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org)):
+    """Detect anomalies in a dataset."""
+    try:
+        db_conn = org.db_connection_string
+        if not db_conn:
+             raise HTTPException(status_code=400, detail="No database configured")
+             
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        
+        # Load data
+        query = f"SELECT {request.value_column} FROM {request.table_name}"
+        df = pd.read_sql(query, db_manager.get_engine())
+        db_manager.close()
+        
+        result = detect_anomalies(df, request.value_column, request.contamination)
+        
+        if "error" in result:
+             raise HTTPException(status_code=400, detail=result["error"])
+             
+        return result
+        
+    except Exception as e:
+         logger.error(f"Anomaly detection failed: {e}", exc_info=True)
+         raise HTTPException(status_code=500, detail=str(e))
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+@app.websocket("/ws/stream/{source_id}")
+async def websocket_endpoint(websocket: WebSocket, source_id: int):
+    """
+    Simulate real-time data streaming.
+    """
+    await websocket.accept()
+    try:
+        import asyncio
+        import random
+        import json
+        
+        # Simulate data stream
+        while True:
+            # Generate random data point
+            data = {
+                "source_id": source_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "value": random.uniform(10, 100),
+                "status": random.choice(["ok", "warning", "critical"])
+            }
+            await websocket.send_text(json.dumps(data))
+            await asyncio.sleep(1) # Send every second
+            
+    except WebSocketDisconnect:
+        logger.info(f"Client disconnected from stream {source_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+             await websocket.close()
+        except:
+             pass
+
 @app.get("/tables/{table_name}/preview")
 async def preview_table(table_name: str, org=Depends(get_current_org)):
     # Determine which DB to use
@@ -938,7 +1243,7 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     # Determine which DB to use
     with FILE_DB_CACHE_LOCK:
         conn_str = None
-        if request.use_file and org.api_key in FILE_DB_CACHE:
+        if hasattr(request, 'use_file') and request.use_file and org.api_key in FILE_DB_CACHE:
             conn_str = FILE_DB_CACHE[org.api_key]
         else:
             conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
@@ -951,12 +1256,54 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     # Get schema summary (cached)
     schema_summary = get_cached_schema_summary(conn_str)
     
+    start_time = time.time()
+    
     agent = AnalyticsAgent(hf_token, connection_string=conn_str, schema_summary=schema_summary)
     
+    # Save user message if session_id provided
+    if request.session_id:
+        try:
+            add_chat_message(request.session_id, "user", request.query)
+        except Exception as e:
+            logger.error(f"Failed to save user message: {e}")
+
     try:
+        # Check if org has DB connection
+        if not org.db_connection_string:
+            return {
+                "text": "Please configure your database connection first.",
+                "visualization": None,
+                "status": "success"
+            }
+            
+        # Determine which DB to use for the agent
+        with FILE_DB_CACHE_LOCK:
+            conn_str = None
+            # If use_file was in the request, it would be handled here.
+            # For now, prioritize org's configured DB, then file cache.
+            conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
+        
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
+        
+        hf_token = os.environ.get("HF_TOKEN")
+        
+        # Get schema summary (cached)
+        schema_summary = get_cached_schema_summary(conn_str)
+        
+        # Initialize agent
+        agent = AnalyticsAgent(hf_token, connection_string=conn_str, schema_summary=schema_summary)
+        
+        # Load history from session if session_id provided and no explicit history
+        history = request.history
+        if request.session_id and not history:
+            # Fetch history from DB
+             db_messages = get_chat_history(request.session_id)
+             history = [{"role": m.role, "content": m.content} for m in db_messages]
+
         result = agent.run_query(
             request.query, 
-            request.history, 
+            history, 
             tables=request.tables, 
             verify_only=request.verify_only,
             confirmed_sql=request.confirmed_sql
@@ -985,18 +1332,35 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
                 )
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
+        
+        # Save assistant response if session_id provided (Chat feature)
+        if request.session_id:
+            try:
+                response_text = result.get("text", "")
+                if result.get("visualization"):
+                     response_text += "\n[Visualization Generated]"
+                add_chat_message(request.session_id, "assistant", response_text)
+            except Exception as e:
+                logger.error(f"Failed to save assistant message: {e}")
+
+        # Update title if it's the first message and title is generic
+        if request.session_id and (not history or len(history) == 0):
+             # Logic to update title could go here
+             pass
 
         return QueryResponse(
             query=request.query,
-            response=result["text"],
+            response=result.get("text", ""),
             visualization=result.get("visualization"),
             status=result.get("status", "success"),
             sql_query=result.get("sql_query")
         )
     except Exception as e:
+        logger.error(f"Query execution failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        agent.close()
+        if 'agent' in locals():
+            agent.close()
 
 @app.get("/history")
 async def get_history(limit: int = 50, org=Depends(get_current_org)):
@@ -1412,6 +1776,66 @@ async def delete_scheduled_report(report_id: int, org=Depends(get_current_org)):
         logger.error(f"Failed to cancel report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+# --- Chat Persistence Endpoints ---
+
+@app.post("/chat/sessions", response_model=SessionResponse)
+async def create_new_session(request: CreateSessionRequest, org=Depends(get_current_org)):
+    """Create a new chat session."""
+    try:
+        session = create_chat_session(org.id, request.title)
+        return session
+    except Exception as e:
+        logger.error(f"Failed to create session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chat/sessions", response_model=List[SessionResponse])
+async def list_chat_sessions(org=Depends(get_current_org)):
+    """List all chat sessions for the organization."""
+    try:
+        with get_db() as db:
+            sessions = db.query(ChatSession).filter(ChatSession.org_id == org.id).order_by(ChatSession.updated_at.desc()).all()
+            # Detach from session to avoid lazy loading issues after session closes
+            for session in sessions:
+                db.expunge(session)
+            return sessions
+    except Exception as e:
+        logger.error(f"Failed to list sessions: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chat/sessions/{session_id}/messages", response_model=List[MessageResponse])
+async def get_session_messages(session_id: str, org=Depends(get_current_org)):
+    """Get messages for a chat session."""
+    try:
+        messages = get_chat_history(session_id)
+        return messages
+    except Exception as e:
+        logger.error(f"Failed to get messages: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/chat/sessions/{session_id}")
+async def delete_session(session_id: str, org=Depends(get_current_org)):
+    """Delete a chat session."""
+    try:
+        with get_db() as db:
+            session = db.query(ChatSession).filter(
+                ChatSession.id == session_id,
+                ChatSession.org_id == org.id
+            ).first()
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            
+            # Delete messages first
+            db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+            db.delete(session)
+            db.commit()
+            return {"status": "success"}
+    except HTTPException:
+         raise
+    except Exception as e:
+        logger.error(f"Failed to delete session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Mount static files (MUST be last to avoid overriding API routes)

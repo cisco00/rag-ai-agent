@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { MessageSquare, Table, Upload, Settings, LogOut, Sparkles, Clock } from 'lucide-react';
+import { MessageSquare, Table, Upload, Settings, LogOut, Sparkles, Clock, BarChart2, Database } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../services/api';
 
@@ -54,9 +53,24 @@ export const Sidebar: React.FC = () => {
       </div>
 
       <nav className="sidebar-nav">
+        <button className={`nav-item ${isActive('/chat') ? 'active' : ''}`} onClick={() => navigate('/chat')}>
+          <MessageSquare size={18} />
+          <span>Chat Code</span>
+        </button>
+        <button className={`nav-item ${isActive('/data') ? 'active' : ''}`} onClick={() => navigate('/data')}>
+          <Database size={18} />
+          <span>Data Sources</span>
+        </button>
+        <button className={`nav-item ${isActive('/analytics') ? 'active' : ''}`} onClick={() => navigate('/analytics')}>
+          <BarChart2 size={18} />
+          <span>Analytics</span>
+        </button>
+
+        <div className="nav-divider" style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }}></div>
+
         <button className={`nav-item ${isActive('/query') ? 'active' : ''}`} onClick={() => navigate('/query')}>
           <MessageSquare size={18} />
-          <span>Query</span>
+          <span>Legacy Query</span>
         </button>
         <button className={`nav-item ${isActive('/tables') ? 'active' : ''}`} onClick={() => navigate('/tables')}>
           <Table size={18} />

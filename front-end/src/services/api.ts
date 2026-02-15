@@ -371,5 +371,114 @@ export const api = {
         }
 
         return response.json();
+    },
+
+    async exportPDF(payload: { query: string, response: string, visualization: any, status: string }, apiKey: string): Promise<Blob> {
+        const response = await fetch(`${API_BASE_URL}/export/pdf`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-KEY': apiKey,
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to export PDF');
+        }
+
+        return response.blob();
+    },
+
+    // --- Chat ---
+    async createSession(title: string | undefined, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify({ title }),
+        });
+        if (!response.ok) throw new Error('Failed to create session');
+        return response.json();
+    },
+    async getSessions(apiKey: string): Promise<any[]> {
+        const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
+            headers: { 'X-API-KEY': apiKey },
+        });
+        if (!response.ok) throw new Error('Failed to fetch sessions');
+        return response.json();
+    },
+    async getSessionMessages(sessionId: string, apiKey: string): Promise<any[]> {
+        const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/messages`, {
+            headers: { 'X-API-KEY': apiKey },
+        });
+        if (!response.ok) throw new Error('Failed to fetch messages');
+        return response.json();
+    },
+    async deleteSession(sessionId: string, apiKey: string): Promise<void> {
+        const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}`, {
+            method: 'DELETE',
+            headers: { 'X-API-KEY': apiKey },
+        });
+        if (!response.ok) throw new Error('Failed to delete session');
+    },
+
+    // --- Data ---
+    async getSources(apiKey: string): Promise<any[]> {
+        const response = await fetch(`${API_BASE_URL}/data/sources`, {
+            headers: { 'X-API-KEY': apiKey },
+        });
+        if (!response.ok) throw new Error('Failed to fetch sources');
+        return response.json();
+    },
+    async importApi(payload: any, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/import/api`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Import failed');
+        }
+        return response.json();
+    },
+    async transform(payload: any, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/transform`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Transformation failed');
+        }
+        return response.json();
+    },
+
+    // --- Analytics ---
+    async getForecast(payload: any, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/analytics/forecast`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Forecast failed');
+        }
+        return response.json();
+    },
+    async getAnomalies(payload: any, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/analytics/anomaly`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Anomaly detection failed');
+        }
+        return response.json();
     }
 };

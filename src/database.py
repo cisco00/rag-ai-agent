@@ -118,6 +118,15 @@ class DatabaseManager:
         
         return engine
     
+    def get_engine(self) -> Engine:
+        """
+        Get the SQLAlchemy engine.
+        
+        Returns:
+            SQLAlchemy engine
+        """
+        return self.engine
+    
     def _execute_with_retry(self, operation, max_retries: Optional[int] = None):
         """
         Execute an operation with retry logic for transient failures.

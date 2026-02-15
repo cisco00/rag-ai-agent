@@ -143,6 +143,48 @@ class QueryHistory(Base):
         except json.JSONDecodeError:
             return None
 
+
+class DataSource(Base):
+    __tablename__ = 'data_sources'
+    
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    source_type = Column(String(50), nullable=False) # 'api', 'upload', 'database'
+    connection_details = Column(Text, nullable=True) # JSON with URL, params, or filepath
+    table_name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<DataSource(id={self.id}, name='{self.name}', type='{self.source_type}')>"
+
+
+class ChatSession(Base):
+    __tablename__ = 'chat_sessions'
+    
+    id = Column(String(32), primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<ChatSession(id='{self.id}', title='{self.title}')>"
+
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+    
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(32), nullable=False, index=True) 
+    role = Column(String(50), nullable=False) # 'user', 'assistant'
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f"<ChatMessage(id={self.id}, role='{self.role}')>"
+
 # Setup admin database
 ADMIN_DB_URL = os.getenv("ADMIN_DB_URL", "sqlite:///./admin.db")
 
@@ -197,6 +239,52 @@ def init_admin_db():
         raise DatabaseError(f"Failed to initialize admin database: {str(e)}") from e
 
 
+def create_chat_session(org_id: int, title: Optional[str] = None) -> ChatSession:
+    """Create a new chat session."""
+    try:
+        with get_db() as db:
+            session_id = secrets.token_urlsafe(16)
+            session = ChatSession(id=session_id, org_id=org_id, title=title)
+            db.add(session)
+            # Commit handled by context manager
+            db.flush()
+            db.refresh(session)
+            db.expunge(session)
+            return session
+    except Exception as e:
+        logger.error(f"Failed to create chat session: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to create chat session: {str(e)}") from e
+
+def add_chat_message(session_id: str, role: str, content: str) -> ChatMessage:
+    """Add a message to a chat session."""
+    try:
+        with get_db() as db:
+            msg = ChatMessage(session_id=session_id, role=role, content=content)
+            db.add(msg)
+            db.flush()
+            db.refresh(msg)
+            db.expunge(msg)
+            return msg
+    except Exception as e:
+        logger.error(f"Failed to add chat message: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to add chat message: {str(e)}") from e
+
+def get_chat_history(session_id: str) -> list[ChatMessage]:
+    """Get all messages for a session."""
+    try:
+        with get_db() as db:
+            messages = db.query(ChatMessage).filter(
+                ChatMessage.session_id == session_id
+            ).order_by(ChatMessage.created_at.asc()).all()
+            # Expunge all
+            for msg in messages:
+                db.expunge(msg)
+            return messages
+    except Exception as e:
+        logger.error(f"Failed to get chat history: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to get chat history: {str(e)}") from e
+
+
 def create_org(name: str) -> Organization:
     """
     Create a new organization with a unique API key.
@@ -234,6 +322,13 @@ def create_org(name: str) -> Organization:
             return org
     
     except Exception as e:
+        # Check for unique constraint violation
+        if "UNIQUE constraint failed" in str(e) or "psycopg2.errors.UniqueViolation" in str(e):
+             # Rollback is already handled by the context manager, but we need to ensure
+             # the error is clear
+             logger.warning(f"Organization with name '{name}' already exists")
+             raise DatabaseError(f"Organization with name '{name}' already exists. Please choose a different name.") from e
+        
         logger.error(f"Failed to create organization: {e}", exc_info=True)
         raise DatabaseError(f"Failed to create organization: {str(e)}") from e
 

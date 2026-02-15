@@ -248,6 +248,15 @@ class QueryProcessor:
                          raise ModelAPIError(error_msg, self.config.model_name) from e
                 else:
                     error_msg = f"API call failed: {str(e)}"
+                    
+                    # Check for 402 Payment Required
+                    if "402 Payment Required" in str(e):
+                        error_msg = (
+                            "The AI model provider has reached its free tier limit (402 Payment Required). "
+                            "Please upgrade your plan or try again later. "
+                            "If you are using a custom API key, check your quota."
+                        )
+                    
                     logger.error(error_msg, exc_info=True)
                     raise ModelAPIError(error_msg, self.config.model_name) from e
             

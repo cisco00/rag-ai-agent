@@ -8,18 +8,20 @@ export const CreateOrganization: React.FC = () => {
   const [orgName, setOrgName] = useState('');
   const [createdApiKey, setCreatedApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     try {
       const response = await api.register(orgName);
       localStorage.setItem('vantage_api_key', response.api_key);
       localStorage.setItem('vantage_org_name', response.name);
       setCreatedApiKey(response.api_key);
-    } catch (error) {
-      console.error('Registration failed:', error);
-      alert('Failed to register organization. Please try again.');
+    } catch (err: any) {
+      console.error('Registration failed:', err);
+      setError(err.message || 'Failed to register organization. Please try again.');
     }
   };
 
@@ -61,6 +63,13 @@ export const CreateOrganization: React.FC = () => {
               <p className="card-subtitle">
                 Get started with AI-powered analytics. Register your organization to receive an API key.
               </p>
+
+              {error && (
+                <div className="error-message">
+                  <AlertTriangle size={18} />
+                  <span>{error}</span>
+                </div>
+              )}
 
               <form onSubmit={handleSubmit}>
                 <div className="input-group">
