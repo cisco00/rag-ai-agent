@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Bot, User, Download, FileText, MonitorPlay } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Bot, User, Download, FileText, MonitorPlay, Code, Play } from 'lucide-react';
 import { api } from '../services/api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -17,6 +17,7 @@ interface Message {
     created_at: string;
     visualization?: any;
     query?: string;
+    sql_query?: string;
 }
 
 export const ChatPage: React.FC = () => {
@@ -132,7 +133,8 @@ export const ChatPage: React.FC = () => {
                 content: response.response,
                 created_at: new Date().toISOString(),
                 visualization: response.visualization,
-                query: text
+                query: text,
+                sql_query: response.sql_query
             };
             setMessages(prev => [...prev, assistantMsg]);
 
@@ -140,6 +142,40 @@ export const ChatPage: React.FC = () => {
             loadSessions();
         } catch (e) {
             console.error("Failed to send message", e);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleRunSQL = async (sql: string, originalQuery: string) => {
+        if (!apiKey) return;
+        setIsLoading(true);
+        try {
+            const response = await api.query({
+                query: originalQuery,
+                history: [],
+                confirmed_sql: sql
+            }, apiKey);
+
+            const assistantMsg: Message = {
+                id: Date.now(),
+                role: 'assistant',
+                content: response.response,
+                created_at: new Date().toISOString(),
+                visualization: response.visualization,
+                query: originalQuery,
+                sql_query: response.sql_query
+            };
+            setMessages(prev => [...prev, assistantMsg]);
+        } catch (e: any) {
+            console.error("Failed to run SQL", e);
+            const errorMsg: Message = {
+                id: Date.now(),
+                role: 'assistant',
+                content: `Error executing SQL: ${e.message || 'Unknown error'}`,
+                created_at: new Date().toISOString()
+            };
+            setMessages(prev => [...prev, errorMsg]);
         } finally {
             setIsLoading(false);
         }
@@ -288,6 +324,39 @@ export const ChatPage: React.FC = () => {
                                                 </React.Fragment>
                                             ))}
                                         </div>
+                                        {msg.sql_query && (
+                                            <div style={{ marginTop: '1rem', background: '#1e293b', borderRadius: '8px', overflow: 'hidden', border: '1px solid #334155' }}>
+                                                <div style={{ background: '#0f172a', padding: '0.5rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.8rem', fontWeight: 500 }}>
+                                                        <Code size={14} />
+                                                        <span>SQL Query</span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => handleRunSQL(msg.sql_query!, msg.query || "")}
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            background: '#22c55e',
+                                                            color: 'white',
+                                                            border: 'none',
+                                                            borderRadius: '4px',
+                                                            padding: '0.25rem 0.5rem',
+                                                            fontSize: '0.75rem',
+                                                            cursor: 'pointer',
+                                                            fontWeight: 500
+                                                        }}
+                                                    >
+                                                        <Play size={12} fill="white" /> Run
+                                                    </button>
+                                                </div>
+                                                <div style={{ padding: '0.75rem', overflowX: 'auto' }}>
+                                                    <code style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>
+                                                        {msg.sql_query}
+                                                    </code>
+                                                </div>
+                                            </div>
+                                        )}
                                         {msg.visualization && renderVisualization(msg.visualization)}
                                         {msg.role === 'assistant' && msg.visualization && (
                                             <div className="message-actions" style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid var(--color-border)', paddingTop: '0.5rem' }}>

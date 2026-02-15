@@ -232,7 +232,12 @@ def init_admin_db():
     """
     logger.info("Creating admin database tables")
     try:
-        Base.metadata.create_all(bind=engine)
+        if ADMIN_DB_URL.startswith("sqlite"):
+             # For SQLite, we can just close and reopen connection or use raw connection
+             # Start with simple creation
+             Base.metadata.create_all(bind=engine)
+        else:
+             Base.metadata.create_all(bind=engine)
         logger.info("Admin database tables created successfully")
     except Exception as e:
         logger.error(f"Failed to create admin database tables: {e}", exc_info=True)

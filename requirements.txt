@@ -19,3 +19,4 @@ apscheduler
 google-generativeai
 scikit-learn
 statsmodels
+alembic
