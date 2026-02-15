@@ -10,13 +10,16 @@ from alembic import context
 # Add src to path to import models
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+os.environ["SKIP_KEY_VALIDATION"] = "true"
+
+
+
 # Import app config and models
 from config import get_db_config
 from models import Base
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ["SKIP_KEY_VALIDATION"] = "true"
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
