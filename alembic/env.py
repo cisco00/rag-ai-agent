@@ -16,6 +16,7 @@ from models import Base
 from dotenv import load_dotenv
 
 load_dotenv()
+os.environ["SKIP_KEY_VALIDATION"] = "true"
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

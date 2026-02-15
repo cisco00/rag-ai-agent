@@ -329,8 +329,10 @@ Every output must be stable, explainable, and automation-safe.
             raise MissingConfigurationError("HF_TOKEN")
         
         # Only strict check Google key if it is the primary provider
+        # but allow skipping validation via env var (for migrations/builds)
         if self.model_provider == "google" and not self.google_api_key:
-            raise MissingConfigurationError("GOOGLE_API_KEY")
+            if not os.getenv("SKIP_KEY_VALIDATION"):
+                raise MissingConfigurationError("GOOGLE_API_KEY")
         
         # Checking fallback keys is done at runtime during init to allow graceful degradation
             
