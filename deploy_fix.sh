@@ -40,12 +40,9 @@ else
     echo "Warning: requirements.txt not found."
 fi
 
-# Run database migrations
-echo "Running database migrations..."
-if [ -f "alembic.ini" ]; then
-    python -m alembic upgrade head
-else
-    echo "Warning: alembic.ini not found, skipping migrations."
-fi
+
+# Note: Migrations should be run in the start script, not build script.
+echo "Skipping migrations in build script."
+
 
 echo "Build complete! Artifacts are in front-end/dist"
