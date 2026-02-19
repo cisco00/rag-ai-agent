@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Overview } from '../components/Overview';
-import { Sidebar } from '../components/Sidebar';
 import { TableBrowser } from '../components/TableBrowser';
 import { TableInspector } from '../components/TableInspector';
 import { LayoutDashboard, Database } from 'lucide-react';
@@ -30,46 +29,38 @@ export const Dashboard: React.FC = () => {
     };
 
     return (
-        <div className="layout">
-            <Sidebar />
-            <main className="main-content">
-                <div className="content-container">
-                    <header className="page-header">
-                        <h1>Analytics Dashboard</h1>
-                        <div className="tabs">
-                            <button
-                                className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-                                onClick={() => navigate('/overview')}
-                            >
-                                <LayoutDashboard size={18} /> Overview
-                            </button>
-                            <button
-                                className={`tab-btn ${activeTab === 'tables' ? 'active' : ''}`}
-                                onClick={() => navigate('/tables')}
-                            >
-                                <Database size={18} /> Tables
-                            </button>
-                        </div>
-                    </header>
-
-                    <div className="tab-content">
-                        {activeTab === 'overview' && (
-                            <div className="full-view">
-                                <Overview onSelectTable={handleOverviewTableSelect} />
-                            </div>
-                        )}
-
-
-
-                        {activeTab === 'tables' && (
-                            <div className="full-view">
-                                <TableBrowser onSelectTable={handleTableSelect} />
-                            </div>
-                        )}
-
-                    </div>
+        <div className="dashboard-container">
+            <header className="page-header">
+                <h1>Analytics Dashboard</h1>
+                <div className="tabs">
+                    <button
+                        className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
+                        onClick={() => navigate('/overview')}
+                    >
+                        <LayoutDashboard size={18} /> Overview
+                    </button>
+                    <button
+                        className={`tab-btn ${activeTab === 'tables' ? 'active' : ''}`}
+                        onClick={() => navigate('/tables')}
+                    >
+                        <Database size={18} /> Tables
+                    </button>
                 </div>
-            </main>
+            </header>
+
+            <div className="tab-content">
+                {activeTab === 'overview' && (
+                    <div className="full-view">
+                        <Overview onSelectTable={handleOverviewTableSelect} />
+                    </div>
+                )}
+
+                {activeTab === 'tables' && (
+                    <div className="full-view">
+                        <TableBrowser onSelectTable={handleTableSelect} />
+                    </div>
+                )}
+            </div>
 
             {selectedTable && (
                 <TableInspector
@@ -79,20 +70,10 @@ export const Dashboard: React.FC = () => {
             )}
 
             <style>{`
-                .layout {
-                    display: flex;
-                    min-height: 100vh;
-                    background-color: var(--color-bg-primary);
-                }
-                .main-content {
-                    flex: 1;
+                .dashboard-container {
                     padding: 2rem;
-                    overflow-y: auto;
-                }
-                .content-container {
-                    max-width: 1200px;
-                    margin: 0 auto;
                     height: 100%;
+                    overflow-y: auto;
                     display: flex;
                     flex-direction: column;
                 }
@@ -131,19 +112,21 @@ export const Dashboard: React.FC = () => {
 
                 .tab-content { flex: 1; margin-top: 1.5rem; }
                 
-                .grid-overview {
-                    display: grid;
-                    grid-template-columns: 1.5fr 1fr;
-                    gap: 1.5rem;
-                    align-items: start;
-                }
-                
-                .overview-card h3 {
-                    margin-bottom: 1rem;
-                    font-size: 1.1rem;
-                }
-
                 .full-view { height: 100%; }
+
+                @media (max-width: 768px) {
+                    .dashboard-container {
+                        padding: 1rem;
+                    }
+                    .page-header h1 {
+                        font-size: 1.5rem;
+                        margin-bottom: 1rem;
+                    }
+                    .tab-btn {
+                        padding: 0.5rem 0.75rem;
+                        font-size: 0.9rem;
+                    }
+                }
             `}</style>
         </div>
     );

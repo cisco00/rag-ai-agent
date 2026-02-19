@@ -3,7 +3,12 @@ import { MessageSquare, Table, Upload, Settings, LogOut, Sparkles, Clock, BarCha
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../services/api';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -38,69 +43,124 @@ export const Sidebar: React.FC = () => {
     fetchOrgInfo();
   }, []);
 
+  const handleNavClick = (path: string) => {
+    navigate(path);
+    if (onClose) onClose(); // Close drawer on mobile selection
+  };
+
+  const handleLogout = () => {
+    navigate('/');
+    if (onClose) onClose();
+  }
+
   return (
-    <div className="sidebar">
-      <div className="sidebar-header">
-        <div className="logo-section">
-          <div className="sidebar-logo-icon">
-            <Sparkles size={16} color="white" />
+    <>
+      {/* Mobile Overlay */}
+      <div
+        className={`sidebar-overlay ${isOpen ? 'open' : ''}`}
+        onClick={onClose}
+      />
+
+      <div className={`sidebar ${isOpen ? 'open' : ''}`}>
+        <div className="sidebar-header">
+          <div className="logo-section">
+            <div className="sidebar-logo-icon">
+              <Sparkles size={16} color="white" />
+            </div>
+            <span className="sidebar-brand">Vantage AI</span>
           </div>
-          <span className="sidebar-brand">Vantage AI</span>
+          <div className="user-info">
+            <span className="username">{orgName}</span>
+          </div>
         </div>
-        <div className="user-info">
-          <span className="username">{orgName}</span>
+
+        <nav className="sidebar-nav">
+          <button className={`nav-item ${isActive('/chat') ? 'active' : ''}`} onClick={() => handleNavClick('/chat')}>
+            <MessageSquare size={18} />
+            <span>Chat Code</span>
+          </button>
+          <button className={`nav-item ${isActive('/data') ? 'active' : ''}`} onClick={() => handleNavClick('/data')}>
+            <Database size={18} />
+            <span>Data Management</span>
+          </button>
+          <button className={`nav-item ${isActive('/analytics') ? 'active' : ''}`} onClick={() => handleNavClick('/analytics')}>
+            <BarChart2 size={18} />
+            <span>Analytics</span>
+          </button>
+
+          <div className="nav-divider" style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }}></div>
+
+          <button className={`nav-item ${isActive('/tables') ? 'active' : ''}`} onClick={() => handleNavClick('/tables')}>
+            <Table size={18} />
+            <span>Tables</span>
+          </button>
+          <button className={`nav-item ${isActive('/database-config') ? 'active' : ''}`} onClick={() => handleNavClick('/database-config')}>
+            <Settings size={18} />
+            <span>Configuration</span>
+          </button>
+          <button className={`nav-item ${isActive('/scheduled-reports') ? 'active' : ''}`} onClick={() => handleNavClick('/scheduled-reports')}>
+            <Clock size={18} />
+            <span>Scheduled Reports</span>
+          </button>
+        </nav>
+
+        <div className="sidebar-footer">
+          <button className="nav-item logout" onClick={handleLogout}>
+            <LogOut size={18} />
+            <span>Logout</span>
+          </button>
         </div>
-      </div>
 
-      <nav className="sidebar-nav">
-        <button className={`nav-item ${isActive('/chat') ? 'active' : ''}`} onClick={() => navigate('/chat')}>
-          <MessageSquare size={18} />
-          <span>Chat Code</span>
-        </button>
-        <button className={`nav-item ${isActive('/data') ? 'active' : ''}`} onClick={() => navigate('/data')}>
-          <Database size={18} />
-          <span>Data Management</span>
-        </button>
-        <button className={`nav-item ${isActive('/analytics') ? 'active' : ''}`} onClick={() => navigate('/analytics')}>
-          <BarChart2 size={18} />
-          <span>Analytics</span>
-        </button>
-
-        <div className="nav-divider" style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }}></div>
-
-        <button className={`nav-item ${isActive('/tables') ? 'active' : ''}`} onClick={() => navigate('/tables')}>
-          <Table size={18} />
-          <span>Tables</span>
-        </button>
-        <button className={`nav-item ${isActive('/database-config') ? 'active' : ''}`} onClick={() => navigate('/database-config')}>
-          <Settings size={18} />
-          <span>Configuration</span>
-        </button>
-        <button className={`nav-item ${isActive('/scheduled-reports') ? 'active' : ''}`} onClick={() => navigate('/scheduled-reports')}>
-          <Clock size={18} />
-          <span>Scheduled Reports</span>
-        </button>
-      </nav>
-
-      <div className="sidebar-footer">
-        <button className="nav-item logout" onClick={() => navigate('/')}>
-          <LogOut size={18} />
-          <span>Logout</span>
-        </button>
-      </div>
-
-      <style>{`
+        <style>{`
         .sidebar {
           width: 260px;
           height: 100vh;
-          background-color: var(--sidebar-bg); /* Updated */
+          background-color: var(--sidebar-bg);
           border-right: 1px solid var(--color-border);
           display: flex;
           flex-direction: column;
           padding: 1.5rem;
           flex-shrink: 0;
+          transition: transform 0.3s ease-in-out;
+          z-index: 1001; /* Above overlay */
+        }
+        
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
         }
 
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                transform: translateX(-100%);
+            }
+            .sidebar.open {
+                transform: translateX(0);
+                box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+            }
+            .sidebar-overlay {
+                display: block;
+            }
+            .sidebar-overlay.open {
+                opacity: 1;
+                pointer-events: auto;
+            }
+        }
+
+        /* Existing Styles ... */
         .sidebar-header {
           margin-bottom: 2.5rem;
         }
@@ -125,7 +185,7 @@ export const Sidebar: React.FC = () => {
         .sidebar-brand {
           font-weight: 600;
           font-size: 1.1rem;
-          color: var(--sidebar-text); /* Updated */
+          color: var(--sidebar-text);
         }
 
         .user-info {
@@ -133,7 +193,7 @@ export const Sidebar: React.FC = () => {
         }
         
         .username {
-          color: var(--sidebar-text-muted); /* Updated */
+          color: var(--sidebar-text-muted);
           font-size: 0.85rem;
         }
 
@@ -150,7 +210,7 @@ export const Sidebar: React.FC = () => {
           gap: 0.75rem;
           padding: 0.75rem 1rem;
           border-radius: 8px;
-          color: var(--sidebar-text-muted); /* Updated */
+          color: var(--sidebar-text-muted);
           background: transparent;
           border: none;
           cursor: pointer;
@@ -161,17 +221,17 @@ export const Sidebar: React.FC = () => {
         }
 
         .nav-item:hover {
-          background-color: var(--sidebar-hover); /* Updated */
-          color: var(--sidebar-text); /* Updated */
+          background-color: var(--sidebar-hover);
+          color: var(--sidebar-text);
         }
 
         .nav-item.active {
-          background-color: var(--sidebar-active); /* Updated */
+          background-color: var(--sidebar-active);
           color: white;
         }
         
         .sidebar-footer {
-          border-top: 1px solid rgba(255,255,255,0.1); /* Updated border for dark bg */
+          border-top: 1px solid rgba(255,255,255,0.1);
           padding-top: 1rem;
         }
         
@@ -180,6 +240,7 @@ export const Sidebar: React.FC = () => {
           background-color: rgba(239, 68, 68, 0.1);
         }
       `}</style>
-    </div>
+      </div>
+    </>
   );
 };

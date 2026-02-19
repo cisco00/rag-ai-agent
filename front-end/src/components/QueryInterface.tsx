@@ -387,7 +387,19 @@ export const QueryInterface: React.FC = () => {
                     border-radius: 8px;
                     border: 1px solid var(--color-border);
                     width: 100%;
-                    min-width: 400px;
+                    min-width: 0; /* Flexible width */
+                }
+
+                @media (max-width: 768px) {
+                    .viz-container {
+                        padding: 0.5rem;
+                    }
+                    .messages-area {
+                        padding: 1rem; /* Reduce padding on mobile */
+                    }
+                    .message {
+                        max-width: 95%; /* More width on mobile */
+                    }
                 }
 
                 .message-actions {
