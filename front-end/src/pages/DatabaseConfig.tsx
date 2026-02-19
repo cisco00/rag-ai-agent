@@ -75,197 +75,187 @@ export const DatabaseConfig: React.FC = () => {
   };
 
   return (
-    <div className="layout">
-      <Sidebar />
-      <main className="main-content">
-        <div className="content-container">
-          <h1 className="page-title">Database Configuration</h1>
-          <p className="page-subtitle">Connect your database to start querying with natural language.</p>
+    <div className="db-config-container">
+      <div className="content-container">
+        <h1 className="page-title">Database Configuration</h1>
+        <p className="page-subtitle">Connect your database to start querying with natural language.</p>
 
-          <div className="config-section">
-            <div className="card">
-              <label htmlFor="connString" className="label">Connection String</label>
-              <div className="input-with-icon">
-                <Database size={18} className="db-icon" />
-                <input
-                  id="connString"
-                  type="text"
-                  className="input padded"
-                  placeholder="postgresql://user:password@localhost:5432/dbname"
-                  value={connectionString}
-                  onChange={(e) => setConnectionString(e.target.value)}
-                />
+        <div className="config-section">
+          <div className="card">
+            <label htmlFor="connString" className="label">Connection String</label>
+            <div className="input-with-icon">
+              <Database size={18} className="db-icon" />
+              <input
+                id="connString"
+                type="text"
+                className="input padded"
+                placeholder="postgresql://user:password@localhost:5432/dbname"
+                value={connectionString}
+                onChange={(e) => setConnectionString(e.target.value)}
+              />
+            </div>
+            <p className="helper-text">Enter your database connection string. It will be stored securely.</p>
+
+            <button className="btn btn-secondary full-width-btn" onClick={handleConnect} disabled={isLoading}>
+              <Database size={18} className="btn-icon" />
+              {isLoading ? 'Connecting...' : 'Connect Database'}
+            </button>
+
+            {status && (
+              <div style={{ marginTop: '1rem' }} className={`alert-box ${status.type}`}>
+                {status.type === 'error' && <AlertCircle size={16} />}
+                <div>
+                  <p>{status.message}</p>
+                  {/* Show suggestion if DB not found OR Auth Failed */}
+                  {(status.code === 'DB_NOT_FOUND' || status.code === 'AUTH_FAILED') && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <p style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                        {status.code === 'AUTH_FAILED'
+                          ? "Don't have correct credentials? Create a new user & database:"
+                          : "Does this database exist?"}
+                      </p>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setShowCreateModal(true)}
+                      >
+                        <PlusCircle size={14} style={{ marginRight: '4px' }} />
+                        Create New Database & User
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-              <p className="helper-text">Enter your database connection string. It will be stored securely.</p>
+            )}
+          </div>
+        </div>
 
-              <button className="btn btn-secondary full-width-btn" onClick={handleConnect} disabled={isLoading}>
-                <Database size={18} className="btn-icon" />
-                {isLoading ? 'Connecting...' : 'Connect Database'}
-              </button>
+        {/* Create Database Modal */}
+        {showCreateModal && (
+          <div className="modal-overlay">
+            <div className="modal-card">
+              <div className="modal-header">
+                <h3>Create New Database & User</h3>
+                <button onClick={() => setShowCreateModal(false)} className="btn-icon"><X size={20} /></button>
+              </div>
+              <div className="modal-body">
+                <p className="modal-desc">
+                  Provide <strong>Admin</strong> credentials (e.g. postgres) to create a brand new database and a <strong>new user</strong> account for you.
+                </p>
 
-              {status && (
-                <div style={{ marginTop: '1rem' }} className={`alert-box ${status.type}`}>
-                  {status.type === 'error' && <AlertCircle size={16} />}
-                  <div>
-                    <p>{status.message}</p>
-                    {/* Show suggestion if DB not found OR Auth Failed */}
-                    {(status.code === 'DB_NOT_FOUND' || status.code === 'AUTH_FAILED') && (
-                      <div style={{ marginTop: '0.5rem' }}>
-                        <p style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                          {status.code === 'AUTH_FAILED'
-                            ? "Don't have correct credentials? Create a new user & database:"
-                            : "Does this database exist?"}
-                        </p>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => setShowCreateModal(true)}
-                        >
-                          <PlusCircle size={14} style={{ marginRight: '4px' }} />
-                          Create New Database & User
-                        </button>
-                      </div>
-                    )}
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label>Host</label>
+                    <input
+                      className="input"
+                      value={createForm.host}
+                      onChange={e => setCreateForm({ ...createForm, host: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Port</label>
+                    <input
+                      className="input"
+                      value={createForm.port}
+                      onChange={e => setCreateForm({ ...createForm, port: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Admin User (Existing)</label>
+                    <input
+                      className="input"
+                      value={createForm.admin_user}
+                      onChange={e => setCreateForm({ ...createForm, admin_user: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Admin Password</label>
+                    <input
+                      type="password"
+                      className="input"
+                      value={createForm.admin_password}
+                      onChange={e => setCreateForm({ ...createForm, admin_password: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="form-group full" style={{ borderTop: '1px solid #e2e8f0', margin: '0.5rem 0' }}></div>
+
+                  <div className="form-group">
+                    <label>New DB User</label>
+                    <input
+                      className="input"
+                      value={createForm.new_user}
+                      onChange={e => setCreateForm({ ...createForm, new_user: e.target.value })}
+                      placeholder="e.g. vantage_user"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>New DB Password</label>
+                    <input
+                      type="password"
+                      className="input"
+                      value={createForm.new_password}
+                      onChange={e => setCreateForm({ ...createForm, new_password: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group full">
+                    <label>New Database Name</label>
+                    <input
+                      className="input"
+                      value={createForm.new_db_name}
+                      onChange={e => setCreateForm({ ...createForm, new_db_name: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group full">
+                    <label>Your Email (for details)</label>
+                    <input
+                      type="email"
+                      className="input"
+                      value={createForm.email}
+                      onChange={e => setCreateForm({ ...createForm, email: e.target.value })}
+                      placeholder="you@company.com"
+                    />
                   </div>
                 </div>
-              )}
+              </div>
+              <div className="modal-footer">
+                <button
+                  className="btn btn-primary full-width-btn"
+                  onClick={handleCreateDatabase}
+                  disabled={isCreating}
+                >
+                  {isCreating ? 'Creating Database...' : 'Create & Connect'}
+                </button>
+              </div>
             </div>
           </div>
+        )}
 
-          {/* Create Database Modal */}
-          {showCreateModal && (
-            <div className="modal-overlay">
-              <div className="modal-card">
-                <div className="modal-header">
-                  <h3>Create New Database & User</h3>
-                  <button onClick={() => setShowCreateModal(false)} className="btn-icon"><X size={20} /></button>
-                </div>
-                <div className="modal-body">
-                  <p className="modal-desc">
-                    Provide <strong>Admin</strong> credentials (e.g. postgres) to create a brand new database and a <strong>new user</strong> account for you.
-                  </p>
+        <div className="examples-section">
+          <h2 className="section-title">Connection String Examples</h2>
 
-                  <div className="form-grid">
-                    <div className="form-group">
-                      <label>Host</label>
-                      <input
-                        className="input"
-                        value={createForm.host}
-                        onChange={e => setCreateForm({ ...createForm, host: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Port</label>
-                      <input
-                        className="input"
-                        value={createForm.port}
-                        onChange={e => setCreateForm({ ...createForm, port: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Admin User (Existing)</label>
-                      <input
-                        className="input"
-                        value={createForm.admin_user}
-                        onChange={e => setCreateForm({ ...createForm, admin_user: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Admin Password</label>
-                      <input
-                        type="password"
-                        className="input"
-                        value={createForm.admin_password}
-                        onChange={e => setCreateForm({ ...createForm, admin_password: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group full" style={{ borderTop: '1px solid #e2e8f0', margin: '0.5rem 0' }}></div>
-
-                    <div className="form-group">
-                      <label>New DB User</label>
-                      <input
-                        className="input"
-                        value={createForm.new_user}
-                        onChange={e => setCreateForm({ ...createForm, new_user: e.target.value })}
-                        placeholder="e.g. vantage_user"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>New DB Password</label>
-                      <input
-                        type="password"
-                        className="input"
-                        value={createForm.new_password}
-                        onChange={e => setCreateForm({ ...createForm, new_password: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group full">
-                      <label>New Database Name</label>
-                      <input
-                        className="input"
-                        value={createForm.new_db_name}
-                        onChange={e => setCreateForm({ ...createForm, new_db_name: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group full">
-                      <label>Your Email (for details)</label>
-                      <input
-                        type="email"
-                        className="input"
-                        value={createForm.email}
-                        onChange={e => setCreateForm({ ...createForm, email: e.target.value })}
-                        placeholder="you@company.com"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="modal-footer">
-                  <button
-                    className="btn btn-primary full-width-btn"
-                    onClick={handleCreateDatabase}
-                    disabled={isCreating}
-                  >
-                    {isCreating ? 'Creating Database...' : 'Create & Connect'}
-                  </button>
-                </div>
-              </div>
+          <div className="example-group">
+            <div className="example-item">
+              <span className="example-label">PostgreSQL</span>
+              <code className="example-code">postgresql://user:password@localhost:5432/dbname</code>
             </div>
-          )}
 
-          <div className="examples-section">
-            <h2 className="section-title">Connection String Examples</h2>
+            <div className="example-item">
+              <span className="example-label">MySQL</span>
+              <code className="example-code">mysql+pymysql://user:password@localhost:3306/dbname</code>
+            </div>
 
-            <div className="example-group">
-              <div className="example-item">
-                <span className="example-label">PostgreSQL</span>
-                <code className="example-code">postgresql://user:password@localhost:5432/dbname</code>
-              </div>
-
-              <div className="example-item">
-                <span className="example-label">MySQL</span>
-                <code className="example-code">mysql+pymysql://user:password@localhost:3306/dbname</code>
-              </div>
-
-              <div className="example-item">
-                <span className="example-label">SQLite</span>
-                <code className="example-code">sqlite:///./data.db</code>
-              </div>
+            <div className="example-item">
+              <span className="example-label">SQLite</span>
+              <code className="example-code">sqlite:///./data.db</code>
             </div>
           </div>
         </div>
-      </main>
-
-      <style>{`
-        .layout {
-          display: flex;
-          min-height: 100vh;
-          background-color: var(--color-bg-primary);
-        }
-
-        .main-content {
-          flex: 1;
-          padding: 3rem;
+        <style>{`
+        .db-config-container {
+          height: 100%;
           overflow-y: auto;
+          background-color: var(--color-bg-primary);
+          padding: 3rem;
         }
 
         .content-container {
@@ -404,7 +394,16 @@ export const DatabaseConfig: React.FC = () => {
         
         .btn-icon { background: none; border: none; cursor: pointer; color: #94a3b8; }
         .btn-icon:hover { color: #475569; }
+      <style>{`
+          .db - config - container {
+            height: 100%;
+          overflow-y: auto;
+          background-color: var(--color-bg-primary);
+          padding: 3rem;
+        }
+        /* ... existing styles ... */
       `}</style>
+      </div>
     </div>
   );
 };

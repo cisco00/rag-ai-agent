@@ -70,101 +70,101 @@ export const ScheduledReports: React.FC = () => {
     };
 
     return (
-        <div className="layout">
-            <Sidebar />
-            <main className="main-content">
-                <div className="content-container">
-                    <div className="page-header">
-                        <div>
-                            <h1 className="page-title">Scheduled Reports</h1>
-                            <p className="page-subtitle">Automated insights delivered to your inbox.</p>
-                        </div>
-                        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-                            <Plus size={18} />
-                            Schedule Report
-                        </button>
+        <div className="reports-container">
+            <div className="content-container">
+                <div className="page-header">
+                    <div>
+                        <h1 className="page-title">Scheduled Reports</h1>
+                        <p className="page-subtitle">Automated insights delivered to your inbox.</p>
                     </div>
+                    <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+                        <Plus size={18} />
+                        Schedule Report
+                    </button>
+                </div>
 
-                    <div className="reports-grid">
-                        {reports.map(report => (
-                            <div key={report.id} className="report-card">
-                                <div className="report-header">
-                                    <div className="frequency-badge">
-                                        <Clock size={14} />
-                                        {report.frequency}
-                                    </div>
-                                    <button className="delete-btn" onClick={() => handleDelete(report.id)}>
-                                        <Trash2 size={16} />
-                                    </button>
+                <div className="reports-grid">
+                    {reports.map(report => (
+                        <div key={report.id} className="report-card">
+                            <div className="report-header">
+                                <div className="frequency-badge">
+                                    <Clock size={14} />
+                                    {report.frequency}
                                 </div>
-                                <h3 className="report-query">"{report.query}"</h3>
-                                <div className="report-meta">
-                                    <div className="meta-item">
-                                        <Calendar size={14} />
-                                        Next Run: {new Date(report.next_run_at).toLocaleString()}
-                                    </div>
-                                    <div className="meta-item">
-                                        <Mail size={14} />
-                                        {report.recipients.split(',').length} Recipients
-                                    </div>
+                                <button className="delete-btn" onClick={() => handleDelete(report.id)}>
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
+                            <h3 className="report-query">"{report.query}"</h3>
+                            <div className="report-meta">
+                                <div className="meta-item">
+                                    <Calendar size={14} />
+                                    Next Run: {new Date(report.next_run_at).toLocaleString()}
+                                </div>
+                                <div className="meta-item">
+                                    <Mail size={14} />
+                                    {report.recipients.split(',').length} Recipients
                                 </div>
                             </div>
-                        ))}
+                        </div>
+                    ))}
 
-                        {reports.length === 0 && !isLoading && (
-                            <div className="empty-state">
-                                <p>No scheduled reports yet.</p>
-                            </div>
-                        )}
+                    {reports.length === 0 && !isLoading && (
+                        <div className="empty-state">
+                            <p>No scheduled reports yet.</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </main>
+
+            {
+        showModal && (
+            <div className="modal-overlay">
+                <div className="modal-card">
+                    <h3>Schedule New Report</h3>
+                    <div className="form-group">
+                        <label>Analysis Query</label>
+                        <textarea
+                            className="input"
+                            rows={3}
+                            placeholder="E.g., Give me a summary of sales performance..."
+                            value={formData.query}
+                            onChange={e => setFormData({ ...formData, query: e.target.value })}
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label>Frequency</label>
+                        <select
+                            className="input"
+                            value={formData.frequency}
+                            onChange={e => setFormData({ ...formData, frequency: e.target.value })}
+                        >
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="biweekly">Bi-Weekly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+                    <div className="form-group">
+                        <label>Recipients (comma separated)</label>
+                        <input
+                            className="input"
+                            placeholder="team@company.com, boss@company.com"
+                            value={formData.recipients}
+                            onChange={e => setFormData({ ...formData, recipients: e.target.value })}
+                        />
+                    </div>
+                    <div className="modal-actions">
+                        <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                        <button className="btn btn-primary" onClick={handleCreate}>Schedule</button>
                     </div>
                 </div>
-            </main>
+            </div>
+        )
+    }
 
-            {showModal && (
-                <div className="modal-overlay">
-                    <div className="modal-card">
-                        <h3>Schedule New Report</h3>
-                        <div className="form-group">
-                            <label>Analysis Query</label>
-                            <textarea
-                                className="input"
-                                rows={3}
-                                placeholder="E.g., Give me a summary of sales performance..."
-                                value={formData.query}
-                                onChange={e => setFormData({ ...formData, query: e.target.value })}
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label>Frequency</label>
-                            <select
-                                className="input"
-                                value={formData.frequency}
-                                onChange={e => setFormData({ ...formData, frequency: e.target.value })}
-                            >
-                                <option value="daily">Daily</option>
-                                <option value="weekly">Weekly</option>
-                                <option value="biweekly">Bi-Weekly</option>
-                                <option value="monthly">Monthly</option>
-                            </select>
-                        </div>
-                        <div className="form-group">
-                            <label>Recipients (comma separated)</label>
-                            <input
-                                className="input"
-                                placeholder="team@company.com, boss@company.com"
-                                value={formData.recipients}
-                                onChange={e => setFormData({ ...formData, recipients: e.target.value })}
-                            />
-                        </div>
-                        <div className="modal-actions">
-                            <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                            <button className="btn btn-primary" onClick={handleCreate}>Schedule</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            <style>{`
+    <style>{`
                 .layout { display: flex; min-height: 100vh; background: var(--color-bg-primary); }
                 .main-content { flex: 1; padding: 3rem; }
                 .content-container { max-width: 1000px; margin: 0 auto; }
@@ -213,6 +213,6 @@ export const ScheduledReports: React.FC = () => {
                 .btn-primary { background: var(--color-primary); color: white; }
                 .btn-secondary { background: #f1f5f9; color: #475569; }
             `}</style>
-        </div>
+        </div >
     );
 };
