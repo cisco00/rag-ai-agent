@@ -105,3 +105,41 @@ def detect_anomalies(
     except Exception as e:
         logger.error(f"Anomaly detection failed: {e}", exc_info=True)
         return {"error": str(e)}
+
+def calculate_correlation(
+    df: pd.DataFrame, 
+    columns: Optional[List[str]] = None, 
+    method: str = 'pearson'
+) -> Dict[str, Any]:
+    """
+    Calculate correlation matrix.
+    """
+    try:
+        # Filter columns if specified, otherwise use all numeric
+        if columns:
+            # simple validation
+            valid_cols = [c for c in columns if c in df.columns]
+            if not valid_cols:
+                return {"error": "No valid columns found"}
+            data = df[valid_cols]
+        else:
+            data = df.select_dtypes(include=[np.number])
+            
+        if data.empty:
+            return {"error": "No numeric data available for correlation"}
+            
+        # method: {'pearson', 'kendall', 'spearman'}
+        corr_matrix = data.corr(method=method)
+        
+        # Replace NaNs (if constant columns etc) with 0 or None for JSON
+        corr_matrix = corr_matrix.astype(object).where(pd.notnull(corr_matrix), None)
+        
+        return {
+            "columns": corr_matrix.columns.tolist(),
+            "matrix": corr_matrix.values.tolist(), # List of lists
+            "method": method
+        }
+        
+    except Exception as e:
+        logger.error(f"Correlation failed: {e}", exc_info=True)
+        return {"error": str(e)}

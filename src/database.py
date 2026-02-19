@@ -435,6 +435,32 @@ class DatabaseManager:
             raise QueryExecutionError(
                 f"Failed to load DataFrame into table '{table_name}': {str(e)}"
             ) from e
+
+    def get_table_data(self, table_name: str) -> Any:
+        """
+        Get all data from a table as a pandas DataFrame.
+        
+        Args:
+            table_name: Table name
+            
+        Returns:
+            pandas DataFrame
+        """
+        logger.info(f"Fetching data from table: {table_name}")
+        try:
+            import pandas as pd
+            from validators import TableNameValidator
+            TableNameValidator.validate(table_name)
+            
+            # Check if table exists
+            if table_name not in self.list_tables():
+                raise TableNotFoundError(table_name)
+                
+            return pd.read_sql(f"SELECT * FROM {table_name}", self.engine)
+            
+        except Exception as e:
+            logger.error(f"Error fetching table data: {e}", exc_info=True)
+            raise QueryExecutionError(f"Failed to fetch table data: {str(e)}") from e
     
     @contextmanager
     def transaction(self):

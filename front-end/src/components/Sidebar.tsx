@@ -59,7 +59,7 @@ export const Sidebar: React.FC = () => {
         </button>
         <button className={`nav-item ${isActive('/data') ? 'active' : ''}`} onClick={() => navigate('/data')}>
           <Database size={18} />
-          <span>Data Sources</span>
+          <span>Data Management</span>
         </button>
         <button className={`nav-item ${isActive('/analytics') ? 'active' : ''}`} onClick={() => navigate('/analytics')}>
           <BarChart2 size={18} />
@@ -68,17 +68,9 @@ export const Sidebar: React.FC = () => {
 
         <div className="nav-divider" style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }}></div>
 
-        <button className={`nav-item ${isActive('/query') ? 'active' : ''}`} onClick={() => navigate('/query')}>
-          <MessageSquare size={18} />
-          <span>Legacy Query</span>
-        </button>
         <button className={`nav-item ${isActive('/tables') ? 'active' : ''}`} onClick={() => navigate('/tables')}>
           <Table size={18} />
           <span>Tables</span>
-        </button>
-        <button className={`nav-item ${isActive('/import') ? 'active' : ''}`} onClick={() => navigate('/import')}>
-          <Upload size={18} />
-          <span>Import Files</span>
         </button>
         <button className={`nav-item ${isActive('/database-config') ? 'active' : ''}`} onClick={() => navigate('/database-config')}>
           <Settings size={18} />

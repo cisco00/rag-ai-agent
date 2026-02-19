@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
 from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
-from analytics import perform_forecast, detect_anomalies
+from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
 
@@ -183,6 +183,13 @@ class AnomalyRequest(BaseModel):
     table_name: str
     value_column: str
     contamination: float = 0.05
+
+class CorrelationRequest(BaseModel):
+    table_name: str
+    columns: Optional[List[str]] = None
+    method: str = 'pearson'
+
+
 
 class CreateSessionRequest(BaseModel):
     title: Optional[str] = None
@@ -965,6 +972,8 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
             raise HTTPException(status_code=400, detail="No database configured")
             
         import pandas as pd
+        from transformations import DataTransformer
+        
         db_manager = DatabaseManager(connection_string=db_conn)
         
         # Load table
@@ -972,43 +981,12 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
         query = f"SELECT * FROM {request.table_name}"
         df = pd.read_sql(query, db_manager.get_engine())
         
-        # Apply operations
-        for op in request.operations:
-            op_type = op.get("type")
-            logger.info(f"Applying operation: {op_type} on {op.get('column')}")
-            if op_type == "filter":
-                col = op["column"]
-                val = op["value"]
-                operator = op.get("op", "==")
-                if operator == ">":
-                    df = df[df[col] > val]
-                elif operator == "<":
-                    df = df[df[col] < val]
-                elif operator == "==":
-                    df = df[df[col] == val]
-            elif op_type == "drop_col":
-                df = df.drop(columns=[op["column"]])
-            elif op_type == "rename_col":
-                df = df.rename(columns={op["column"]: op["new_name"]})
-            elif op_type == "fill_na":
-                df = df.fillna(op["value"])
-            elif op_type == "change_type":
-                col = op["column"]
-                new_type = op["new_type"]
-                logger.info(f"Changing type of {col} to {new_type}")
-                try:
-                    if new_type == "int":
-                        # Use Int64 for nullable integers
-                        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
-                    elif new_type == "float":
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                    elif new_type == "str":
-                        df[col] = df[col].astype(str)
-                    elif new_type == "datetime":
-                        df[col] = pd.to_datetime(df[col], errors='coerce')
-                    logger.info(f"Successfully changed type of {col}")
-                except Exception as ex:
-                    logger.warning(f"Failed to convert column {col} to {new_type}: {ex}")
+        # Apply operations using DataTransformer
+        try:
+             df = DataTransformer.apply_transformations(df, request.operations)
+        except Exception as e:
+             logger.error(f"Error applying transformations: {e}")
+             raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
                 
         # Save or Return
         if request.target_table:
@@ -1021,12 +999,18 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
             preview_data = df.head(10).to_dict(orient="records")
             # JSON cannot handle NaN, so replace with None
             import math
+            import numpy as np
             cleaned_preview = []
             for row in preview_data:
                 cleaned_row = {}
                 for k, v in row.items():
                     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                          cleaned_row[k] = None
+                    # Handle numpy types
+                    elif isinstance(v, (np.int64, np.int32)):
+                         cleaned_row[k] = int(v)
+                    elif isinstance(v, (np.bool_, bool)):
+                         cleaned_row[k] = bool(v)
                     else:
                          cleaned_row[k] = v
                 cleaned_preview.append(cleaned_row)
@@ -1835,6 +1819,48 @@ async def delete_session(session_id: str, org=Depends(get_current_org)):
          raise
     except Exception as e:
         logger.error(f"Failed to delete session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analytics/correlation")
+async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_current_org)):
+    """
+    Calculate correlation matrix for a table.
+    """
+    # 1. Get DB Connection
+    # org is already retrieved by Depends
+    
+    if not org.db_connection_string:
+         raise HTTPException(status_code=400, detail="Database not configured")
+         
+    # 2. Fetch Data
+    try:
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        # Verify table exists
+        if request.table_name not in db_manager.list_tables():
+            db_manager.close()
+            raise HTTPException(status_code=404, detail=f"Table '{request.table_name}' not found")
+            
+        df = db_manager.get_table_data(request.table_name)
+        db_manager.close()
+        
+        # 3. Calculate Correlation
+        result = await run_in_threadpool(
+            calculate_correlation, 
+            df, 
+            request.columns, 
+            request.method
+        )
+        
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+            
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Correlation API failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

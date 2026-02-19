@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, MessageSquare, Trash2, Bot, User, Download, FileText, MonitorPlay, Code, Play } from 'lucide-react';
+import { Send, Plus, MessageSquare, Trash2, Bot, User, Download, FileText, MonitorPlay, Code, Play, Mic, MicOff } from 'lucide-react';
 import { api } from '../services/api';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -26,6 +26,9 @@ export const ChatPage: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isSupported, setIsSupported] = useState(true);
+    const recognitionRef = useRef<any>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const apiKey = localStorage.getItem('vantage_api_key');
@@ -37,6 +40,54 @@ export const ChatPage: React.FC = () => {
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
+
+    // Initialize speech recognition
+    useEffect(() => {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+        if (!SpeechRecognition) {
+            setIsSupported(false);
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+            setIsRecording(true);
+        };
+
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            setInput(prev => prev ? `${prev} ${transcript}` : transcript);
+        };
+
+        recognition.onerror = (event: any) => {
+            console.error('Speech recognition error:', event.error);
+            setIsRecording(false);
+        };
+
+        recognition.onend = () => {
+            setIsRecording(false);
+        };
+
+        recognitionRef.current = recognition;
+    }, []);
+
+    const toggleRecording = () => {
+        if (!isSupported) {
+            alert('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+            return;
+        }
+
+        if (isRecording) {
+            recognitionRef.current?.stop();
+        } else {
+            recognitionRef.current?.start();
+        }
+    };
 
     useEffect(() => {
         if (apiKey) {
@@ -405,6 +456,28 @@ export const ChatPage: React.FC = () => {
                                     placeholder="Type your message..."
                                     rows={1}
                                 />
+                                <button
+                                    type="button"
+                                    className={`mic-btn ${isRecording ? 'recording' : ''}`}
+                                    onClick={toggleRecording}
+                                    disabled={!isSupported || isLoading}
+                                    title={isSupported ? (isRecording ? "Stop recording" : "Start voice input") : "Voice input not supported"}
+                                    style={{
+                                        background: isRecording ? '#ef4444' : 'transparent',
+                                        color: isRecording ? 'white' : 'var(--text-secondary)',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        width: '32px',
+                                        height: '32px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
+                                </button>
                                 <button className="send-btn" onClick={handleSend} disabled={isLoading || !input.trim()}>
                                     <Send size={18} />
                                 </button>
@@ -578,6 +651,13 @@ export const ChatPage: React.FC = () => {
           align-items: center;
           justify-content: center;
           cursor: pointer;
+        }
+        .mic-btn.recording {
+          animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.7; }
         }
         .send-btn:disabled {
           opacity: 0.5;

@@ -162,11 +162,6 @@ export const TableInspector: React.FC<TableInspectorProps> = ({ tableName, onClo
         }
     };
 
-    const handleAnalyzeTable = () => {
-        onClose();
-        // Navigate to query page with this table as context
-        navigate('/query', { state: { initialQuery: `Analyze the table '${currentTable}'.` } });
-    };
 
     const handleDeleteTable = async () => {
         if (!window.confirm(`Are you sure you want to delete table '${currentTable}'? This cannot be undone.`)) return;
@@ -200,13 +195,6 @@ export const TableInspector: React.FC<TableInspectorProps> = ({ tableName, onClo
                     <div className="header-actions">
                         {isEditing ? (
                             <>
-                                <button
-                                    onClick={handleAnalyzeTable}
-                                    className="btn btn-primary btn-sm"
-                                >
-                                    <PlayCircle size={14} />
-                                    <span>Analyze Table</span>
-                                </button>
                                 <button
                                     onClick={handleDeleteTable}
                                     className="btn btn-icon danger"

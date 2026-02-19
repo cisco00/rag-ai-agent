@@ -8,7 +8,7 @@ import {
 } from 'recharts';
 
 export const AnalyticsPage: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'forecast' | 'anomaly'>('forecast');
+    const [activeTab, setActiveTab] = useState<'forecast' | 'anomaly' | 'correlation'>('forecast');
     const [apiKey] = useState(localStorage.getItem('vantage_api_key'));
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -33,6 +33,14 @@ export const AnalyticsPage: React.FC = () => {
     });
     const [anomalyData, setAnomalyData] = useState<any>(null);
 
+    // Correlation State
+    const [correlationForm, setCorrelationForm] = useState({
+        table_name: '',
+        columns: [] as string[],
+        method: 'pearson'
+    });
+    const [correlationData, setCorrelationData] = useState<any>(null);
+
     useEffect(() => {
         const fetchTables = async () => {
             if (!apiKey) return;
@@ -41,9 +49,10 @@ export const AnalyticsPage: React.FC = () => {
                 setTables(data.tables);
                 setSchemas(data.schemas);
                 if (data.tables.length > 0) {
-                    // Set default table if available
-                    setForecastForm(prev => ({ ...prev, table_name: data.tables[0] }));
-                    setAnomalyForm(prev => ({ ...prev, table_name: data.tables[0] }));
+                    const defaultTable = data.tables[0];
+                    setForecastForm(prev => ({ ...prev, table_name: defaultTable }));
+                    setAnomalyForm(prev => ({ ...prev, table_name: defaultTable }));
+                    setCorrelationForm(prev => ({ ...prev, table_name: defaultTable }));
                 }
             } catch (e) {
                 console.error("Failed to fetch tables", e);
@@ -105,12 +114,6 @@ export const AnalyticsPage: React.FC = () => {
         try {
             const data = await api.getAnomalies(anomalyForm, apiKey);
             // data: { anomalies: {indices: [], values: []}, total_points: X, anomaly_count: Y }
-            // For chart, we need the full series data, but the API currently returns only anomalies or statistics?
-            // Wait, detect_anomalies returns { anomalies: {indices, values}, ... }
-            // It doesn't return the full dataset for plotting context.
-            // Limitations of current backend implementation.
-            // Ideally we'd overlay anomalies on the full time series.
-            // For now, we'll just list them or show a scatter of anomalies (indices vs values).
 
             const chartData = data.anomalies.indices.map((idx: any, i: number) => ({
                 index: idx,
@@ -125,9 +128,36 @@ export const AnalyticsPage: React.FC = () => {
         }
     };
 
+    const handleCorrelation = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!apiKey) return;
+        setIsLoading(true);
+        setError(null);
+        try {
+            // If no columns selected, send empty list (backend will use all numeric)
+            const data = await api.getCorrelation(correlationForm, apiKey);
+            setCorrelationData(data);
+        } catch (e: any) {
+            setError(e.message || 'Correlation failed');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Helper to toggle columns in multi-select (simple implementation)
+    const toggleColumn = (col: string) => {
+        setCorrelationForm(prev => {
+            if (prev.columns.includes(col)) {
+                return { ...prev, columns: prev.columns.filter(c => c !== col) };
+            } else {
+                return { ...prev, columns: [...prev.columns, col] };
+            }
+        });
+    };
+
     return (
         <div className="analytics-page">
-            <h1 className="page-title">Advanced Analytics</h1>
+            <h1 className="page-title">Analytics Dashboard</h1>
 
             <div className="tabs">
                 <button
@@ -141,6 +171,12 @@ export const AnalyticsPage: React.FC = () => {
                     onClick={() => setActiveTab('anomaly')}
                 >
                     <AlertTriangle size={16} /> Anomaly Detection
+                </button>
+                <button
+                    className={`tab ${activeTab === 'correlation' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('correlation')}
+                >
+                    <BarChart2 size={16} /> Correlation
                 </button>
             </div>
 
@@ -280,6 +316,114 @@ export const AnalyticsPage: React.FC = () => {
                         </div>
                     </div>
                 )}
+
+                {activeTab === 'correlation' && (
+                    <div className="analysis-view">
+                        <div className="controls">
+                            <h3>Correlation Matrix</h3>
+                            <form onSubmit={handleCorrelation} className="controls-form">
+                                <select
+                                    value={correlationForm.table_name}
+                                    onChange={e => setCorrelationForm({ ...correlationForm, table_name: e.target.value, columns: [] })}
+                                    required
+                                >
+                                    <option value="" disabled>Select Table</option>
+                                    {tables.map(t => <option key={t} value={t}>{t}</option>)}
+                                </select>
+
+                                <select
+                                    value={correlationForm.method}
+                                    onChange={e => setCorrelationForm({ ...correlationForm, method: e.target.value })}
+                                >
+                                    <option value="pearson">Pearson (Standard)</option>
+                                    <option value="spearman">Spearman (Rank)</option>
+                                    <option value="kendall">Kendall (Tau)</option>
+                                </select>
+
+                                <button type="submit" disabled={isLoading}>
+                                    {isLoading ? 'Running...' : 'Generate Heatmap'}
+                                </button>
+                            </form>
+
+                            {/* Column Selector (Multi toggle) */}
+                            {correlationForm.table_name && (
+                                <div className="column-selector">
+                                    <h4>Select Columns (Optional - defaults to all numeric)</h4>
+                                    <div className="tags-container">
+                                        {schemas[correlationForm.table_name]?.map((col: any) => (
+                                            <button
+                                                type="button"
+                                                key={col[0]}
+                                                className={`tag ${correlationForm.columns.includes(col[0]) ? 'active' : ''}`}
+                                                onClick={() => toggleColumn(col[0])}
+                                            >
+                                                {col[0]}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="results-container">
+                            {correlationData ? (
+                                <div className="heatmap-container">
+                                    <div
+                                        className="heatmap-grid"
+                                        style={{
+                                            gridTemplateColumns: `auto repeat(${correlationData.columns.length}, 1fr)`
+                                        }}
+                                    >
+                                        {/* Header Row */}
+                                        <div className="heatmap-cell header"></div>
+                                        {correlationData.columns.map((col: string) => (
+                                            <div key={col} className="heatmap-cell header" title={col}>{col}</div>
+                                        ))}
+
+                                        {/* Rows */}
+                                        {correlationData.matrix.map((row: (number | null)[], i: number) => (
+                                            <React.Fragment key={i}>
+                                                <div className="heatmap-cell header" title={correlationData.columns[i]}>
+                                                    {correlationData.columns[i]}
+                                                </div>
+                                                {row.map((val, j) => {
+                                                    // Calculate color
+                                                    // -1 (red) -> 0 (white) -> 1 (blue)
+                                                    let bg = '#fff';
+                                                    let color = '#000';
+                                                    if (val !== null) {
+                                                        if (val > 0) {
+                                                            const intensity = Math.round(val * 255);
+                                                            bg = `rgba(59, 130, 246, ${val})`; // Blue
+                                                            color = val > 0.5 ? '#fff' : '#000';
+                                                        } else {
+                                                            const intensity = Math.round(Math.abs(val) * 255);
+                                                            bg = `rgba(239, 68, 68, ${Math.abs(val)})`; // Red
+                                                            color = Math.abs(val) > 0.5 ? '#fff' : '#000';
+                                                        }
+                                                    }
+
+                                                    return (
+                                                        <div
+                                                            key={j}
+                                                            className="heatmap-cell value"
+                                                            style={{ backgroundColor: bg, color: color }}
+                                                            title={`Correlation: ${val?.toFixed(4)}`}
+                                                        >
+                                                            {val?.toFixed(2)}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </React.Fragment>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="placeholder">Select parameters to generate correlation matrix</div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             <style>{`
@@ -356,6 +500,75 @@ export const AnalyticsPage: React.FC = () => {
                     background-color: rgba(239, 68, 68, 0.1);
                     border-radius: 6px;
                     margin-bottom: 1rem;
+                }
+                .column-selector {
+                    margin-top: 1rem;
+                }
+                .column-selector h4 {
+                    font-size: 0.9rem;
+                    margin-bottom: 0.5rem;
+                    color: var(--text-secondary);
+                }
+                .tags-container {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 0.5rem;
+                }
+                .tag {
+                    padding: 0.25rem 0.5rem;
+                    border: 1px solid var(--color-border);
+                    border-radius: 12px;
+                    background: var(--card-bg);
+                    color: var(--text-secondary);
+                    font-size: 0.8rem;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                .tag:hover {
+                    border-color: var(--color-primary);
+                }
+                .tag.active {
+                    background: var(--color-primary);
+                    color: white;
+                    border-color: var(--color-primary);
+                }
+
+                /* Heatmap */
+                .heatmap-container {
+                    background: var(--card-bg);
+                    padding: 1rem;
+                    border-radius: 8px;
+                    overflow: auto;
+                }
+                .heatmap-grid {
+                    display: grid;
+                    gap: 1px;
+                    background: var(--color-border);
+                }
+                .heatmap-cell {
+                    padding: 0.75rem;
+                    text-align: center;
+                    font-size: 0.85rem;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .heatmap-cell.header {
+                    background: var(--bg-secondary);
+                    font-weight: 600;
+                    color: var(--text-primary);
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    font-size: 0.75rem;
+                }
+                .heatmap-cell.value {
+                    transition: transform 0.2s;
+                }
+                .heatmap-cell.value:hover {
+                    transform: scale(1.05);
+                    z-index: 10;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.2);
                 }
             `}</style>
         </div>

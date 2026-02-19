@@ -480,5 +480,17 @@ export const api = {
             throw new Error(error.detail || 'Anomaly detection failed');
         }
         return response.json();
+    },
+    async getCorrelation(payload: any, apiKey: string): Promise<any> {
+        const response = await fetch(`${API_BASE_URL}/analytics/correlation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Correlation calculation failed');
+        }
+        return response.json();
     }
 };

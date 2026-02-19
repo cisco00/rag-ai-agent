@@ -6,7 +6,9 @@ with databases through function calling.
 """
 
 from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any, Optional
 from database import DatabaseManager
+from analytics import calculate_correlation
 from logging_config import get_logger
 
 # Initialize logger
@@ -88,6 +90,36 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
                     "required": ["sql"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "calculate_correlation",
+                "description": (
+                    "Calculate the correlation matrix between numeric columns in a table. "
+                    "Use this when the user asks about relationships or correlations between variables."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "table_name": {
+                            "type": "string",
+                            "description": "The name of the table to analyze."
+                        },
+                        "columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of columns to include. If omitted, all numeric columns are used."
+                        },
+                        "method": {
+                            "type": "string",
+                            "enum": ["pearson", "spearman", "kendall"],
+                            "description": "Correlation method. Default is 'pearson'."
+                        }
+                    },
+                    "required": ["table_name"]
+                }
+            }
         }
     ]
     
@@ -137,12 +169,37 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
         except Exception as e:
             logger.error(f"execute_query failed: {e}", exc_info=True)
             raise
+
+    def calculate_correlation_with_logging(table_name: str, columns: Optional[List[str]] = None, method: str = 'pearson'):
+        """Calculate correlation with logging."""
+        logger.info(f"Tool called: calculate_correlation(table={table_name}, method={method})")
+        
+        # Check if table is allowed
+        if tables and table_name not in tables:
+             error_msg = f"Table '{table_name}' is not in the list of allowed tables: {tables}"
+             logger.warning(error_msg)
+             return {"error": error_msg}
+
+        try:
+            # Need to get dataframe first
+            df = db.get_table_data(table_name)
+            result = calculate_correlation(df, columns, method)
+            
+            # Format for LLM if it's a valid result (add simple text summary if needed)
+            if "error" not in result:
+                logger.info("Correlation calculation successful")
+            
+            return result
+        except Exception as e:
+            logger.error(f"calculate_correlation failed: {e}", exc_info=True)
+            raise
     
     # Map tool names to functions
     tool_map = {
         "list_tables": list_tables_with_logging,
         "describe_table": describe_table_with_logging,
-        "execute_query": execute_query_with_logging
+        "execute_query": execute_query_with_logging,
+        "calculate_correlation": calculate_correlation_with_logging
     }
     
     logger.debug(f"Created {len(tools_schema)} database tools")

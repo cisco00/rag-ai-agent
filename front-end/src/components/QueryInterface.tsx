@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Send, Loader2, MessageSquare, FileText, Play, Code, Check, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Send, Loader2, MessageSquare, FileText, Play, Code, Check, ThumbsUp, ThumbsDown, Mic, MicOff } from 'lucide-react';
 import { api } from '../services/api';
 import Plot from 'react-plotly.js';
 
@@ -23,6 +23,57 @@ export const QueryInterface: React.FC = () => {
         { role: 'assistant', content: 'Hello! Ask me any question about your data.' }
     ]);
     const [loading, setLoading] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isSupported, setIsSupported] = useState(true);
+    const recognitionRef = React.useRef<any>(null);
+
+    // Initialize speech recognition
+    React.useEffect(() => {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+        if (!SpeechRecognition) {
+            setIsSupported(false);
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => {
+            setIsRecording(true);
+        };
+
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            setQuery(prev => prev ? `${prev} ${transcript}` : transcript);
+        };
+
+        recognition.onerror = (event: any) => {
+            console.error('Speech recognition error:', event.error);
+            setIsRecording(false);
+        };
+
+        recognition.onend = () => {
+            setIsRecording(false);
+        };
+
+        recognitionRef.current = recognition;
+    }, []);
+
+    const toggleRecording = () => {
+        if (!isSupported) {
+            alert('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+            return;
+        }
+
+        if (isRecording) {
+            recognitionRef.current?.stop();
+        } else {
+            recognitionRef.current?.start();
+        }
+    };
 
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -204,9 +255,8 @@ export const QueryInterface: React.FC = () => {
                                             data={[
                                                 {
                                                     type: msg.visualization.type || 'bar',
-                                                    x: msg.visualization.data.x || [],
-                                                    y: msg.visualization.data.y || [],
-                                                    marker: { color: '#3b82f6' }
+                                                    ...msg.visualization.data,
+                                                    marker: { color: '#3b82f6', ...msg.visualization.data.marker }
                                                 }
                                             ]}
                                             layout={{
@@ -272,6 +322,15 @@ export const QueryInterface: React.FC = () => {
                     onChange={(e) => setQuery(e.target.value)}
                     disabled={loading}
                 />
+                <button
+                    type="button"
+                    className={`mic-btn ${isRecording ? 'recording' : ''}`}
+                    onClick={toggleRecording}
+                    disabled={!isSupported || loading}
+                    title={isSupported ? (isRecording ? "Stop recording" : "Start voice input") : "Voice input not supported"}
+                >
+                    {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
+                </button>
                 <button type="submit" className="send-btn" disabled={loading || !query.trim()}>
                     <Send size={18} />
                 </button>
@@ -392,6 +451,35 @@ export const QueryInterface: React.FC = () => {
                     justify-content: center;
                 }
                 .send-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+                .mic-btn {
+                    background: #f1f5f9;
+                    color: var(--color-text-secondary);
+                    border: 1px solid var(--color-border);
+                    border-radius: 8px;
+                    width: 48px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: all 0.2s;
+                }
+                .mic-btn:hover:not(:disabled) {
+                    background: #e2e8f0;
+                    color: var(--color-primary);
+                }
+                .mic-btn.recording {
+                    background: #ef4444;
+                    color: white;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                .mic-btn:disabled {
+                    opacity: 0.5;
+                    cursor: not-allowed;
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.7; }
+                }
                 .spin { animation: spin 1s linear infinite; }
                 
                 .sql-card {

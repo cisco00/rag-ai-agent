@@ -38,7 +38,13 @@ export const DataPage: React.FC = () => {
         op: '==',
         value: '',
         new_name: '',
-        new_type: 'int'
+        new_type: 'int',
+        method: 'min-max',
+        feature_type: 'interaction',
+        column1: '',
+        column2: '',
+        operation: '*',
+        component: 'day'
     });
 
     const addOperation = () => {
@@ -48,7 +54,6 @@ export const DataPage: React.FC = () => {
             if (!newOpData.column || !newOpData.value) return;
             op.column = newOpData.column;
             op.op = newOpData.op;
-            // Try to convert value to number if possible
             const numVal = Number(newOpData.value);
             op.value = isNaN(numVal) ? newOpData.value : numVal;
         } else if (newOpType === 'drop_col') {
@@ -59,14 +64,73 @@ export const DataPage: React.FC = () => {
             op.column = newOpData.column;
             op.new_name = newOpData.new_name;
         } else if (newOpType === 'fill_na') {
-            if (!newOpData.value) return;
-            // Try to convert value to number if possible
-            const numVal = Number(newOpData.value);
-            op.value = isNaN(numVal) ? newOpData.value : numVal;
+            op.method = newOpData.method || 'value';
+
+            if (newOpData.column) op.column = newOpData.column;
+
+            if (op.method === 'value') {
+                if (!newOpData.value) return; // Value required for fixed value
+                const numVal = Number(newOpData.value);
+                op.value = isNaN(numVal) ? newOpData.value : numVal;
+            } else if (op.method === 'weighted_mean') {
+                if (!newOpData.column1) return; // Weight column required
+                op.weight_column = newOpData.column1;
+            }
         } else if (newOpType === 'change_type') {
             if (!newOpData.column) return;
             op.column = newOpData.column;
             op.new_type = newOpData.new_type;
+        } else if (newOpType === 'normalize') {
+            if (!newOpData.column) return;
+            op.column = newOpData.column;
+            op.method = newOpData.method;
+        } else if (newOpType === 'encode') {
+            if (!newOpData.column) return;
+            op.column = newOpData.column;
+            op.method = newOpData.method;
+        } else if (newOpType === 'feature_engineering') {
+            op.feature_type = newOpData.feature_type;
+            if (newOpData.feature_type === 'interaction') {
+                if (!newOpData.column1 || !newOpData.column2) return;
+                op.column1 = newOpData.column1;
+                op.column2 = newOpData.column2;
+                op.operation = newOpData.operation;
+            } else if (newOpData.feature_type === 'time_component') {
+                if (!newOpData.column) return;
+                op.column = newOpData.column;
+                op.component = newOpData.component;
+            } else if (newOpData.feature_type === 'lag') {
+                if (!newOpData.column) return;
+                op.column = newOpData.column;
+                op.periods = Number(newOpData.value) || 1;
+            }
+        } else if (newOpType === 'text_feature') {
+            if (!newOpData.column) return;
+            op.column = newOpData.column;
+            op.method = newOpData.method;
+        } else if (newOpType === 'clean_duplicates') {
+            op.type = 'clean';
+            op.method = 'drop_duplicates';
+            if (newOpData.column) {
+                op.subset = newOpData.column.split(',').map((s: string) => s.trim());
+            }
+        } else if (newOpType === 'clean_text') {
+            op.type = 'clean';
+            op.method = 'clean_text';
+            if (!newOpData.column) return;
+            op.column = newOpData.column;
+            op.clean_type = newOpData.method || 'trim'; // Mapping 'method' in UI to 'clean_type'
+            if (op.clean_type === 'replace') {
+                op.old_value = newOpData.value;
+                op.new_value = newOpData.new_name;
+            }
+        } else if (newOpType === 'remove_outliers') {
+            op.type = 'clean';
+            op.method = 'remove_outliers';
+            if (!newOpData.column) return;
+            op.column = newOpData.column;
+            op.outlier_method = newOpData.method || 'z-score';
+            op.threshold = Number(newOpData.value) || 3.0;
         }
 
         setTransformForm({
@@ -74,13 +138,19 @@ export const DataPage: React.FC = () => {
             operations: [...transformForm.operations, op]
         });
 
-        // Reset inputs
+        // Reset inputs (keep defaults)
         setNewOpData({
             column: '',
             op: '==',
             value: '',
             new_name: '',
-            new_type: 'int'
+            new_type: 'int',
+            method: 'min-max',
+            feature_type: 'interaction',
+            column1: '',
+            column2: '',
+            operation: '*',
+            component: 'day'
         });
     };
 
@@ -169,7 +239,7 @@ export const DataPage: React.FC = () => {
                     className={`tab ${activeTab === 'sources' ? 'active' : ''}`}
                     onClick={() => setActiveTab('sources')}
                 >
-                    <Database size={16} /> Data Sources
+                    <Database size={16} /> Imported Files
                 </button>
                 <button
                     className={`tab ${activeTab === 'import' ? 'active' : ''}`}
@@ -226,7 +296,7 @@ export const DataPage: React.FC = () => {
                                     </tr>
                                 ))}
                                 {sources.length === 0 && !isLoading && (
-                                    <tr><td colSpan={5} style={{ textAlign: 'center' }}>No data sources found</td></tr>
+                                    <tr><td colSpan={5} style={{ textAlign: 'center' }}>No imported files found</td></tr>
                                 )}
                             </tbody>
                         </table>
@@ -321,7 +391,7 @@ export const DataPage: React.FC = () => {
                                                     {op.type === 'filter' && `${op.column} ${op.op} ${op.value}`}
                                                     {op.type === 'drop_col' && `Column: ${op.column}`}
                                                     {op.type === 'rename_col' && `${op.column} -> ${op.new_name}`}
-                                                    {op.type === 'fill_na' && `${op.column || 'All'}: ${op.value}`}
+                                                    {op.type === 'fill_na' && `${op.column || 'Global'} (${op.method}) ${op.method === 'value' ? ': ' + op.value : ''}`}
                                                     {op.type === 'change_type' && `${op.column} -> ${op.new_type}`}
                                                 </span>
                                             </div>
@@ -348,13 +418,34 @@ export const DataPage: React.FC = () => {
                                     <div className="op-type-selector">
                                         <select
                                             value={newOpType}
-                                            onChange={e => setNewOpType(e.target.value)}
+                                            onChange={e => {
+                                                setNewOpType(e.target.value);
+                                                // Reset data when type changes
+                                                setNewOpData({
+                                                    column: '', op: '==', value: '', new_name: '', new_type: 'int',
+                                                    method: 'min-max', feature_type: 'interaction', column1: '', column2: '', operation: '*',
+                                                    component: 'day', group_cols: '', aggs: ''
+                                                });
+                                            }}
                                         >
-                                            <option value="filter">Filter Rows</option>
-                                            <option value="drop_col">Drop Column</option>
-                                            <option value="rename_col">Rename Column</option>
-                                            <option value="fill_na">Fill Missing Values</option>
-                                            <option value="change_type">Change Data Type</option>
+                                            <optgroup label="Basic">
+                                                <option value="filter">Filter Rows</option>
+                                                <option value="drop_col">Drop Column</option>
+                                                <option value="rename_col">Rename Column</option>
+                                                <option value="fill_na">Fill Missing Values</option>
+                                                <option value="change_type">Change Data Type</option>
+                                            </optgroup>
+                                            <optgroup label="Advanced">
+                                                <option value="normalize">Normalization & Scaling</option>
+                                                <option value="encode">Encode Categorical</option>
+                                                <option value="feature_engineering">Feature Engineering</option>
+                                                <option value="text_feature">Text Features</option>
+                                            </optgroup>
+                                            <optgroup label="Cleaning">
+                                                <option value="clean_duplicates">Remove Duplicates</option>
+                                                <option value="clean_text">Clean Text</option>
+                                                <option value="remove_outliers">Remove Outliers</option>
+                                            </optgroup>
                                         </select>
                                     </div>
 
@@ -374,6 +465,7 @@ export const DataPage: React.FC = () => {
                                                     <option value="==">Equals (==)</option>
                                                     <option value=">">Greater Than (&gt;)</option>
                                                     <option value="<">Less Than (&lt;)</option>
+                                                    <option value="!=">Not Equals (!=)</option>
                                                 </select>
                                                 <input
                                                     type="text"
@@ -414,10 +506,39 @@ export const DataPage: React.FC = () => {
                                             <>
                                                 <input
                                                     type="text"
-                                                    placeholder="Value to fill"
-                                                    value={newOpData.value}
-                                                    onChange={e => setNewOpData({ ...newOpData, value: e.target.value })}
+                                                    placeholder="Column (Optional for Fixed Value)"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
                                                 />
+                                                <select
+                                                    value={newOpData.method}
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="value">Fixed Value</option>
+                                                    <option value="mean">Mean (Average)</option>
+                                                    <option value="median">Median</option>
+                                                    <option value="mode">Mode (Most Frequent)</option>
+                                                    <option value="weighted_mean">Weighted Mean</option>
+                                                    <option value="random">Random Distribution</option>
+                                                </select>
+
+                                                {newOpData.method === 'value' && (
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Value to fill"
+                                                        value={newOpData.value}
+                                                        onChange={e => setNewOpData({ ...newOpData, value: e.target.value })}
+                                                    />
+                                                )}
+
+                                                {newOpData.method === 'weighted_mean' && (
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Weight Column"
+                                                        value={newOpData.column1} // Repurposing column1 for weight column
+                                                        onChange={e => setNewOpData({ ...newOpData, column1: e.target.value })}
+                                                    />
+                                                )}
                                             </>
                                         )}
 
@@ -437,7 +558,219 @@ export const DataPage: React.FC = () => {
                                                     <option value="float">Float</option>
                                                     <option value="str">String</option>
                                                     <option value="datetime">Datetime</option>
+                                                    <option value="bool">Boolean</option>
                                                 </select>
+                                            </>
+                                        )}
+
+                                        {newOpType === 'normalize' && (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Column Name"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                />
+                                                <select
+                                                    value={newOpData.method}
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="min-max">Min-Max Scaling</option>
+                                                    <option value="z-score">Z-Score (Standardization)</option>
+                                                    <option value="log">Log Transform</option>
+                                                    <option value="box-cox">Box-Cox</option>
+                                                </select>
+                                            </>
+                                        )}
+
+                                        {newOpType === 'encode' && (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Column Name"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                />
+                                                <select
+                                                    value={newOpData.method}
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="one-hot">One-Hot Encoding</option>
+                                                    <option value="label">Label Encoding</option>
+                                                    <option value="binary">Binary (Yes/No)</option>
+                                                </select>
+                                            </>
+                                        )}
+
+                                        {newOpType === 'feature_engineering' && (
+                                            <>
+                                                <select
+                                                    value={newOpData.feature_type}
+                                                    onChange={e => setNewOpData({ ...newOpData, feature_type: e.target.value })}
+                                                    style={{ width: '100%', marginBottom: '0.5rem' }}
+                                                >
+                                                    <option value="interaction">Interaction (Math)</option>
+                                                    <option value="time_component">Time Component</option>
+                                                    <option value="lag">Lag (Time Series)</option>
+                                                </select>
+
+                                                {newOpData.feature_type === 'interaction' && (
+                                                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Col 1"
+                                                            value={newOpData.column1}
+                                                            onChange={e => setNewOpData({ ...newOpData, column1: e.target.value })}
+                                                        />
+                                                        <select
+                                                            value={newOpData.operation}
+                                                            onChange={e => setNewOpData({ ...newOpData, operation: e.target.value })}
+                                                            style={{ minWidth: '60px' }}
+                                                        >
+                                                            <option value="*">*</option>
+                                                            <option value="/">/</option>
+                                                            <option value="+">+</option>
+                                                            <option value="-">-</option>
+                                                        </select>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Col 2"
+                                                            value={newOpData.column2}
+                                                            onChange={e => setNewOpData({ ...newOpData, column2: e.target.value })}
+                                                        />
+                                                    </div>
+                                                )}
+
+                                                {newOpData.feature_type === 'time_component' && (
+                                                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Date Column"
+                                                            value={newOpData.column}
+                                                            onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                        />
+                                                        <select
+                                                            value={newOpData.component}
+                                                            onChange={e => setNewOpData({ ...newOpData, component: e.target.value })}
+                                                        >
+                                                            <option value="day">Day</option>
+                                                            <option value="month">Month</option>
+                                                            <option value="year">Year</option>
+                                                            <option value="dow">Day of Week</option>
+                                                            <option value="quarter">Quarter</option>
+                                                        </select>
+                                                    </div>
+                                                )}
+
+                                                {newOpData.feature_type === 'lag' && (
+                                                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Column"
+                                                            value={newOpData.column}
+                                                            onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Periods (1)"
+                                                            value={newOpData.value} // Reuse value field for periods
+                                                            onChange={e => setNewOpData({ ...newOpData, value: e.target.value })}
+                                                            style={{ width: '80px' }}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+
+                                        {newOpType === 'text_feature' && (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Text Column"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                />
+                                                <select
+                                                    value={newOpData.method}
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="len">Length</option>
+                                                    <option value="word_count">Word Count</option>
+                                                    <option value="tfidf">TF-IDF Vector</option>
+                                                </select>
+                                            </>
+                                        )}
+
+                                        {newOpType === 'clean_duplicates' && (
+                                            <input
+                                                type="text"
+                                                placeholder="Subset Cols (comma sep) - Leave empty for all"
+                                                value={newOpData.column} // repurposing column field for subset list
+                                                onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                style={{ width: '100%' }}
+                                            />
+                                        )}
+
+                                        {newOpType === 'clean_text' && (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Column"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                />
+                                                <select
+                                                    value={newOpData.method} // Using 'method' to store 'clean_type'
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="trim">Trim Whitespace</option>
+                                                    <option value="lower">Lowercase</option>
+                                                    <option value="upper">Uppercase</option>
+                                                    <option value="title">Title Case</option>
+                                                    <option value="remove_special">Remove Special Chars</option>
+                                                    <option value="replace">Replace Value</option>
+                                                </select>
+                                                {newOpData.method === 'replace' && (
+                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Old"
+                                                            value={newOpData.value} // repurposing value for 'old_value'
+                                                            onChange={e => setNewOpData({ ...newOpData, value: e.target.value })}
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            placeholder="New"
+                                                            value={newOpData.new_name} // repurposing new_name for 'new_value'
+                                                            onChange={e => setNewOpData({ ...newOpData, new_name: e.target.value })}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+
+                                        {newOpType === 'remove_outliers' && (
+                                            <>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Column"
+                                                    value={newOpData.column}
+                                                    onChange={e => setNewOpData({ ...newOpData, column: e.target.value })}
+                                                />
+                                                <select
+                                                    value={newOpData.method} // Using 'method' for 'outlier_method'
+                                                    onChange={e => setNewOpData({ ...newOpData, method: e.target.value })}
+                                                >
+                                                    <option value="z-score">Z-Score</option>
+                                                    <option value="iqr">IQR</option>
+                                                </select>
+                                                <input
+                                                    type="number"
+                                                    placeholder="Threshold (3.0)"
+                                                    value={newOpData.value} // repurposing value for threshold
+                                                    onChange={e => setNewOpData({ ...newOpData, value: e.target.value })}
+                                                    style={{ width: '80px' }}
+                                                />
                                             </>
                                         )}
                                     </div>

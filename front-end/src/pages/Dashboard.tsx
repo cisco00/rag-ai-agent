@@ -3,10 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Overview } from '../components/Overview';
 import { Sidebar } from '../components/Sidebar';
 import { TableBrowser } from '../components/TableBrowser';
-import { QueryInterface } from '../components/QueryInterface';
 import { TableInspector } from '../components/TableInspector';
-import { HistoryView } from '../components/HistoryView';
-import { LayoutDashboard, FileUp, Database, MessageSquare, History } from 'lucide-react';
+import { LayoutDashboard, Database } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
     const location = useLocation();
@@ -16,10 +14,8 @@ export const Dashboard: React.FC = () => {
     // Derive active view from URL path
     const getActiveTab = () => {
         const path = location.pathname;
-        if (path === '/query') return 'query';
         if (path === '/tables') return 'tables';
         if (path === '/overview') return 'overview';
-        if (path === '/history') return 'history';
         return 'overview';
     };
 
@@ -53,18 +49,6 @@ export const Dashboard: React.FC = () => {
                             >
                                 <Database size={18} /> Tables
                             </button>
-                            <button
-                                className={`tab-btn ${activeTab === 'query' ? 'active' : ''}`}
-                                onClick={() => navigate('/query')}
-                            >
-                                <MessageSquare size={18} /> Query
-                            </button>
-                            <button
-                                className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-                                onClick={() => navigate('/history')}
-                            >
-                                <History size={18} /> History
-                            </button>
                         </div>
                     </header>
 
@@ -83,17 +67,6 @@ export const Dashboard: React.FC = () => {
                             </div>
                         )}
 
-                        {activeTab === 'query' && (
-                            <div className="full-view query-view">
-                                <QueryInterface />
-                            </div>
-                        )}
-
-                        {activeTab === 'history' && (
-                            <div className="full-view">
-                                <HistoryView />
-                            </div>
-                        )}
                     </div>
                 </div>
             </main>
@@ -171,7 +144,6 @@ export const Dashboard: React.FC = () => {
                 }
 
                 .full-view { height: 100%; }
-                .query-view { height: 75vh; }
             `}</style>
         </div>
     );
