@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect } from 'react';
-import { Sidebar } from '../components/Sidebar';
 import { Calendar, Trash2, Plus, Clock, Mail } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -116,57 +115,53 @@ export const ScheduledReports: React.FC = () => {
                     )}
                 </div>
             </div>
-        </main>
 
-            {
-        showModal && (
-            <div className="modal-overlay">
-                <div className="modal-card">
-                    <h3>Schedule New Report</h3>
-                    <div className="form-group">
-                        <label>Analysis Query</label>
-                        <textarea
-                            className="input"
-                            rows={3}
-                            placeholder="E.g., Give me a summary of sales performance..."
-                            value={formData.query}
-                            onChange={e => setFormData({ ...formData, query: e.target.value })}
-                        />
-                    </div>
-                    <div className="form-group">
-                        <label>Frequency</label>
-                        <select
-                            className="input"
-                            value={formData.frequency}
-                            onChange={e => setFormData({ ...formData, frequency: e.target.value })}
-                        >
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                            <option value="biweekly">Bi-Weekly</option>
-                            <option value="monthly">Monthly</option>
-                        </select>
-                    </div>
-                    <div className="form-group">
-                        <label>Recipients (comma separated)</label>
-                        <input
-                            className="input"
-                            placeholder="team@company.com, boss@company.com"
-                            value={formData.recipients}
-                            onChange={e => setFormData({ ...formData, recipients: e.target.value })}
-                        />
-                    </div>
-                    <div className="modal-actions">
-                        <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
-                        <button className="btn btn-primary" onClick={handleCreate}>Schedule</button>
+            {showModal && (
+                <div className="modal-overlay">
+                    <div className="modal-card">
+                        <h3>Schedule New Report</h3>
+                        <div className="form-group">
+                            <label>Analysis Query</label>
+                            <textarea
+                                className="input"
+                                rows={3}
+                                placeholder="E.g., Give me a summary of sales performance..."
+                                value={formData.query}
+                                onChange={e => setFormData({ ...formData, query: e.target.value })}
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>Frequency</label>
+                            <select
+                                className="input"
+                                value={formData.frequency}
+                                onChange={e => setFormData({ ...formData, frequency: e.target.value })}
+                            >
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="biweekly">Bi-Weekly</option>
+                                <option value="monthly">Monthly</option>
+                            </select>
+                        </div>
+                        <div className="form-group">
+                            <label>Recipients (comma separated)</label>
+                            <input
+                                className="input"
+                                placeholder="team@company.com, boss@company.com"
+                                value={formData.recipients}
+                                onChange={e => setFormData({ ...formData, recipients: e.target.value })}
+                            />
+                        </div>
+                        <div className="modal-actions">
+                            <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={handleCreate}>Schedule</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-        )
-    }
+            )}
 
-    <style>{`
-                .layout { display: flex; min-height: 100vh; background: var(--color-bg-primary); }
-                .main-content { flex: 1; padding: 3rem; }
+            <style>{`
+                .reports-container { height: 100%; overflow-y: auto; background: var(--color-bg-primary); padding: 3rem; }
                 .content-container { max-width: 1000px; margin: 0 auto; }
                 
                 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; }
@@ -213,6 +208,6 @@ export const ScheduledReports: React.FC = () => {
                 .btn-primary { background: var(--color-primary); color: white; }
                 .btn-secondary { background: #f1f5f9; color: #475569; }
             `}</style>
-        </div >
+        </div>
     );
 };

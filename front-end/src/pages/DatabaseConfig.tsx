@@ -1,6 +1,5 @@
 
 import React, { useState } from 'react';
-import { Sidebar } from '../components/Sidebar';
 import { Database, AlertCircle, PlusCircle, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
@@ -394,14 +393,6 @@ export const DatabaseConfig: React.FC = () => {
         
         .btn-icon { background: none; border: none; cursor: pointer; color: #94a3b8; }
         .btn-icon:hover { color: #475569; }
-      <style>{`
-          .db - config - container {
-            height: 100%;
-          overflow-y: auto;
-          background-color: var(--color-bg-primary);
-          padding: 3rem;
-        }
-        /* ... existing styles ... */
       `}</style>
       </div>
     </div>
