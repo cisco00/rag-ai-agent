@@ -31,7 +31,7 @@ export const Dashboard: React.FC = () => {
     return (
         <div className="dashboard-container">
             <header className="page-header">
-                <h1>Analytics Dashboard</h1>
+                <h1>Data Explorer</h1>
                 <div className="tabs">
                     <button
                         className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
