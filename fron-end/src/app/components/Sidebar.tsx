@@ -1,4 +1,4 @@
-import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio } from 'lucide-react';
+import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut } from 'lucide-react';
 
 interface SidebarProps {
   currentView: string;
@@ -57,6 +57,20 @@ export function Sidebar({ currentView, onNavigate, isConfigured }: SidebarProps)
           );
         })}
       </nav>
+
+      {/* Logout Action */}
+      <div className="p-4 border-t border-gray-200">
+        <button
+          onClick={() => {
+            localStorage.removeItem('vantage_api_key');
+            window.location.reload();
+          }}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-red-600 hover:bg-red-50"
+        >
+          <LogOut className="size-5" />
+          <span className="font-medium">Logout</span>
+        </button>
+      </div>
 
       {/* Footer */}
       <div className="p-4 border-t border-gray-200">
