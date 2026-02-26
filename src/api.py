@@ -21,7 +21,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
@@ -548,6 +548,14 @@ async def import_file_to_database(
             tmp_path = tmp_file.name
         
         try:
+            if not table_name:
+                import re
+                base_name = Path(filename).stem.lower()
+                base_name = re.sub(r'[^a-z0-9_]', '_', base_name)
+                if base_name and base_name[0].isdigit():
+                    base_name = f"t_{base_name}"
+                table_name = base_name
+
             # Upload file to database
             result = uploader.upload_file_to_db(
                 file_path=tmp_path,
@@ -1600,6 +1608,16 @@ async def share_report(request: QueryRequest, org=Depends(get_current_org)):
     finally:
         agent.close()
 
+@app.get("/shared")
+async def get_all_shared_reports(limit: int = 50, org=Depends(get_current_org)):
+    """Get all shared reports for the organization."""
+    try:
+        reports = get_org_shared_reports(org.id, limit)
+        return {"reports": reports}
+    except Exception as e:
+        logger.error(f"Error fetching shared reports: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch shared reports")
+
 @app.get("/shared/{report_id}")
 async def get_shared(report_id: str):
     """Public endpoint to view shared reports (no auth required)"""
@@ -1867,24 +1885,30 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
 # Mount static files (MUST be last to avoid overriding API routes)
 # Point to the external frontend build directory
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-static_dir = os.path.join(project_root, "front-end", "build")
+static_dir = os.path.join(project_root, "fron-end", "dist")
 
 if not os.path.exists(static_dir):
-    print(f"Warning: Static dir {static_dir} does not exist. Run 'npm run build' in front-end/")
+    print(f"Warning: Static dir {static_dir} does not exist. Run 'npm run build' in fron-end/")
+    # Don't try to mount if it doesn't exist to prevent startup crashes when testing just the API
+else:
+    # Mount assets first
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
     
-# Mount assets first
-app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
-# Mount root last (catch-all)
-# Mount root last (catch-all) - SPA Routing
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    # Check if file exists in static directory
-    file_path = os.path.join(static_dir, full_path)
-    if os.path.exists(file_path) and os.path.isfile(file_path):
-        return FileResponse(file_path)
-    
-    # Otherwise return index.html for React Router to handle
-    return FileResponse(os.path.join(static_dir, "index.html"))
+    # Mount root last (catch-all) - SPA Routing
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Check if file exists in static directory
+        file_path = os.path.join(static_dir, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        
+        # Finally default to index.html for SPA routing
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return {"error": "Frontend not found"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -16,7 +16,7 @@ pymysql
 psycopg2-binary
 cryptography
 apscheduler
-google-generativeai
+# google-generativeai
 scikit-learn
 statsmodels
 alembic

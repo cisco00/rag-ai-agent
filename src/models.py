@@ -522,6 +522,32 @@ def get_shared_report(report_id: str) -> Optional[SharedReport]:
         raise DatabaseError(f"Failed to get shared report: {str(e)}") from e
 
 
+def get_org_shared_reports(org_id: int, limit: int = 50) -> list[SharedReport]:
+    """
+    Get all active shared reports for an organization.
+    """
+    logger.debug(f"Fetching shared reports for org {org_id}")
+    
+    try:
+        with get_db() as db:
+            reports = db.query(SharedReport).filter(
+                SharedReport.org_id == org_id
+            ).order_by(SharedReport.created_at.desc()).limit(limit).all()
+            
+            # Filter out expired reports and detach
+            active_reports = []
+            for item in reports:
+                if not item.is_expired():
+                    db.expunge(item)
+                    active_reports.append(item)
+                
+            return active_reports
+            
+    except Exception as e:
+        logger.error(f"Failed to get shared reports: {e}", exc_info=True)
+        return []
+
+
 def create_feedback(
     org_id: int,
     query: str,
