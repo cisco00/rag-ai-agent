@@ -25,6 +25,7 @@ from models import init_admin_db, create_org, get_org_by_api_key, update_org_db,
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
+from utils import send_email_mock
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -124,6 +125,7 @@ def get_cached_schema_summary(connection_string: str) -> Optional[str]:
 # --- Models ---
 class RegisterRequest(BaseModel):
     name: str
+    email: str
 
 class ConfigRequest(BaseModel):
     connection_string: str
@@ -231,6 +233,20 @@ async def register(request: RegisterRequest):
                  update_org_db(org.api_key, db_conn_str)
                  org.db_connection_string = db_conn_str
                  logger.info(f"Auto-provisioned database for org: {org.name}")
+                 
+                 # Send email notification
+                 email_subject = "Your Vantage AI Database Details"
+                 email_body = (
+                     f"Hello,\n\n"
+                     f"Your new organization '{org.name}' has been created successfully!\n\n"
+                     f"A dedicated database has been provisioned for you.\n"
+                     f"Database Connection String:\n{db_conn_str}\n\n"
+                     f"Your API Key is:\n{org.api_key}\n\n"
+                     f"Please save this API key securely. You will need it to access your organization's data.\n\n"
+                     f"Welcome to Vantage AI!"
+                 )
+                 send_email_mock(request.email, email_subject, email_body)
+
         except Exception as e:
             logger.error(f"Failed to auto-provision database: {e}")
             # Continue without failing registration - they can config manually

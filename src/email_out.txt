@@ -1,0 +1,18 @@
+To: admin@demo2.com
+Subject: Your Vantage AI Database Details
+
+Hello,
+
+Your new organization 'test-org-00c16c' has been created successfully!
+
+A dedicated database has been provisioned for you.
+Database Connection String:
+postgresql://user_testorg00c_xa1ajJeo:296oTuhrRFbcbBW1@localhost:5435/vantage_testorg00c_xa1ajJeo
+
+Your API Key is:
+xa1ajJeoMuGW3lLT6-bn7sxz4CereltoRXFTN0duaL0
+
+Please save this API key securely. You will need it to access your organization's data.
+
+Welcome to Vantage AI!
+

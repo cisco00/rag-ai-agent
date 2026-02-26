@@ -17,7 +17,7 @@ def send_email_mock(to_email, subject, body):
     print("-----------------")
     
     # Write to file for verification
-    with open("email_out.txt", "a") as f:
+    with open("email_out.txt", "a", encoding="utf-8") as f:
         f.write(msg_content + "\n\n")
 
     if smtp_host and smtp_user and smtp_pass:
