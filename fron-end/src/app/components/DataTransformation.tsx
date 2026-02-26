@@ -27,12 +27,11 @@ export function DataTransformation({ }: DataTransformationProps) {
 
   const fetchTables = async () => {
     try {
-      const resp = await api.get<{ tables: { name: string }[] }>('/tables');
+      const resp = await api.get<{ tables: string[] }>('/tables');
       if (resp.tables) {
-        const tableNames = resp.tables.map((t) => t.name);
-        setTables(tableNames);
-        if (tableNames.length > 0) {
-          setSelectedTable(tableNames[0]);
+        setTables(resp.tables);
+        if (resp.tables.length > 0) {
+          setSelectedTable(resp.tables[0]);
         }
       }
     } catch (err) {

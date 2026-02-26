@@ -42,10 +42,32 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
   const [sessions, setSessions] = useState<any[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [exampleQueries, setExampleQueries] = useState<string[]>([
+    'What are the top 5 products by revenue?',
+    'Show me sales trends over the last quarter',
+    'Which customers have the highest lifetime value?',
+    'Compare product categories by profit margin',
+  ]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   useEffect(() => {
     fetchSessions();
+    fetchSuggestions();
   }, []);
+
+  const fetchSuggestions = async () => {
+    setIsLoadingSuggestions(true);
+    try {
+      const data = await api.get<{ queries: string[] }>('/suggested-queries');
+      if (data && data.queries && data.queries.length > 0) {
+        setExampleQueries(data.queries);
+      }
+    } catch (err) {
+      console.error('Failed to fetch suggested queries:', err);
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
 
   const fetchSessions = async () => {
     try {
@@ -130,13 +152,6 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
       alert('Failed to delete session.');
     }
   };
-
-  const exampleQueries = [
-    'What are the top 5 products by revenue?',
-    'Show me sales trends over the last quarter',
-    'Which customers have the highest lifetime value?',
-    'Compare product categories by profit margin',
-  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -432,17 +447,25 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
           <div className="p-6 bg-white border-t border-gray-200">
             <div className="max-w-5xl mx-auto">
               <p className="text-sm font-medium text-gray-700 mb-3">Try asking:</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {exampleQueries.map((query, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setInput(query)}
-                    className="text-left px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 hover:border-gray-300 transition-colors text-sm"
-                  >
-                    {query}
-                  </button>
-                ))}
-              </div>
+              {isLoadingSuggestions ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[1, 2, 3, 4].map((skeleton) => (
+                    <div key={skeleton} className="h-12 bg-gray-100 animate-pulse rounded-lg border border-gray-200"></div>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {exampleQueries.map((query, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setInput(query)}
+                      className="text-left px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 hover:border-gray-300 transition-colors text-sm"
+                    >
+                      {query}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

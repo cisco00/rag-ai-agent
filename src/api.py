@@ -1370,6 +1370,82 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
         if 'agent' in locals():
             agent.close()
 
+class SuggestQueriesResponse(BaseModel):
+    queries: List[str]
+
+@app.get("/suggested-queries", response_model=SuggestQueriesResponse)
+async def get_suggested_queries(org=Depends(get_current_org)):
+    """Generate suggested analytical queries based on the database schema."""
+    try:
+        # Determine which DB to use
+        with FILE_DB_CACHE_LOCK:
+            conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
+            
+        if not conn_str:
+            return SuggestQueriesResponse(queries=[])
+            
+        # Get schema summary (cached)
+        schema_summary = get_cached_schema_summary(conn_str)
+        if not schema_summary:
+             return SuggestQueriesResponse(queries=[])
+
+        from config import get_agent_config
+        from llm_client import get_llm_client
+        
+        config = get_agent_config()
+        try:
+            client = get_llm_client(config.model_provider, config)
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM for suggestions: {e}")
+            return SuggestQueriesResponse(queries=[])
+
+        prompt = (
+            "You are a Senior Data Analyst. Based on the following database schema, "
+            "generate exactly 4 distinct, insightful, and relevant analytical questions "
+            "that a business executive would want to ask about this data.\n\n"
+            f"SCHEMA:\n{schema_summary}\n\n"
+            "Output ONLY a valid JSON object with a single key 'queries' containing a list of 4 strings. "
+            "Do not include markdown formatting or any other text.\n"
+            'Example: {"queries": ["What are the top 5 products by revenue?", "Show me sales trends over time.", ...]}'
+        )
+
+        messages = [{"role": "user", "content": prompt}]
+        
+        response = client.chat_completion(
+            model=config.model_name,
+            messages=messages,
+            max_tokens=300
+        )
+        
+        content = response.choices[0].message.content
+        
+        # Clean up possible markdown JSON blocks
+        if content.startswith("```json"):
+            content = content.replace("```json", "", 1)
+        if content.startswith("```"):
+            content = content.replace("```", "", 1)
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+            
+        import json
+        try:
+            data = json.loads(content)
+            queries = data.get("queries", [])
+            # Validate
+            if not isinstance(queries, list):
+                 queries = []
+            queries = [str(q) for q in queries][:4]
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse LLM suggestions: {content}")
+            queries = []
+            
+        return SuggestQueriesResponse(queries=queries)
+
+    except Exception as e:
+        logger.error(f"Error generating suggested queries: {e}", exc_info=True)
+        return SuggestQueriesResponse(queries=[])
+
 @app.get("/history")
 async def get_history(limit: int = 50, org=Depends(get_current_org)):
     """Get past queries for the organization"""

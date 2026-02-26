@@ -16,3 +16,39 @@ Please save this API key securely. You will need it to access your organization'
 
 Welcome to Vantage AI!
 
+To: idokofrancis66@gmail.com
+Subject: Your Vantage AI Database Details
+
+Hello,
+
+Your new organization 'francisikwu' has been created successfully!
+
+A dedicated database has been provisioned for you.
+Database Connection String:
+postgresql://user_francisikw_8cQqQWP3:QxWhlqkigZw80cHI@localhost:5435/vantage_francisikw_8cQqQWP3
+
+Your API Key is:
+8cQqQWP3A6OfusfZmBYUlC5rnNCe-iIlFFaxAWQTGSs
+
+Please save this API key securely. You will need it to access your organization's data.
+
+Welcome to Vantage AI!
+
+To: ikwufrancis@gmail.com
+Subject: Your Vantage AI Database Details
+
+Hello,
+
+Your new organization 'dalot' has been created successfully!
+
+A dedicated database has been provisioned for you.
+Database Connection String:
+postgresql://user_dalot_6pQkALB7:172AoJ3xm6hE3ZfU@localhost:5435/vantage_dalot_6pQkALB7
+
+Your API Key is:
+6pQkALB7ZcWtzLRcLtfx9Rbpa3h7hbkmdRPKR1eKEZY
+
+Please save this API key securely. You will need it to access your organization's data.
+
+Welcome to Vantage AI!
+

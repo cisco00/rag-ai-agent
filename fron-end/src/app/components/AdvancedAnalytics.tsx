@@ -47,14 +47,13 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
   const fetchTables = async () => {
     try {
-      const resp = await api.get<{ tables: { name: string }[] }>('/tables');
+      const resp = await api.get<{ tables: string[] }>('/tables');
       if (resp.tables) {
-        const tableNames = resp.tables.map((t) => t.name);
-        setTables(tableNames);
-        if (tableNames.length > 0) {
-          setForecastConfig((prev: any) => ({ ...prev, table: tableNames[0] }));
-          setAnomalyConfig((prev: any) => ({ ...prev, table: tableNames[0] }));
-          setCorrelationConfig((prev: any) => ({ ...prev, table: tableNames[0] }));
+        setTables(resp.tables);
+        if (resp.tables.length > 0) {
+          setForecastConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
+          setAnomalyConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
+          setCorrelationConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
         }
       }
     } catch (err) {
