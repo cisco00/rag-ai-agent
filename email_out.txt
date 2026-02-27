@@ -240,3 +240,21 @@ The Vantage AI Agent is already configured to use this connection.
 Regards,
 Vantage AI Team
 
+To: idokofrancis66@gmail.com
+Subject: Your Vantage AI Database Details
+
+Hello,
+
+Your new organization 'otium' has been created successfully!
+
+A dedicated database has been provisioned for you.
+Database Connection String:
+postgresql://user_otium_OELbZvM3:l1B2gUn6cURUfOM3@localhost:5435/vantage_otium_OELbZvM3
+
+Your API Key is:
+OELbZvM3dAhsvFw7wUz9ilsxzhW7qPhnQ7oprxOeo3w
+
+Please save this API key securely. You will need it to access your organization's data.
+
+Welcome to Vantage AI!
+
