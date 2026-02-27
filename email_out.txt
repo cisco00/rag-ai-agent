@@ -258,3 +258,21 @@ Please save this API key securely. You will need it to access your organization'
 
 Welcome to Vantage AI!
 
+To: idokofrancis66@gmail.com
+Subject: Your Vantage AI Database Details
+
+Hello,
+
+Your new organization 'henry' has been created successfully!
+
+A dedicated database has been provisioned for you.
+Database Connection String:
+postgresql://user_henry_s6pkb_4R:PNZ5Qn1yd8NQijKR@localhost:5435/vantage_henry_s6pkb_4R
+
+Your API Key is:
+s6pkb_4RSpSITdDN9vj4jS_BvunoQGZoK0UlMXrwV-4
+
+Please save this API key securely. You will need it to access your organization's data.
+
+Welcome to Vantage AI!
+
