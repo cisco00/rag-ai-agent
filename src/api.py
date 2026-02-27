@@ -1150,7 +1150,7 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
             raise HTTPException(status_code=500, detail="Failed to initialize AI")
 
         # Describe the capabilities
-        operations_spec = \"\"\"
+        operations_spec = """
 You are a translation layer between natural language and a pandas-backed data transformation pipeline.
 Based on the user's intent, respond exclusively with a JSON list of operation objects.
 
@@ -1170,7 +1170,7 @@ SCHEMA OF DATABASE:
 Analyze the user's prompt carefully against the schema for the table '{table_name}'. 
 Output ONLY valid JSON representing the list of operations to perform. Do not use Markdown JSON block wrappers.
 Example: [{"type": "clean_text", "column": "first_name", "clean_type": "title"}]
-\"\"\"
+"""
 
         user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"
 
