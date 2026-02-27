@@ -11,7 +11,6 @@ import json
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
-from dotenv import load_dotenv
 # from huggingface_hub import InferenceClient # Removed direct dependency
 
 # Add the current directory to path so we can import from src
@@ -40,9 +39,6 @@ class QueryResult:
     """Result of an agent query."""
     text: str
     visualization: Optional[Dict[str, Any]] = None
-    tools_used: List[str] = None
-    iterations: int = 0
-    
     tools_used: List[str] = None
     iterations: int = 0
     sql_query: Optional[str] = None

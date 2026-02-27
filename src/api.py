@@ -1,5 +1,6 @@
 # Production Ready - Final Build Fix (Syntax Cleaned)
 import os
+import json
 import pandas as pd
 import io
 import threading
@@ -26,7 +27,8 @@ from models import init_admin_db, create_org, get_org_by_api_key, update_org_db,
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
-from utils import send_email_mock
+from utils import send_email_mock, clean_llm_json_content
+from validators import sanitize_table_name
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -76,6 +78,15 @@ Instrumentator().instrument(app).expose(app)
 # In a real production app, this would be in a cache or persistent DB
 FILE_DB_CACHE = {}
 FILE_DB_CACHE_LOCK = threading.Lock()  # Thread-safe access to cache
+
+
+def get_org_connection_string(org, prefer_file_db: bool = False) -> Optional[str]:
+    """Get connection string for org. If prefer_file_db, use file upload DB when available."""
+    with FILE_DB_CACHE_LOCK:
+        if prefer_file_db and org.api_key in FILE_DB_CACHE:
+            return FILE_DB_CACHE[org.api_key]
+        return FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
+
 
 @app.get("/")
 async def read_index():
@@ -644,12 +655,7 @@ async def import_file_to_database(
         
         try:
             if not table_name:
-                import re
-                base_name = Path(filename).stem.lower()
-                base_name = re.sub(r'[^a-z0-9_]', '_', base_name)
-                if base_name and base_name[0].isdigit():
-                    base_name = f"t_{base_name}"
-                table_name = base_name
+                table_name = sanitize_table_name(filename)
 
             # Upload file to database
             result = uploader.upload_file_to_db(
@@ -778,18 +784,7 @@ async def import_multiple_files(
                     continue
                 
                 # Generate table name
-                import re
-                base_name = Path(filename).stem.lower()
-                # Replace any non-alphanumeric character with underscore
-                base_name = re.sub(r'[^a-z0-9_]', '_', base_name)
-                # Ensure it doesn't start with a number
-                if base_name and base_name[0].isdigit():
-                    base_name = f"t_{base_name}"
-                
-                if table_prefix:
-                    table_name = f"{table_prefix}_{base_name}"
-                else:
-                    table_name = base_name
+                table_name = sanitize_table_name(filename, prefix=table_prefix)
                 
                 # Save file temporarily
                 with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
@@ -950,15 +945,11 @@ async def health_check():
 @app.get("/tables")
 async def get_tables(org=Depends(get_current_org)):
     # Check if there's an active file first
-    with FILE_DB_CACHE_LOCK:
-        conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-    
+    conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
-    hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
-    
+    agent = AnalyticsAgent(connection_string=conn_str)
     try:
         tables = agent.db.list_tables()
         schemas = {}
@@ -1130,10 +1121,7 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
         from config import get_agent_config
         from llm_client import get_llm_client
         
-        # Determine which DB to use
-        with FILE_DB_CACHE_LOCK:
-            conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-            
+        conn_str = get_org_connection_string(org)
         if not conn_str:
             raise HTTPException(status_code=400, detail="No database configured")
             
@@ -1184,19 +1172,8 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
         )
         
         content = response.choices[0].message.content
-        
-        # Clean up possible markdown JSON blocks
-        if content.startswith("```json"):
-            content = content.replace("```json", "", 1)
-        if content.startswith("```"):
-            content = content.replace("```", "", 1)
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
-            
-        import json
         try:
-            operations = json.loads(content)
+            operations = json.loads(clean_llm_json_content(content))
             if not isinstance(operations, list):
                  operations = [operations]
         except json.JSONDecodeError:
@@ -1299,16 +1276,11 @@ async def websocket_endpoint(websocket: WebSocket, source_id: int):
 
 @app.get("/tables/{table_name}/preview")
 async def preview_table(table_name: str, org=Depends(get_current_org)):
-    # Determine which DB to use
-    with FILE_DB_CACHE_LOCK:
-        conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-    
+    conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
     
-    hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
-    
+    agent = AnalyticsAgent(connection_string=conn_str)
     try:
         # Sanitize table name to prevent SQL injection (basic check)
         # In production, use parameterized queries or SQLAlchemy introspection
@@ -1413,25 +1385,13 @@ async def analyze_file(file: UploadFile = File(...), org=Depends(get_current_org
 
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
-    # Determine which DB to use
-    with FILE_DB_CACHE_LOCK:
-        conn_str = None
-        if hasattr(request, 'use_file') and request.use_file and org.api_key in FILE_DB_CACHE:
-            conn_str = FILE_DB_CACHE[org.api_key]
-        else:
-            conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
-    
+    conn_str = get_org_connection_string(org, prefer_file_db=getattr(request, 'use_file', False))
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
-    hf_token = os.environ.get("HF_TOKEN")
-    
-    # Get schema summary (cached)
     schema_summary = get_cached_schema_summary(conn_str)
-    
     start_time = time.time()
-    
-    agent = AnalyticsAgent(hf_token, connection_string=conn_str, schema_summary=schema_summary)
+    agent = AnalyticsAgent(connection_string=conn_str, schema_summary=schema_summary)
     
     # Save user message if session_id provided
     if request.session_id:
@@ -1441,32 +1401,6 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
             logger.error(f"Failed to save user message: {e}")
 
     try:
-        # Check if org has DB connection
-        if not org.db_connection_string:
-            return {
-                "text": "Please configure your database connection first.",
-                "visualization": None,
-                "status": "success"
-            }
-            
-        # Determine which DB to use for the agent
-        with FILE_DB_CACHE_LOCK:
-            conn_str = None
-            # If use_file was in the request, it would be handled here.
-            # For now, prioritize org's configured DB, then file cache.
-            conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
-        
-        if not conn_str:
-            raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
-        
-        hf_token = os.environ.get("HF_TOKEN")
-        
-        # Get schema summary (cached)
-        schema_summary = get_cached_schema_summary(conn_str)
-        
-        # Initialize agent
-        agent = AnalyticsAgent(hf_token, connection_string=conn_str, schema_summary=schema_summary)
-        
         # Load history from session if session_id provided and no explicit history
         history = request.history
         if request.session_id and not history:
@@ -1542,10 +1476,7 @@ class SuggestQueriesResponse(BaseModel):
 async def get_suggested_queries(org=Depends(get_current_org)):
     """Generate suggested analytical queries based on the database schema."""
     try:
-        # Determine which DB to use
-        with FILE_DB_CACHE_LOCK:
-            conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-            
+        conn_str = get_org_connection_string(org)
         if not conn_str:
             return SuggestQueriesResponse(queries=[])
             
@@ -1583,19 +1514,8 @@ async def get_suggested_queries(org=Depends(get_current_org)):
         )
         
         content = response.choices[0].message.content
-        
-        # Clean up possible markdown JSON blocks
-        if content.startswith("```json"):
-            content = content.replace("```json", "", 1)
-        if content.startswith("```"):
-            content = content.replace("```", "", 1)
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
-            
-        import json
         try:
-            data = json.loads(content)
+            data = json.loads(clean_llm_json_content(content))
             queries = data.get("queries", [])
             # Validate
             if not isinstance(queries, list):
@@ -1629,9 +1549,7 @@ class UpdateCellRequest(BaseModel):
 @app.post("/tables/{table_name}/duplicate")
 async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)):
     # Determine which DB to use
-    with FILE_DB_CACHE_LOCK:
-        conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-    
+    conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
     
@@ -1652,9 +1570,7 @@ async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)
 @app.patch("/tables/{table_name}/cell")
 async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=Depends(get_current_org)):
     # Determine which DB to use
-    with FILE_DB_CACHE_LOCK:
-        conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
-    
+    conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
         
@@ -1825,19 +1741,11 @@ async def get_stats(org=Depends(get_current_org)):
 @app.post("/share")
 async def share_report(request: QueryRequest, org=Depends(get_current_org)):
     """Create a shareable link for an analysis result"""
-    # Determine which DB to use
-    with FILE_DB_CACHE_LOCK:
-        conn_str = None
-        if request.use_file and org.api_key in FILE_DB_CACHE:
-            conn_str = FILE_DB_CACHE[org.api_key]
-        else:
-            conn_str = org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
-    
+    conn_str = get_org_connection_string(org, prefer_file_db=getattr(request, 'use_file', False))
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
-    hf_token = os.environ.get("HF_TOKEN")
-    agent = AnalyticsAgent(hf_token, connection_string=conn_str)
+    agent = AnalyticsAgent(connection_string=conn_str)
     
     try:
         result = agent.run_query(request.query, request.history)

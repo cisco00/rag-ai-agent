@@ -25,6 +25,26 @@ from exceptions import (
 from config import get_file_upload_config, get_db_config
 
 
+def sanitize_table_name(filename: str, prefix: Optional[str] = None) -> str:
+    """
+    Generate a valid SQL table name from a filename.
+    
+    Args:
+        filename: Original filename (e.g. 'My Data 2024.csv')
+        prefix: Optional prefix for the table name (e.g. 'import_2024')
+    
+    Returns:
+        Sanitized table name (e.g. 'my_data_2024' or 'import_2024_my_data_2024')
+    """
+    base_name = Path(filename).stem.lower()
+    base_name = re.sub(r'[^a-z0-9_]', '_', base_name)
+    if base_name and base_name[0].isdigit():
+        base_name = f"t_{base_name}"
+    if prefix:
+        return f"{prefix}_{base_name}"
+    return base_name
+
+
 class FileValidator:
     """
     Validates file uploads including size, type, and content.

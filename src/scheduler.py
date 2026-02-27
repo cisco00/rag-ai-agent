@@ -52,7 +52,7 @@ def execute_scheduled_report(report_id: int):
                 logger.warning(f"No DB configured for org {org.name}, skipping report")
                 return
 
-            with AnalyticsAgent(org.db_connection_string) as agent:
+            with AnalyticsAgent(connection_string=org.db_connection_string) as agent:
                 # Run the query
                 # AnalyticsAgent.run_query is synchronous
                 result = agent.run_query(report.query)
