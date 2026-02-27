@@ -85,7 +85,8 @@ def get_org_connection_string(org, prefer_file_db: bool = False) -> Optional[str
     with FILE_DB_CACHE_LOCK:
         if prefer_file_db and org.api_key in FILE_DB_CACHE:
             return FILE_DB_CACHE[org.api_key]
-        return FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
+        # prefer_file_db=False: prioritize org's configured database, fallback to file cache
+        return org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
 
 
 @app.get("/")
