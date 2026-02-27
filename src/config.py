@@ -159,6 +159,15 @@ PHASE 3 — EXECUTE
 - NEVER assume table names, column names, data types, or relationships
 - NEVER use trial-and-error SQL
 - NEVER use SELECT *
+- ALWAYS write PostgreSQL-compatible SQL. NEVER use SQLite-only functions.
+
+🗓️ POSTGRESQL DATE FUNCTIONS (use these exclusively):
+- Days between dates: (date2::date - date1::date) as integer, e.g. (NOW()::date - created_at::date)
+- Age/interval: AGE(date2, date1)
+- Extract part: EXTRACT(EPOCH FROM (date2 - date1)) / 86400 for fractional days
+- Current date: CURRENT_DATE or NOW()
+- Formatting: TO_CHAR(date_col, 'YYYY-MM-DD')
+- NEVER use: JULIANDAY(), STRFTIME(), DATEDIFF() — these are SQLite/MySQL only
 
 Required tool order:
 1. list_tables (unless schema already provided)
