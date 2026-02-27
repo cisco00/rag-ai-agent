@@ -40,10 +40,24 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   });
 
   const [tables, setTables] = useState<string[]>([]);
+  const [forecastColumns, setForecastColumns] = useState<string[]>([]);
 
   useEffect(() => {
     fetchTables();
   }, []);
+
+  useEffect(() => {
+    const fetchForecastColumns = async () => {
+      if (!forecastConfig.table) return;
+      try {
+        const data = await api.get<any>(`/tables/${forecastConfig.table}/preview?limit=1`);
+        if (data && data.columns) {
+          setForecastColumns(data.columns.map((c: any) => c.name));
+        }
+      } catch { /* silently ignore */ }
+    };
+    fetchForecastColumns();
+  }, [forecastConfig.table]);
 
   const fetchTables = async () => {
     try {
@@ -199,24 +213,28 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Date Column
                 </label>
-                <input
-                  type="text"
+                <select
                   value={forecastConfig.dateColumn}
                   onChange={(e) => setForecastConfig({ ...forecastConfig, dateColumn: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
+                >
+                  <option value="">Select date column...</option>
+                  {forecastColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Value Column
                 </label>
-                <input
-                  type="text"
+                <select
                   value={forecastConfig.valueColumn}
                   onChange={(e) => setForecastConfig({ ...forecastConfig, valueColumn: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
+                >
+                  <option value="">Select value column...</option>
+                  {forecastColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
 
               <div>

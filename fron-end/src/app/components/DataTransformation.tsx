@@ -23,6 +23,7 @@ export function DataTransformation({ }: DataTransformationProps) {
   const [columns, setColumns] = useState<string[]>([]);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [missingSummary, setMissingSummary] = useState<Array<{column: string; missing: number; pct: number; suggested: string}>>([]);
 
   useEffect(() => {
     fetchTables();
@@ -55,6 +56,31 @@ export function DataTransformation({ }: DataTransformationProps) {
       }
     };
     fetchColumns();
+  }, [selectedTable]);
+
+  useEffect(() => {
+    const fetchMissingSummary = async () => {
+      if (!selectedTable) return;
+      try {
+        const data = await api.get<any>(`/tables/${selectedTable}/preview?limit=500`);
+        if (data && data.rows && data.columns) {
+          const colNames: string[] = data.columns.map((c: any) => c.name);
+          const rows: any[] = data.rows;
+          const total = rows.length;
+          if (total === 0) return;
+          const summary = colNames.map(col => {
+            const missing = rows.filter((r: any) => r[col] === null || r[col] === '' || r[col] === undefined).length;
+            const pct = Math.round((missing / total) * 100);
+            const colType = (data.columns.find((c: any) => c.name === col)?.type || '').toLowerCase();
+            const isNumeric = ['int','float','number','numeric','bigint','double','decimal'].some(t => colType.includes(t));
+            const suggested = isNumeric ? 'mean' : 'mode';
+            return { column: col, missing, pct, suggested };
+          }).filter(s => s.missing > 0);
+          setMissingSummary(summary);
+        }
+      } catch { /* silently ignore */ }
+    };
+    fetchMissingSummary();
   }, [selectedTable]);
 
   const operationTypes = [
@@ -302,25 +328,66 @@ export function DataTransformation({ }: DataTransformationProps) {
 
       case 'fill_na':
         return (
-          <div className="grid grid-cols-3 gap-3">
-            {columnSelector('column')}
-            <select
-              value={op.params.method || 'mean'}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'method', e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            >
-              <option value="value">Specific Value</option>
-              <option value="mean">Mean</option>
-              <option value="median">Median</option>
-              <option value="mode">Mode</option>
-            </select>
-            <input
-              type="text"
-              placeholder="Value (if specific)"
-              value={op.params.value || ''}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'value', e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            />
+          <div className="space-y-3">
+            {missingSummary.length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs font-semibold text-amber-800 mb-2">📊 Missing Values in Table</p>
+                <div className="overflow-auto max-h-36">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-amber-700 border-b border-amber-200">
+                        <th className="text-left py-1 pr-3">Column</th>
+                        <th className="text-right py-1 pr-3">Missing</th>
+                        <th className="text-right py-1 pr-3">%</th>
+                        <th className="text-left py-1 pr-3">Suggested</th>
+                        <th className="text-left py-1">Apply</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {missingSummary.map(s => (
+                        <tr key={s.column} className="border-b border-amber-100">
+                          <td className="py-1 pr-3 font-mono text-gray-700">{s.column}</td>
+                          <td className="py-1 pr-3 text-right text-gray-600">{s.missing}</td>
+                          <td className={`py-1 pr-3 text-right font-semibold ${s.pct > 20 ? 'text-red-600' : 'text-amber-700'}`}>{s.pct}%</td>
+                          <td className="py-1 pr-3">
+                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{s.suggested}</span>
+                          </td>
+                          <td className="py-1">
+                            <button
+                              onClick={() => {
+                                updateOperationParam(op.id, 'column', s.column);
+                                updateOperationParam(op.id, 'method', s.suggested);
+                              }}
+                              className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
+                            >Use</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-3">
+              {columnSelector('column')}
+              <select
+                value={op.params.method || 'mean'}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'method', e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded text-sm"
+              >
+                <option value="value">Specific Value</option>
+                <option value="mean">Mean</option>
+                <option value="median">Median</option>
+                <option value="mode">Mode</option>
+              </select>
+              <input
+                type="text"
+                placeholder="Value (if specific)"
+                value={op.params.value || ''}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'value', e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded text-sm"
+              />
+            </div>
           </div>
         );
 
