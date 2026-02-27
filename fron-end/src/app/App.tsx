@@ -57,6 +57,7 @@ export default function App() {
           <DatabaseConfig
             apiKey={apiKey}
             onConfigured={() => setIsConfigured(true)}
+            onNavigate={(view) => setCurrentView(view as View)}
           />
         )}
         {currentView === 'management' && <DataManagement apiKey={apiKey} />}

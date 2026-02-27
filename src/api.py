@@ -174,6 +174,10 @@ class TransformRequest(BaseModel):
     operations: List[Dict[str, Any]] # e.g. [{"type": "filter", "column": "age", "op": ">", "value": 30}]
     target_table: Optional[str] = None
 
+class TransformSuggestRequest(BaseModel):
+    table_name: str
+    prompt: str
+
 class ForecastRequest(BaseModel):
     table_name: str
     date_column: str
@@ -224,7 +228,7 @@ async def get_current_org(x_api_key: str = Header(...)):
 @app.post("/register")
 async def register(request: RegisterRequest):
     try:
-        org = create_org(request.name)
+        org = create_org(request.name, request.email)
         
         # Auto-provision database if system credentials are set
         try:
@@ -355,19 +359,48 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
         # Re-raise to let caller handle logging/suppression
         raise
 
+@app.get("/config")
+async def get_config(org=Depends(get_current_org)):
+    try:
+        return {
+            "status": "success",
+            "connection_string": org.db_connection_string
+        }
+    except Exception as e:
+        logger.error(f"DB CONFIG GET ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/config")
 async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
     try:
+        from utils import send_email_mock
         # Validate connection first
         db_manager = DatabaseManager(connection_string=request.connection_string)
         # Try a simple query
         db_manager.list_tables()
         db_manager.close()
-        
-        update_org_db(org.api_key, request.connection_string)
+        org = update_org_db(org.api_key, request.connection_string)
         # Clear file cache if they switch to a real DB
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)
+            
+        # Send notification email if the organization has an email associated
+        if org.email:
+            subject = "Database Connected Successfully"
+            body = f"""
+Hello,
+
+Your database connection for organization '{org.name}' has been verified and successfully linked to your account.
+You can now start querying your tables via the dashboard!
+
+Thanks,
+The RAG AI Agent Team
+            """
+            try:
+                send_email_mock(org.email, subject, body.strip())
+            except Exception as e:
+                logger.error(f"Failed to send DB connection email: {e}")
+
         return {"status": "success", "message": "Database connection string updated."}
     except Exception as e:
         error_msg = str(e)
@@ -385,16 +418,44 @@ async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
         raise HTTPException(status_code=400, detail=f"Failed to connect: {error_msg}")
 
 class CreateDatabaseRequest(BaseModel):
-    host: str
-    port: str
-    admin_user: str
-    admin_password: str
+    admin_user: Optional[str] = None
+    admin_password: Optional[str] = None
     new_db_name: str
     new_user: str          # New field
     new_password: str      # New field
-    email: str
+    email: Optional[str] = None # Keeping this optional for backwards compatibility, but we will rely mostly on org.email
 
 from utils import send_email_mock
+
+@app.get("/database/available")
+async def get_available_databases(org=Depends(get_current_org)):
+    """Fetch a list of available databases on the PostgreSQL cluster."""
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+    
+    admin_user = os.getenv("POSTGRES_SYS_ADMIN_USER", "postgres")
+    admin_password = os.getenv("POSTGRES_SYS_ADMIN_PASSWORD", "")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    
+    try:
+        conn = psycopg2.connect(
+            user=admin_user, 
+            password=admin_password, 
+            host=host, 
+            port=port, 
+            dbname='postgres'
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        cur.execute("SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';")
+        rows = cur.fetchall()
+        databases = [row[0] for row in rows]
+        conn.close()
+        return {"status": "success", "databases": databases}
+    except Exception as e:
+        logger.error(f"Failed to fetch databases: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/database/create-postgres")
 async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(get_current_org)):
@@ -403,13 +464,19 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
     from psycopg2 import sql
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
     
+    # Resolve admin credentials (prefer provided from frontend, fallback to env vars)
+    admin_user = request.admin_user or os.getenv("POSTGRES_SYS_ADMIN_USER", "postgres")
+    admin_password = request.admin_password or os.getenv("POSTGRES_SYS_ADMIN_PASSWORD", "")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    
     # 1. Connect to postgres system db
     try:
         conn = psycopg2.connect(
-            user=request.admin_user, 
-            password=request.admin_password, 
-            host=request.host, 
-            port=request.port, 
+            user=admin_user, 
+            password=admin_password, 
+            host=host, 
+            port=port, 
             dbname='postgres'
         )
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
@@ -447,52 +514,63 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
         # Grant permissions on public schema (required for PG15+)
         try:
             conn_new = psycopg2.connect(
-                user=request.admin_user, 
-                password=request.admin_password, 
-                host=request.host, 
-                port=request.port, 
+                user=admin_user, 
+                password=admin_password, 
+                host=host, 
+                port=port, 
                 dbname=request.new_db_name
             )
             conn_new.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur_new = conn_new.cursor()
+            cur_new.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(request.new_db_name),
+                sql.Identifier(request.new_user)
+            ))
             cur_new.execute(sql.SQL("GRANT ALL ON SCHEMA public TO {}").format(sql.Identifier(request.new_user)))
+            cur_new.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(request.new_user)))
             conn_new.close()
         except Exception as e:
              logger.error(f"Failed to grant permissions: {e}")
         
         # 4. Formulate new connection string using NEW USER credentials
-        new_conn_str = f"postgresql://{request.new_user}:{request.new_password}@{request.host}:{request.port}/{request.new_db_name}"
+        new_conn_str = f"postgresql://{request.new_user}:{request.new_password}@{host}:{port}/{request.new_db_name}"
         
         # 5. Update Org Config
         update_org_db(org.api_key, new_conn_str)
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)
             
-        # 6. Send Email
-        subject = "Your New Database & User Details"
-        body = f"""
+        # 6. Send Email using org.email if available, fallback to request.email
+        recipient_email = getattr(org, 'email', None)
+        if recipient_email:
+            subject = "Your New Database & User Details"
+            body = f"""
 Hello,
 
 A new PostgreSQL database and user have been created for you.
 
 Details:
-Host: {request.host}
-Port: {request.port}
+Host: {host}
+Port: {port}
 Database Name: {request.new_db_name}
 New Username: {request.new_user}
 New Password: {request.new_password}
-
-Admin Access Used: {request.admin_user}
 
 You can now use these credentials to connect external tools.
 The Vantage AI Agent is already configured to use this connection.
 
 Regards,
 Vantage AI Team
-        """
-        send_email_mock(request.email, subject, body)
-        
-        return {"status": "success", "message": f"Database '{request.new_db_name}' created with user '{request.new_user}'."}
+"""
+            try:
+                send_email_mock(recipient_email, subject, body.strip())
+            except Exception as e:
+                logger.error(f"Failed to send create DB email: {e}")
+        else:
+             logger.warning("No email available to send database creation notification.")
+                
+        return {
+            "status": "success", "message": f"Database '{request.new_db_name}' created with user '{request.new_user}'."}
         
     except Exception as e:
         logger.error(f"Failed to create database: {e}", exc_info=True)
@@ -1042,6 +1120,95 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
             
     except Exception as e:
         logger.error(f"Transformation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/transform/suggest")
+async def suggest_transformations(request: TransformSuggestRequest, org=Depends(get_current_org)):
+    """Suggest transformation operations based on natural language prompt."""
+    try:
+        from config import get_agent_config
+        from llm_client import get_llm_client
+        
+        # Determine which DB to use
+        with FILE_DB_CACHE_LOCK:
+            conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
+            
+        if not conn_str:
+            raise HTTPException(status_code=400, detail="No database configured")
+            
+        # Get schema summary (cached)
+        schema_summary = get_cached_schema_summary(conn_str)
+        if not schema_summary:
+             raise HTTPException(status_code=400, detail="Schema cannot be read")
+
+        # Initialize LLM
+        config = get_agent_config()
+        try:
+            client = get_llm_client(config.model_provider, config)
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM for suggestions: {e}")
+            raise HTTPException(status_code=500, detail="Failed to initialize AI")
+
+        # Describe the capabilities
+        operations_spec = \"\"\"
+You are a translation layer between natural language and a pandas-backed data transformation pipeline.
+Based on the user's intent, respond exclusively with a JSON list of operation objects.
+
+SUPPORTED OPERATIONS (type field):
+1. 'clean_text': {"type": "clean_text", "column": "col_name", "clean_type": "lower|upper|trim|title|remove_special"}
+2. 'filter': {"type": "filter", "column": "col_name", "op": ">|<|==|!=|>=|<=", "value": any}
+3. 'rename_col': {"type": "rename_col", "column": "old_name", "new_name": "new_name"}
+4. 'drop_col': {"type": "drop_col", "column": "col_name"}
+5. 'change_type': {"type": "change_type", "column": "col_name", "new_type": "int|float|str|datetime|bool"}
+6. 'fill_na': {"type": "fill_na", "column": "col_name", "method": "value|mean|median|mode", "value": any}
+7. 'drop_duplicates': {"type": "clean", "method": "drop_duplicates", "subset": "col_name"}
+8. 'remove_outliers': {"type": "clean", "method": "remove_outliers", "column": "col_name", "outlier_method": "z-score", "threshold": 3.0}
+
+SCHEMA OF DATABASE:
+{schema_summary}
+
+Analyze the user's prompt carefully against the schema for the table '{table_name}'. 
+Output ONLY valid JSON representing the list of operations to perform. Do not use Markdown JSON block wrappers.
+Example: [{"type": "clean_text", "column": "first_name", "clean_type": "title"}]
+\"\"\"
+
+        user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"
+
+        messages = [
+            {"role": "system", "content": operations_spec.format(schema_summary=schema_summary, table_name=request.table_name)},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        response = client.chat_completion(
+            model=config.model_name,
+            messages=messages,
+            max_tokens=500
+        )
+        
+        content = response.choices[0].message.content
+        
+        # Clean up possible markdown JSON blocks
+        if content.startswith("```json"):
+            content = content.replace("```json", "", 1)
+        if content.startswith("```"):
+            content = content.replace("```", "", 1)
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+            
+        import json
+        try:
+            operations = json.loads(content)
+            if not isinstance(operations, list):
+                 operations = [operations]
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse LLM suggestions: {content}")
+            raise HTTPException(status_code=500, detail="AI output format was invalid")
+            
+        return {"status": "success", "operations": operations}
+
+    except Exception as e:
+        logger.error(f"Error suggesting transformations: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/analytics/forecast")

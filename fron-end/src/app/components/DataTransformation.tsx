@@ -20,6 +20,9 @@ export function DataTransformation({ }: DataTransformationProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [tables, setTables] = useState<string[]>([]);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
     fetchTables();
@@ -38,6 +41,21 @@ export function DataTransformation({ }: DataTransformationProps) {
       console.error('Failed to fetch tables:', err);
     }
   };
+
+  useEffect(() => {
+    const fetchColumns = async () => {
+      if (!selectedTable) return;
+      try {
+        const data = await api.get<any>(`/tables/${selectedTable}/preview?limit=1`);
+        if (data && data.columns) {
+          setColumns(data.columns.map((c: any) => c.name));
+        }
+      } catch (err) {
+        console.error('Failed to fetch columns for table:', err);
+      }
+    };
+    fetchColumns();
+  }, [selectedTable]);
 
   const operationTypes = [
     { value: 'drop_duplicates', label: 'Drop Duplicates', category: 'Cleaning' },
@@ -67,9 +85,9 @@ export function DataTransformation({ }: DataTransformationProps) {
 
   const getDefaultParams = (type: string): Record<string, any> => {
     const defaults: Record<string, any> = {
-      drop_duplicates: { subset: [] },
+      drop_duplicates: { subset: '' },
       clean_text: { column: '', operation: 'lower' },
-      remove_outliers: { column: '', method: 'zscore', threshold: 3 },
+      remove_outliers: { column: '', outlier_method: 'z-score', threshold: 3 },
       filter: { column: '', operator: '>', value: '' },
       rename_col: { old_name: '', new_name: '' },
       drop_col: { column: '' },
@@ -119,10 +137,18 @@ export function DataTransformation({ }: DataTransformationProps) {
     try {
       const payload = {
         table_name: selectedTable,
-        operations: operations.map(op => ({
-          type: op.type,
-          ...op.params
-        }))
+        operations: operations.map(op => {
+          let type = op.type;
+          let params = { ...op.params };
+          if (type === 'drop_duplicates') {
+            type = 'clean';
+            params.method = 'drop_duplicates';
+          } else if (type === 'remove_outliers') {
+            type = 'clean';
+            params.method = 'remove_outliers';
+          }
+          return { type, ...params };
+        })
       };
 
       await api.post('/transform', payload);
@@ -142,18 +168,59 @@ export function DataTransformation({ }: DataTransformationProps) {
     }
   };
 
+  const handleGenerateAI = async () => {
+    if (!aiPrompt.trim() || !selectedTable) return;
+    setIsGenerating(true);
+    
+    try {
+      const response = await api.post<{ status: string; operations: Operation[] }>('/transform/suggest', {
+        table_name: selectedTable,
+        prompt: aiPrompt
+      });
+      
+      if (response && response.operations) {
+        // Hydrate the generated operations with unique IDs
+        const newOps = response.operations.map(op => {
+          let type = op.type;
+          let params = { ...op };
+          // Map backend 'clean' type back to frontend types for UI matching
+          if (type === 'clean') {
+            type = params.method === 'remove_outliers' ? 'remove_outliers' : 'drop_duplicates';
+          }
+          return {
+            id: Math.random().toString(36).substr(2, 9),
+            type,
+            params
+          };
+        });
+        setOperations([...operations, ...newOps]);
+        setAiPrompt('');
+      }
+    } catch (err: any) {
+      console.error('AI Generation failed:', err);
+      alert(`AI Generation failed: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const renderOperationForm = (op: Operation) => {
+    const columnSelector = (paramName: string, placeholder: string = "Select column") => (
+      <select
+        value={op.params[paramName] || ''}
+        onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, paramName, e.target.value)}
+        className="px-3 py-2 border border-blue-200 bg-blue-50 rounded text-sm text-blue-900"
+      >
+        <option value="" disabled>{placeholder}</option>
+        {columns.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+    );
+
     switch (op.type) {
       case 'clean_text':
         return (
           <div className="grid grid-cols-2 gap-3">
-            <input
-              type="text"
-              placeholder="Column name"
-              value={op.params.column || ''}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'column', e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            />
+            {columnSelector('column')}
             <select
               value={op.params.operation || 'lower'}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'operation', e.target.value)}
@@ -162,6 +229,8 @@ export function DataTransformation({ }: DataTransformationProps) {
               <option value="lower">Lowercase</option>
               <option value="upper">Uppercase</option>
               <option value="trim">Trim</option>
+              <option value="title">Title Case</option>
+              <option value="remove_special">Remove Special</option>
             </select>
           </div>
         );
@@ -169,13 +238,7 @@ export function DataTransformation({ }: DataTransformationProps) {
       case 'filter':
         return (
           <div className="grid grid-cols-3 gap-3">
-            <input
-              type="text"
-              placeholder="Column"
-              value={op.params.column || ''}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'column', e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            />
+            {columnSelector('column')}
             <select
               value={op.params.operator || '>'}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'operator', e.target.value)}
@@ -198,45 +261,110 @@ export function DataTransformation({ }: DataTransformationProps) {
           </div>
         );
 
-      case 'fill_na':
+      case 'rename_col':
         return (
           <div className="grid grid-cols-2 gap-3">
+            {columnSelector('column', 'Old Column')}
             <input
               type="text"
-              placeholder="Column name"
-              value={op.params.column || ''}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'column', e.target.value)}
+              placeholder="New name"
+              value={op.params.new_name || ''}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'new_name', e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded text-sm"
             />
+          </div>
+        );
+
+      case 'drop_col':
+        return (
+          <div className="grid grid-cols-1 gap-3">
+            {columnSelector('column')}
+          </div>
+        );
+
+      case 'change_type':
+        return (
+          <div className="grid grid-cols-2 gap-3">
+            {columnSelector('column')}
             <select
-              value={op.params.strategy || 'mean'}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'strategy', e.target.value)}
+              value={op.params.new_type || 'int'}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'new_type', e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded text-sm"
             >
+              <option value="int">Integer</option>
+              <option value="float">Float</option>
+              <option value="str">String</option>
+              <option value="datetime">Date/Time</option>
+              <option value="bool">Boolean</option>
+            </select>
+          </div>
+        );
+
+      case 'fill_na':
+        return (
+          <div className="grid grid-cols-3 gap-3">
+            {columnSelector('column')}
+            <select
+              value={op.params.method || 'mean'}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'method', e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value="value">Specific Value</option>
               <option value="mean">Mean</option>
               <option value="median">Median</option>
               <option value="mode">Mode</option>
-              <option value="constant">Constant</option>
             </select>
+            <input
+              type="text"
+              placeholder="Value (if specific)"
+              value={op.params.value || ''}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'value', e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded text-sm"
+            />
+          </div>
+        );
+
+      case 'drop_duplicates':
+        return (
+          <div className="grid grid-cols-1 gap-3">
+            {columnSelector('subset', 'Select column to check for duplicates (optional)')}
+          </div>
+        );
+
+      case 'remove_outliers':
+        return (
+          <div className="grid grid-cols-2 gap-3">
+            {columnSelector('column')}
+            <input
+              type="number"
+              step="0.1"
+              placeholder="Threshold (Z-Score)"
+              value={op.params.threshold || 3.0}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateOperationParam(op.id, 'threshold', parseFloat(e.target.value))}
+              className="px-3 py-2 border border-gray-300 rounded text-sm"
+            />
           </div>
         );
 
       case 'normalize':
         return (
           <div className="grid grid-cols-2 gap-3">
-            <input
-              type="text"
-              placeholder="Columns (comma-separated)"
-              value={op.params.columns?.join(',') || ''}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                updateOperationParam(
-                  op.id,
-                  'columns',
-                  e.target.value.split(',').map((c: string) => c.trim())
-                )
-              }
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            />
+            <div className="relative">
+               {/* Normalization works on multiple columns, keeping it explicit as a text array or mapping */}
+              <input
+                type="text"
+                placeholder="Columns (comma-separated)"
+                value={op.params.columns?.join(',') || ''}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  updateOperationParam(
+                    op.id,
+                    'columns',
+                    e.target.value.split(',').map((c: string) => c.trim())
+                  )
+                }
+                className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+              />
+            </div>
             <select
               value={op.params.method || 'minmax'}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateOperationParam(op.id, 'method', e.target.value)}
@@ -300,6 +428,40 @@ export function DataTransformation({ }: DataTransformationProps) {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* AI Transformation Wizard */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100 p-6">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-blue-600 rounded-lg shrink-0">
+                <Wrench className="size-6 text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-blue-900 mb-1">AI Transformation Wizard</h3>
+                <p className="text-blue-800 text-sm mb-4">
+                  Describe what you want to do in plain English, and the AI will automatically build the transformation steps for you!
+                </p>
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="e.g. 'Remove empty rows and drop the zip_code column'"
+                    className="flex-1 px-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleGenerateAI();
+                    }}
+                  />
+                  <button
+                    onClick={handleGenerateAI}
+                    disabled={isGenerating || !aiPrompt.trim()}
+                    className="whitespace-nowrap px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  >
+                    {isGenerating ? 'Generating...' : 'Generate with AI'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Operations Pipeline */}

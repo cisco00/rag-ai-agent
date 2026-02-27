@@ -36,6 +36,7 @@ class Organization(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String(255), unique=True, nullable=False, index=True)
+    email = Column(String(255), nullable=True)
     api_key = Column(String(64), unique=True, nullable=False, index=True)
     db_connection_string = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -290,12 +291,13 @@ def get_chat_history(session_id: str) -> list[ChatMessage]:
         raise DatabaseError(f"Failed to get chat history: {str(e)}") from e
 
 
-def create_org(name: str) -> Organization:
+def create_org(name: str, email: Optional[str] = None) -> Organization:
     """
     Create a new organization with a unique API key.
     
     Args:
         name: Organization name
+        email: Optional organization email
     
     Returns:
         Created Organization instance
@@ -311,7 +313,7 @@ def create_org(name: str) -> Organization:
             api_key = secrets.token_urlsafe(32)
             
             # Create organization
-            org = Organization(name=name, api_key=api_key)
+            org = Organization(name=name, email=email, api_key=api_key)
             db.add(org)
             db.flush()
             db.refresh(org)

@@ -1,33 +1,32 @@
-import { useState } from 'react';
-import { Database, CheckCircle, AlertCircle, Loader2, Table, Plus, Eye } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Database, CheckCircle, AlertCircle, Loader2, Table, Plus, Eye, MessageSquare } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DatabaseConfigProps {
   apiKey: string;
   onConfigured: () => void;
+  onNavigate?: (view: string) => void;
 }
 
-export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
-  const [configMode, setConfigMode] = useState<'existing' | 'create'>('existing');
+export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps) {
+  const [configMode, setConfigMode] = useState<'existing' | 'create' | 'configured'>('existing');
   const [dbType, setDbType] = useState('postgresql');
   const [connectionString, setConnectionString] = useState('');
+  const [currentConnection, setCurrentConnection] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTable, setSelectedTable] = useState('');
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [availableDatabases, setAvailableDatabases] = useState<string[]>([]);
 
   // Create database form
   const [createForm, setCreateForm] = useState({
-    host: 'localhost',
-    port: '5432',
-    adminUser: 'postgres',
-    adminPassword: '',
     newDbName: '',
     newUser: '',
     newPassword: '',
-    email: '',
   });
 
   const dbTypes = [
@@ -36,6 +35,39 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
     { value: 'sqlite', label: 'SQLite', example: 'sqlite:///path/to/database.db' },
     { value: 'mssql', label: 'SQL Server', example: 'mssql+pyodbc://user:password@localhost/dbname' },
   ];
+
+  useEffect(() => {
+    const fetchCurrentConfig = async () => {
+      try {
+        const res = await api.get<{ status: string; connection_string: string }>('/config');
+        if (res.connection_string) {
+          setCurrentConnection(res.connection_string);
+          setConnectionString(res.connection_string);
+          setConfigMode('configured');
+          setStatus('success');
+        }
+      } catch (error) {
+        console.error('Failed to fetch current DB config', error);
+      }
+    };
+    fetchCurrentConfig();
+  }, []);
+
+  useEffect(() => {
+    if (configMode === 'create') {
+      const fetchDatabases = async () => {
+        try {
+          const res = await api.get<{ status: string; databases: string[] }>('/database/available');
+          if (res.databases) {
+            setAvailableDatabases(res.databases);
+          }
+        } catch (error) {
+          console.error('Failed to fetch available databases', error);
+        }
+      };
+      fetchDatabases();
+    }
+  }, [configMode]);
 
   const handleConnect = async () => {
     if (!connectionString.trim()) return;
@@ -48,9 +80,11 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
       setStatus('success');
+      setErrorMessage('');
       onConfigured();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      setErrorMessage(error.message || 'Connection failed.');
       setStatus('error');
     } finally {
       setIsLoading(false);
@@ -58,7 +92,7 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
   };
 
   const handleCreateDatabase = async () => {
-    if (!createForm.adminPassword || !createForm.newDbName || !createForm.newUser || !createForm.newPassword) {
+    if (!createForm.newDbName || !createForm.newUser || !createForm.newPassword) {
       return;
     }
 
@@ -67,27 +101,24 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
 
     try {
       const payload = {
-        host: createForm.host,
-        port: createForm.port,
-        admin_user: createForm.adminUser,
-        admin_password: createForm.adminPassword,
         new_db_name: createForm.newDbName,
         new_user: createForm.newUser,
         new_password: createForm.newPassword,
-        email: createForm.email,
       };
 
       await api.post<any>('/database/create-postgres', payload);
-      const mockConnectionString = `postgresql://${createForm.newUser}:[HIDDEN]@${createForm.host}:${createForm.port}/${createForm.newDbName}`;
+      const mockConnectionString = `postgresql://${createForm.newUser}:[HIDDEN]@localhost:5435/${createForm.newDbName}`;
       setConnectionString(mockConnectionString);
 
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
 
       setStatus('success');
+      setErrorMessage('');
       onConfigured();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      setErrorMessage(error.message || 'Creation failed.');
       setStatus('error');
     } finally {
       setIsLoading(false);
@@ -118,42 +149,140 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
       setStatus('success');
-    } catch (error) {
+      setErrorMessage('');
+    } catch (error: any) {
       console.error(error);
+      setErrorMessage(error.message || 'Test failed.');
       setStatus('error');
     } finally {
       setIsLoading(false);
     }
   };
 
+  if (status === 'success' && configMode === 'configured') {
+    return (
+      <div className="p-8 max-w-6xl mx-auto">
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center max-w-2xl mx-auto flex flex-col items-center">
+          <div className="flex items-center justify-center size-20 bg-blue-100 rounded-full mb-6 text-blue-600">
+            <Database className="size-10" />
+          </div>
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">Database Connected</h2>
+          <p className="text-gray-600 mb-8 max-w-md">
+            Your organization is currently connected to the following database. You're ready to start analyzing data.
+          </p>
+          
+          <div className="bg-gray-50 p-4 rounded-lg w-full mb-8 border border-gray-100 font-mono text-sm text-gray-700 truncate text-left break-all">
+            <span className="font-semibold text-gray-500 mr-2 uppercase text-xs">Connection String</span><br/>
+            {currentConnection || connectionString || '••••••••'}
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
+            {onNavigate && (
+              <>
+                <button
+                  onClick={() => onNavigate('dashboard')}
+                  className="px-6 py-3 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  View Dashboard
+                </button>
+                <button
+                  onClick={() => onNavigate('query')}
+                  className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <MessageSquare className="size-5" />
+                  Start Querying
+                </button>
+              </>
+            )}
+          </div>
+          
+          <div className="mt-8 pt-6 border-t border-gray-100 w-full">
+            <button 
+              onClick={() => {
+                setConfigMode('existing');
+                setStatus('idle');
+                setConnectionString(''); 
+              }}
+              className="text-sm text-gray-500 hover:text-blue-600 underline"
+            >
+              Connect to a different database
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'success') {
+    return (
+      <div className="p-8 max-w-6xl mx-auto">
+        <div className="bg-white rounded-xl border border-gray-200 p-12 mt-12 text-center max-w-2xl mx-auto flex flex-col items-center">
+          <div className="flex items-center justify-center size-20 bg-green-100 rounded-full mb-6 text-green-600">
+            <CheckCircle className="size-10" />
+          </div>
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">Database Ready!</h2>
+          <p className="text-gray-600 mb-8 max-w-md">
+            Your database connection has been successfully configured. You're all set to start querying and analyzing your data.
+          </p>
+          
+          <div className="bg-gray-50 p-4 rounded-lg w-full mb-8 border border-gray-100 font-mono text-sm text-gray-700 truncate text-left break-all">
+            <span className="font-semibold text-gray-500 mr-2 uppercase text-xs">Connection String</span><br/>
+            {connectionString || '••••••••'}
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
+            {onNavigate && (
+              <>
+                <button
+                  onClick={() => onNavigate('dashboard')}
+                  className="px-6 py-3 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  View Dashboard
+                </button>
+                <button
+                  onClick={() => onNavigate('query')}
+                  className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <MessageSquare className="size-5" />
+                  Start Querying
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-8 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-3">
-          <Database className="size-8 text-blue-600" />
-          <h1 className="text-3xl font-bold text-gray-900">Database Configuration</h1>
-        </div>
-        <p className="text-gray-600">
-          Connect your database or create a new PostgreSQL database to enable natural language queries.
-        </p>
-      </div>
+      <div className="w-full">
+          {/* Header */}
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-3">
+              <Database className="size-8 text-blue-600" />
+              <h1 className="text-3xl font-bold text-gray-900">Database Configuration</h1>
+            </div>
+            <p className="text-gray-600">
+              Connect your database or create a new PostgreSQL database to enable natural language queries.
+            </p>
+          </div>
 
-      {/* Mode Toggle */}
-      <div className="bg-white rounded-xl border border-gray-200 p-2 mb-6 inline-flex">
-        <button
-          onClick={() => setConfigMode('existing')}
-          className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'existing'
-            ? 'bg-blue-600 text-white'
-            : 'text-gray-600 hover:bg-gray-100'
-            }`}
-        >
-          Connect Existing Database
-        </button>
-        <button
-          onClick={() => setConfigMode('create')}
-          className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'create'
-            ? 'bg-blue-600 text-white'
+          {/* Mode Toggle */}
+          <div className="bg-white rounded-xl border border-gray-200 p-2 mb-6 inline-flex">
+            <button
+              onClick={() => { setConfigMode('existing'); setStatus('idle'); }}
+              className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'existing'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+                }`}
+            >
+              Connect Existing Database
+            </button>
+            <button
+              onClick={() => { setConfigMode('create'); setStatus('idle'); }}
+              className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'create'
+                ? 'bg-blue-600 text-white'
             : 'text-gray-600 hover:bg-gray-100'
             }`}
         >
@@ -211,17 +340,13 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
           </div>
 
           {/* Status Message */}
-          {status === 'success' && (
-            <div className="flex items-center gap-2 p-4 bg-green-50 border border-green-200 rounded-lg text-green-700">
-              <CheckCircle className="size-5" />
-              <span className="font-medium">Connection successful! Found {tables.length} tables.</span>
-            </div>
-          )}
-
           {status === 'error' && (
-            <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-              <AlertCircle className="size-5" />
-              <span className="font-medium">Connection failed. Please check your connection string.</span>
+            <div className="flex items-start gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+              <AlertCircle className="size-5 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Connection Failed</p>
+                <p className="text-sm mt-1">{errorMessage}</p>
+              </div>
             </div>
           )}
 
@@ -343,62 +468,30 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
         <div className="bg-white rounded-xl border border-gray-200 p-8 space-y-6">
           <div className="flex items-center gap-2 mb-4">
             <Plus className="size-6 text-blue-600" />
-            <h2 className="text-xl font-bold text-gray-900">Create New PostgreSQL Database</h2>
+            <h2 className="text-xl font-bold text-gray-900">Create New Database User</h2>
           </div>
+          <p className="text-sm text-gray-500 mb-6">Create a dedicated user for an existing database or provision a brand new database.</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Host
+                Available Databases
               </label>
-              <input
-                type="text"
-                value={createForm.host}
-                onChange={(e) => setCreateForm({ ...createForm, host: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+              <select
+                value={createForm.newDbName}
+                onChange={(e) => setCreateForm({ ...createForm, newDbName: e.target.value })}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+              >
+                <option value="">-- Select an existing database or type a new one below --</option>
+                {availableDatabases.map((db, idx) => (
+                  <option key={idx} value={db}>{db}</option>
+                ))}
+              </select>
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Port
-              </label>
-              <input
-                type="text"
-                value={createForm.port}
-                onChange={(e) => setCreateForm({ ...createForm, port: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Admin User
-              </label>
-              <input
-                type="text"
-                value={createForm.adminUser}
-                onChange={(e) => setCreateForm({ ...createForm, adminUser: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Admin Password *
-              </label>
-              <input
-                type="password"
-                value={createForm.adminPassword}
-                onChange={(e) => setCreateForm({ ...createForm, adminPassword: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                New Database Name *
+                Or Enter New Database Name *
               </label>
               <input
                 type="text"
@@ -436,34 +529,21 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
                 required
               />
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Email (Optional)
-              </label>
-              <input
-                type="email"
-                value={createForm.email}
-                onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                placeholder="admin@example.com"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
           </div>
 
-          {status === 'success' && (
-            <div className="flex items-center gap-2 p-4 bg-green-50 border border-green-200 rounded-lg text-green-700">
-              <CheckCircle className="size-5" />
-              <div className="flex-1">
-                <p className="font-medium">Database created successfully!</p>
-                <p className="text-sm mt-1 font-mono">{connectionString}</p>
+          {status === 'error' && (
+            <div className="flex items-start gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+              <AlertCircle className="size-5 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Creation Failed</p>
+                <p className="text-sm mt-1">{errorMessage}</p>
               </div>
             </div>
           )}
 
           <button
             onClick={handleCreateDatabase}
-            disabled={isLoading || !createForm.adminPassword || !createForm.newDbName || !createForm.newUser || !createForm.newPassword}
+            disabled={isLoading || !createForm.newDbName || !createForm.newUser || !createForm.newPassword}
             className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
           >
             {isLoading ? (
@@ -487,6 +567,7 @@ export function DatabaseConfig({ onConfigured }: DatabaseConfigProps) {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
