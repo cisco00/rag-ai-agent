@@ -4,9 +4,10 @@ import { api } from '../../lib/api';
 
 interface DataManagementProps {
     apiKey: string;
+    onConfigured?: () => void;
 }
 
-export function DataManagement({ apiKey }: DataManagementProps) {
+export function DataManagement({ apiKey, onConfigured }: DataManagementProps) {
     const [tables, setTables] = useState<string[]>([]);
     const [selectedTable, setSelectedTable] = useState<string>('');
     const [tableData, setTableData] = useState<any>(null);

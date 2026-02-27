@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 
 interface FileImportProps {
   apiKey: string;
+  onConfigured: () => void;
 }
 
 interface ImportedFile {
@@ -22,7 +23,7 @@ interface FileAnalysis {
   dataTypes: Record<string, string>;
 }
 
-export function FileImport({ }: FileImportProps) {
+export function FileImport({ onConfigured }: FileImportProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single');
   const [ifExists, setIfExists] = useState('replace');
@@ -121,6 +122,8 @@ export function FileImport({ }: FileImportProps) {
           rows: res.rows_imported,
           tableName: res.table_name,
         }]);
+        // Notify parent that a DB might have been auto-provisioned
+        onConfigured();
       } else {
         const formData = new FormData();
         files.forEach(f => formData.append('files', f));
@@ -137,6 +140,10 @@ export function FileImport({ }: FileImportProps) {
         }));
 
         setImportedFiles(prev => [...prev, ...results]);
+        // Notify parent that a DB might have been auto-provisioned
+        if (results.some((r: any) => r.status === 'success')) {
+          onConfigured();
+        }
       }
     } catch (err: any) {
       console.error(err);

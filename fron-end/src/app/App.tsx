@@ -60,8 +60,8 @@ export default function App() {
             onNavigate={(view) => setCurrentView(view as View)}
           />
         )}
-        {currentView === 'management' && <DataManagement apiKey={apiKey} />}
-        {currentView === 'import' && <FileImport apiKey={apiKey} />}
+        {currentView === 'management' && <DataManagement apiKey={apiKey} onConfigured={() => setIsConfigured(true)} />}
+        {currentView === 'import' && <FileImport apiKey={apiKey} onConfigured={() => setIsConfigured(true)} />}
         {currentView === 'query' && <QueryInterface apiKey={apiKey} />}
         {currentView === 'reports' && <Reports apiKey={apiKey} />}
         {currentView === 'scheduled' && <ScheduledReports apiKey={apiKey} />}
