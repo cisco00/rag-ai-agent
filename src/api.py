@@ -1151,27 +1151,24 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
             raise HTTPException(status_code=500, detail="Failed to initialize AI")
 
         # Describe the capabilities
-        operations_spec = """
-You are a translation layer between natural language and a pandas-backed data transformation pipeline.
-Based on the user's intent, respond exclusively with a JSON list of operation objects.
-
-SUPPORTED OPERATIONS (type field):
-1. 'clean_text': {"type": "clean_text", "column": "col_name", "clean_type": "lower|upper|trim|title|remove_special"}
-2. 'filter': {"type": "filter", "column": "col_name", "op": ">|<|==|!=|>=|<=", "value": any}
-3. 'rename_col': {"type": "rename_col", "column": "old_name", "new_name": "new_name"}
-4. 'drop_col': {"type": "drop_col", "column": "col_name"}
-5. 'change_type': {"type": "change_type", "column": "col_name", "new_type": "int|float|str|datetime|bool"}
-6. 'fill_na': {"type": "fill_na", "column": "col_name", "method": "value|mean|median|mode", "value": any}
-7. 'drop_duplicates': {"type": "clean", "method": "drop_duplicates", "subset": "col_name"}
-8. 'remove_outliers': {"type": "clean", "method": "remove_outliers", "column": "col_name", "outlier_method": "z-score", "threshold": 3.0}
-
-SCHEMA OF DATABASE:
-{schema_summary}
-
-Analyze the user's prompt carefully against the schema for the table '{table_name}'. 
-Output ONLY valid JSON representing the list of operations to perform. Do not use Markdown JSON block wrappers.
-Example: [{"type": "clean_text", "column": "first_name", "clean_type": "title"}]
-"""
+        operations_spec = (
+            "You are a translation layer between natural language and a pandas-backed data transformation pipeline.\n"
+            "Based on the user's intent, respond exclusively with a JSON list of operation objects.\n\n"
+            "SUPPORTED OPERATIONS (type field):\n"
+            "1. clean_text: {\"type\": \"clean_text\", \"column\": \"col_name\", \"clean_type\": \"lower|upper|trim|title|remove_special\"}\n"
+            "2. filter: {\"type\": \"filter\", \"column\": \"col_name\", \"op\": \">|<|==|!=|>=|<=\", \"value\": \"any\"}\n"
+            "3. rename_col: {\"type\": \"rename_col\", \"column\": \"old_name\", \"new_name\": \"new_name\"}\n"
+            "4. drop_col: {\"type\": \"drop_col\", \"column\": \"col_name\"}\n"
+            "5. change_type: {\"type\": \"change_type\", \"column\": \"col_name\", \"new_type\": \"int|float|str|datetime|bool\"}\n"
+            "6. fill_na: {\"type\": \"fill_na\", \"column\": \"col_name\", \"method\": \"value|mean|median|mode\", \"value\": \"any\"}\n"
+            "7. drop_duplicates: {\"type\": \"clean\", \"method\": \"drop_duplicates\", \"subset\": \"col_name\"}\n"
+            "8. remove_outliers: {\"type\": \"clean\", \"method\": \"remove_outliers\", \"column\": \"col_name\", \"outlier_method\": \"z-score\", \"threshold\": 3.0}\n\n"
+            "SCHEMA OF DATABASE:\n"
+            "{schema_summary}\n\n"
+            "Analyze the user prompt carefully against the schema for table '{table_name}'.\n"
+            "Output ONLY valid JSON. Do not use Markdown code fences.\n"
+            "Example: [{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\"}]"
+        )
 
         user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"
 
