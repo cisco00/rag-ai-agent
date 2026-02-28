@@ -188,7 +188,7 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
         }
       };
 
-      ws.onclose = (event) => {
+      ws.onclose = (_event) => {
         if (!wsConnected && !started) {
           clearTimeout(wsTimeout);
           startPolling();

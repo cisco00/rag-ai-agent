@@ -3,8 +3,8 @@
 ## Executive Summary
 
 **Product Name:** Vantage AI: Commercial Analytics Portal  
-**Version:** 1.0  
-**Last Updated:** January 22, 2026  
+**Version:** 2.0  
+**Last Updated:** February 28, 2026  
 **Document Owner:** Product Team
 
 ### Vision
@@ -349,6 +349,138 @@ GET /health
 
 ---
 
+### 9. Advanced Analytics
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Time-series forecasting using Holt-Winters Exponential Smoothing
+- Anomaly detection using Isolation Forest
+- Correlation matrix analysis
+- Dropdown-based table and column selection
+- Automatic column detection from connected database
+- Data downsampling for large tables (>10,000 rows) to prevent browser timeouts
+
+#### Features
+- **Time Series Forecast:** Select a date column and value column, choose forecast horizon (7–90 periods) and frequency (Daily, Hourly, Weekly, Monthly)
+- **Anomaly Detection:** Identify outliers in any numeric column with configurable contamination rate
+- **Correlation Matrix:** Heatmap-style correlation analysis for multiple numeric columns
+
+#### User Stories
+- As a **data analyst**, I want to forecast future values of a metric without writing any code
+- As a **business analyst**, I want to see which columns are correlated to identify patterns
+- As a **data manager**, I want to detect unusual spikes or drops in my data automatically
+
+#### Technical Specifications
+- Forecast engine: `statsmodels` Holt-Winters (with multi-stage fallback to Simple ES)
+- Anomaly engine: `sklearn` IsolationForest
+- SQL row limit: 10,000 rows per analytics request to prevent timeouts
+- Output downsampling: forecasts resampled to requested frequency; anomaly capped at 2,000 display points
+- Response format aligned with recharts chart library: `[{date, actual, forecast}]`
+
+#### API Endpoints
+```
+POST /analytics/forecast
+  Headers: X-API-KEY
+  Request: {"table_name": "...", "date_column": "...", "value_column": "...", "periods": 30, "freq": "D"}
+  Response: {historical: {dates, values}, forecast: {dates, values}, model_type: "..."}
+
+POST /analytics/anomaly
+  Headers: X-API-KEY
+  Request: {"table_name": "...", "value_column": "...", "contamination": 0.05}
+  Response: {anomalies: {...}, total_points: N, anomaly_count: M}
+
+POST /analytics/correlation
+  Headers: X-API-KEY
+  Request: {"table_name": "...", "columns": [...], "method": "pearson"}
+  Response: {columns: [...], matrix: [[...]], method: "pearson"}
+```
+
+---
+
+### 10. Real-Time Data Streaming
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Live monitoring of database table data via WebSocket
+- Hybrid WebSocket + HTTP polling fallback for maximum compatibility
+- Dynamic table and column selection
+- Live line chart with configurable buffer size (10–200 points)
+- Automatic replay mode for static/historical datasets
+- Connection status indicator (Live / Connecting / Failed)
+
+#### Features
+- **Live Streaming:** WebSocket connection to `/ws/stream/{table}` for genuinely live tables
+- **Replay Mode (HTTP Polling):** For static historical tables, automatically falls back to HTTP polling, cycling through rows at 1.5-second intervals
+- **Live Stats:** Derived current, average, min, and max values for the first selected column
+- **Recent Data Table:** Shows the last 10 received data points in a tabular view
+
+#### User Stories
+- As a **data engineer**, I want to monitor my production database metrics in real time
+- As an **analyst**, I want to see a live chart of sensor readings without refreshing the page
+- As a **manager**, I want to see current vs average metrics at a glance
+
+#### Technical Specifications
+- WebSocket endpoint: `/ws/stream/{table_name}?api_key={key}`
+- Poll interval: 2 seconds (WS server), 1.5 seconds (HTTP fallback)
+- Replay dataset: last 500 rows of table
+- WS fallback timeout: 5 seconds
+- Chart library: `recharts` `LineChart` with `isAnimationActive={false}` for performance
+
+#### API Endpoints
+```
+WS /ws/stream/{table_name}?api_key={key}
+  Message format: {"timestamp": "...", "col1": value, "col2": value, ...}
+```
+
+---
+
+### 11. Data Management
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- View and browse all tables in the connected database
+- Paginated table preview with inline editing
+- Add, edit, and delete rows
+- Import CSV/Excel files directly from the Data Management screen
+- Fill missing values with AI-suggested imputation strategies
+
+#### Features
+- **Table Browser:** Lists all tables with row counts; click to preview data
+- **Inline Edit:** Click any cell to edit values in-place
+- **Row Operations:** Add new rows and delete existing rows
+- **Missing Value Analysis:** Automatically calculates % missing per column and suggests mean (numeric) or mode (categorical) imputation
+- **Data Import:** Upload CSV/Excel from the Data Management UI
+
+#### User Stories
+- As a **data manager**, I want to fix incorrect values in my database directly from the UI
+- As a **data analyst**, I want to fill missing values with sensible defaults before running analysis
+- As a **business user**, I want to import new data without leaving the analytics interface
+
+---
+
+### 12. Scheduled Reports
+
+**Priority:** P2 (Medium)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Schedule recurring queries to run automatically
+- Configurable frequency (hourly, daily, weekly, monthly)
+- View and manage existing scheduled reports
+- Integration with export formats (PDF/PPTX)
+
+#### User Stories
+- As a **manager**, I want a daily sales summary delivered automatically
+- As an **executive**, I want a weekly KPI report without any manual steps
+
+---
+
 ## Technical Architecture
 
 ### Technology Stack
@@ -472,14 +604,20 @@ Headers: X-API-KEY: <your_api_key>
 | `/register` | POST | ❌ | Create organization |
 | `/config` | POST | ✅ | Configure database |
 | `/tables` | GET | ✅ | List database tables |
+| `/tables/{name}/preview` | GET | ✅ | Preview table data |
 | `/import` | POST | ✅ | Import single file |
 | `/import/batch` | POST | ✅ | Import multiple files |
 | `/upload` | POST | ✅ | Temporary file upload |
+| `/analyze-file` | POST | ✅ | Analyze file before import |
 | `/query` | POST | ✅ | Natural language query |
 | `/share` | POST | ✅ | Create shareable report |
 | `/shared/{id}` | GET | ❌ | View shared report |
 | `/export/pdf` | POST | ✅ | Export report as PDF |
 | `/export/pptx` | POST | ✅ | Export report as PPTX |
+| `/analytics/forecast` | POST | ✅ | Time-series forecasting |
+| `/analytics/anomaly` | POST | ✅ | Anomaly detection |
+| `/analytics/correlation` | POST | ✅ | Correlation matrix |
+| `WS /ws/stream/{table}` | WS | ✅ | Real-time data streaming |
 
 ---
 
@@ -581,27 +719,30 @@ python3 src/api.py
 
 ## Future Roadmap
 
-### Phase 2 (Q2 2026)
-- 🔲 Web-based dashboard UI
-- 🔲 User management within organizations
-- 🔲 Query history and favorites
-- 🔲 Scheduled reports
-- 🔲 Email notifications
+### Phase 2 — Completed (Q1 2026)
+- ✅ Web-based dashboard UI (React + Next.js)
+- ✅ Query history and chat session management
+- ✅ Scheduled reports
+- ✅ Advanced analytics (forecasting, anomaly detection, correlation)
+- ✅ Real-time data streaming (WebSocket + HTTP polling fallback)
+- ✅ Data management UI (inline edit, row add/delete, missing value fill)
+- ✅ File analysis before import ("Analyze Before Import")
+- ✅ PDF and PowerPoint export
 
-### Phase 3 (Q3 2026)
-- 🔲 Advanced visualizations (heatmaps, treemaps)
-- ✅ PDF export functionality
-- ✅ PowerPoint export functionality
+### Phase 3 (Q2 2026)
+- 🔲 Advanced visualizations (heatmaps, treemaps, candlestick)
 - 🔲 Custom branding per organization
 - 🔲 Webhook integrations
-- 🔲 Real-time data streaming
+- 🔲 User management and RBAC within organizations
+- 🔲 Email notifications and report delivery
 
-### Phase 4 (Q4 2026)
+### Phase 4 (Q3–Q4 2026)
 - 🔲 Mobile app (iOS/Android)
-- 🔲 Slack/Teams integration
-- 🔲 Advanced analytics (forecasting, anomaly detection)
+- 🔲 Slack / Microsoft Teams integration
 - 🔲 Multi-language support
 - 🔲 On-premise deployment option
+- 🔲 Rate limiting and API key rotation
+- 🔲 Audit logging
 
 ---
 
@@ -648,6 +789,6 @@ python3 src/api.py
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** January 22, 2026  
-**Next Review:** April 22, 2026
+**Document Version:** 2.0  
+**Last Updated:** February 28, 2026  
+**Next Review:** May 28, 2026
