@@ -276,3 +276,14 @@ Please save this API key securely. You will need it to access your organization'
 
 Welcome to Vantage AI!
 
+To: pat@gmail.com
+Subject: Database Connected Successfully
+
+Hello,
+
+Your database connection for organization 'pat' has been verified and successfully linked to your account.
+You can now start querying your tables via the dashboard!
+
+Thanks,
+The RAG AI Agent Team
+

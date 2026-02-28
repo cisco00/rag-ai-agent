@@ -643,7 +643,7 @@ async def import_file_to_database(
         original_cols = len(df.columns)
         
         # Create database manager with org's connection string
-        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        db_manager = DatabaseManager(connection_string=db_conn)
         
         # Create file uploader instance
         uploader = FileUploader(db_manager)
@@ -758,7 +758,7 @@ async def import_multiple_files(
     
     # Create database manager with org's connection string
     try:
-        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        db_manager = DatabaseManager(connection_string=db_conn)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     uploader = FileUploader(db_manager)
@@ -1032,7 +1032,7 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
              # Auto-provision (reuse logic or error)
              raise HTTPException(status_code=400, detail="Organization has no database configured")
              
-        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        db_manager = DatabaseManager(connection_string=db_conn)
         success = db_manager.load_dataframe(df, request.table_name, if_exists=request.if_exists)
         db_manager.close()
         
@@ -1062,9 +1062,9 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
 async def transform_data(request: TransformRequest, org=Depends(get_current_org)):
     """Apply transformations to a table."""
     try:
-        db_conn = org.db_connection_string
+        db_conn = get_org_connection_string(org)
         if not db_conn:
-            raise HTTPException(status_code=400, detail="No database configured")
+            raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
             
         import pandas as pd
         from transformations import DataTransformer
@@ -1191,21 +1191,21 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
 async def get_forecast(request: ForecastRequest, org=Depends(get_current_org)):
     """Generate a time-series forecast."""
     try:
-        db_conn = org.db_connection_string
+        db_conn = get_org_connection_string(org)
         if not db_conn:
-            raise HTTPException(status_code=400, detail="No database configured")
+            raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
             
         import pandas as pd
         db_manager = DatabaseManager(connection_string=db_conn)
         
-        # Load data (restricted columns)
-        query = f"SELECT {request.date_column}, {request.value_column} FROM {request.table_name}"
+        # Load data — limit to 10,000 rows to prevent timeouts on large tables
+        query = f"SELECT {request.date_column}, {request.value_column} FROM {request.table_name} LIMIT 10000"
         df = pd.read_sql(query, db_manager.get_engine())
         db_manager.close()
         
         result = perform_forecast(df, request.date_column, request.value_column, request.periods, request.freq)
         
-        if "error" in result:
+        if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
              
         return result
@@ -1218,21 +1218,21 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org)):
 async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org)):
     """Detect anomalies in a dataset."""
     try:
-        db_conn = org.db_connection_string
+        db_conn = get_org_connection_string(org)
         if not db_conn:
-             raise HTTPException(status_code=400, detail="No database configured")
+             raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
              
         import pandas as pd
         db_manager = DatabaseManager(connection_string=db_conn)
         
-        # Load data
-        query = f"SELECT {request.value_column} FROM {request.table_name}"
+        # Load data — limit rows to prevent timeouts on large tables
+        query = f"SELECT {request.value_column} FROM {request.table_name} LIMIT 10000"
         df = pd.read_sql(query, db_manager.get_engine())
         db_manager.close()
         
         result = detect_anomalies(df, request.value_column, request.contamination)
         
-        if "error" in result:
+        if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
              
         return result
@@ -1243,33 +1243,120 @@ async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org)):
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-@app.websocket("/ws/stream/{source_id}")
-async def websocket_endpoint(websocket: WebSocket, source_id: int):
+@app.websocket("/ws/stream/{table_name}")
+async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Optional[str] = None):
     """
-    Simulate real-time data streaming.
+    Stream real data from a database table.
     """
     await websocket.accept()
-    try:
-        import asyncio
-        import random
-        import json
+    logger.info(f"WebSocket connection accepted for table: {table_name}")
+    
+    # Authenticate and get organization
+    if not api_key:
+        await websocket.close(code=4003) # Unauthorized
+        return
         
-        # Simulate data stream
-        while True:
-            # Generate random data point
-            data = {
-                "source_id": source_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "value": random.uniform(10, 100),
-                "status": random.choice(["ok", "warning", "critical"])
-            }
-            await websocket.send_text(json.dumps(data))
-            await asyncio.sleep(1) # Send every second
+    try:
+        org = get_org_by_api_key(api_key)
+        if not org:
+            await websocket.close(code=4003)
+            return
+            
+        conn_str = get_org_connection_string(org)
+        if not conn_str:
+            await websocket.close(code=4000) # No DB configured
+            return
+
+        import asyncio
+        import json
+        from database import DatabaseManager
+        
+        db = DatabaseManager(connection_string=conn_str)
+        
+        try:
+            # First, determine total row count and check if the table is live or static
+            dialect = db.engine.dialect.name
+            id_col = "ctid" if dialect == 'postgresql' else "rowid"
+            
+            count_results = db.execute_query(f"SELECT COUNT(*) as cnt FROM {table_name}")
+            total_rows = count_results[0]['cnt'] if count_results else 0
+            
+            if total_rows == 0:
+                await websocket.send_text(json.dumps({"error": "Table is empty"}))
+                await websocket.close()
+                return
+            
+            # Start streaming from a recent slice of the data (last 500 rows)
+            offset = max(0, total_rows - 500)
+            replay_offset = 0
+            last_sent_id = None
+            consecutive_no_new = 0
+            REPLAY_MODE_THRESHOLD = 3  # After 3 polls with no new data, switch to replay mode
+            replay_mode = False
+            replay_rows = []
+            replay_index = 0
+
+            while True:
+                try:
+                    if not replay_mode:
+                        # Try to get the latest row (live mode)
+                        query = f"SELECT *, {id_col} as _stream_id FROM {table_name} ORDER BY {id_col} DESC LIMIT 1"
+                        results = db.execute_query(query)
+                        if results:
+                            point = results[0]
+                            current_id = point.get("_stream_id")
+                            
+                            if current_id != last_sent_id:
+                                # New row found - send it
+                                if "timestamp" not in point:
+                                    point["timestamp"] = datetime.utcnow().isoformat()
+                                point.pop("_stream_id", None)
+                                await websocket.send_text(json.dumps(point, default=str))
+                                last_sent_id = current_id
+                                consecutive_no_new = 0
+                            else:
+                                consecutive_no_new += 1
+                                if consecutive_no_new >= REPLAY_MODE_THRESHOLD:
+                                    # Switch to replay mode - load a window of rows to cycle through
+                                    logger.info(f"Switching to replay mode for static table: {table_name}")
+                                    replay_mode = True
+                                    replay_rows = db.execute_query(
+                                        f"SELECT * FROM {table_name} LIMIT 500 OFFSET {offset}"
+                                    )
+                                    replay_index = 0
+                    else:
+                        # Replay mode: cycle through rows to simulate a live stream
+                        if replay_rows and replay_index < len(replay_rows):
+                            point = dict(replay_rows[replay_index])
+                            replay_index += 1
+                        else:
+                            # Loop back to the start
+                            replay_index = 0
+                            if replay_rows:
+                                point = dict(replay_rows[replay_index])
+                                replay_index = 1
+                            else:
+                                point = {}
+                        
+                        if point:
+                            # Always add a fresh timestamp so the chart X-axis is meaningful
+                            point["timestamp"] = datetime.utcnow().isoformat()
+                            await websocket.send_text(json.dumps(point, default=str))
+
+                except Exception as e:
+                    logger.error(f"Streaming query error for {table_name}: {e}")
+                    await asyncio.sleep(2)
+                    continue
+
+                await asyncio.sleep(2)  # Poll/stream interval
+                
+        finally:
+            db.close()
             
     except WebSocketDisconnect:
-        logger.info(f"Client disconnected from stream {source_id}")
+        logger.info(f"Client disconnected from stream {table_name}")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error in {table_name}: {e}")
         try:
              await websocket.close()
         except:
@@ -2014,18 +2101,23 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
     # 1. Get DB Connection
     # org is already retrieved by Depends
     
-    if not org.db_connection_string:
-         raise HTTPException(status_code=400, detail="Database not configured")
+    db_conn = get_org_connection_string(org)
+    
+    if not db_conn:
+         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
          
     # 2. Fetch Data
     try:
-        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        db_manager = DatabaseManager(connection_string=db_conn)
         # Verify table exists
         if request.table_name not in db_manager.list_tables():
             db_manager.close()
             raise HTTPException(status_code=404, detail=f"Table '{request.table_name}' not found")
             
-        df = db_manager.get_table_data(request.table_name)
+        # Limit rows to prevent timeouts on large tables
+        import pandas as pd
+        col_list = ", ".join(request.columns) if request.columns else "*"
+        df = pd.read_sql(f"SELECT {col_list} FROM {request.table_name} LIMIT 10000", db_manager.get_engine())
         db_manager.close()
         
         # 3. Calculate Correlation

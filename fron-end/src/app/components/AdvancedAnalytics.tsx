@@ -23,6 +23,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     dateColumn: 'date',
     valueColumn: 'revenue',
     periods: 30,
+    freq: 'D',
   });
 
   // Anomaly configuration
@@ -41,23 +42,66 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
   const [tables, setTables] = useState<string[]>([]);
   const [forecastColumns, setForecastColumns] = useState<string[]>([]);
+  const [anomalyColumns, setAnomalyColumns] = useState<string[]>([]);
+  const [correlationColumnsList, setCorrelationColumnsList] = useState<string[]>([]);
 
   useEffect(() => {
     fetchTables();
   }, []);
 
   useEffect(() => {
-    const fetchForecastColumns = async () => {
+    const fetchForecastCols = async () => {
       if (!forecastConfig.table) return;
       try {
         const data = await api.get<any>(`/tables/${forecastConfig.table}/preview?limit=1`);
         if (data && data.columns) {
-          setForecastColumns(data.columns.map((c: any) => c.name));
+          const cols = data.columns.map((c: any) => c.name);
+          setForecastColumns(cols);
+          // Auto-select defaults
+          if (cols.length > 0) {
+            const dateCol = cols.find((c: string) => c.toLowerCase().includes('date') || c.toLowerCase().includes('time')) || cols[0];
+            const valCol = cols.find((c: string) => c !== dateCol) || cols[0];
+            setForecastConfig(prev => ({ ...prev, dateColumn: dateCol, valueColumn: valCol }));
+          }
         }
-      } catch { /* silently ignore */ }
+      } catch { /* ignore */ }
     };
-    fetchForecastColumns();
+    fetchForecastCols();
   }, [forecastConfig.table]);
+
+  useEffect(() => {
+    const fetchAnomalyCols = async () => {
+      if (!anomalyConfig.table) return;
+      try {
+        const data = await api.get<any>(`/tables/${anomalyConfig.table}/preview?limit=1`);
+        if (data && data.columns) {
+          const cols = data.columns.map((c: any) => c.name);
+          setAnomalyColumns(cols);
+          if (cols.length > 0) {
+            setAnomalyConfig(prev => ({ ...prev, valueColumn: cols[0] }));
+          }
+        }
+      } catch { /* ignore */ }
+    };
+    fetchAnomalyCols();
+  }, [anomalyConfig.table]);
+
+  useEffect(() => {
+    const fetchCorrCols = async () => {
+      if (!correlationConfig.table) return;
+      try {
+        const data = await api.get<any>(`/tables/${correlationConfig.table}/preview?limit=1`);
+        if (data && data.columns) {
+          const cols = data.columns.map((c: any) => c.name);
+          setCorrelationColumnsList(cols);
+          if (cols.length >= 2) {
+            setCorrelationConfig(prev => ({ ...prev, columns: cols.slice(0, 4) }));
+          }
+        }
+      } catch { /* ignore */ }
+    };
+    fetchCorrCols();
+  }, [correlationConfig.table]);
 
   const fetchTables = async () => {
     try {
@@ -80,14 +124,43 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     setIsProcessing(true);
 
     try {
-      const resp = await api.post<any[]>('/analytics/forecast', {
+      const resp = await api.post<any>('/analytics/forecast', {
         table_name: forecastConfig.table,
         date_column: forecastConfig.dateColumn,
         value_column: forecastConfig.valueColumn,
         periods: forecastConfig.periods,
-        freq: 'D'
+        freq: forecastConfig.freq
       });
-      setForecastData(resp);
+
+      // Handle multiple server response formats
+      let chartData: any[] = [];
+      if (Array.isArray(resp)) {
+        // Format: [{date, actual, forecast}, ...]
+        chartData = resp;
+      } else if (resp && resp.historical && resp.forecast) {
+        // Format: {historical: {dates, values}, forecast: {dates, values}}
+        const hist = resp.historical;
+        const fcast = resp.forecast;
+        const histDates: string[] = hist.dates || [];
+        const histVals: number[] = hist.values || [];
+        const fcastDates: string[] = fcast.dates || [];
+        const fcastVals: number[] = fcast.values || [];
+        // Build merged map
+        const merged: Record<string, any> = {};
+        histDates.forEach((d, i) => {
+          merged[d] = { date: d, actual: histVals[i] };
+        });
+        fcastDates.forEach((d, i) => {
+          if (merged[d]) {
+            merged[d].forecast = fcastVals[i];
+          } else {
+            merged[d] = { date: d, forecast: fcastVals[i] };
+          }
+        });
+        chartData = Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+      }
+
+      setForecastData(chartData);
     } catch (err: any) {
       console.error(err);
       alert(`Forecast failed: ${err.message}`);
@@ -106,7 +179,29 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         value_column: anomalyConfig.valueColumn,
         contamination: anomalyConfig.contamination
       });
-      setAnomalyData(resp.data);
+
+      // Handle multiple server response formats
+      let plotData: any[] = [];
+      if (resp && (resp.data || resp.anomalies)) {
+        const raw = resp.data ?? resp.anomalies;
+        if (Array.isArray(raw)) {
+          // Format: [{index, value, isAnomaly}, ...]
+          plotData = raw;
+        } else if (typeof raw === 'object') {
+          // Format: {index: value, ...} dict — anomalies only (no normal points)
+          // We need to mark these as anomalies and infer a full dataset
+          // Fallback: show only anomaly points
+          plotData = Object.entries(raw).map(([idx, val]: [string, any]) => ({
+            index: parseInt(idx),
+            value: typeof val === 'object' ? val.value ?? val : val,
+            isAnomaly: true
+          })).sort((a, b) => a.index - b.index);
+        }
+      } else if (Array.isArray(resp)) {
+        plotData = resp;
+      }
+
+      setAnomalyData(plotData);
     } catch (err: any) {
       console.error(err);
       alert(`Anomaly detection failed: ${err.message}`);
@@ -128,8 +223,11 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         columns: correlationConfig.columns,
         method: correlationConfig.method
       });
-      setCorrelationColumns(correlationConfig.columns);
-      setCorrelationData(resp.correlation_matrix);
+      // Handle both 'correlation_matrix' and 'matrix' key names
+      const cols: string[] = resp.columns || correlationConfig.columns;
+      const matrix: number[][] = resp.correlation_matrix ?? resp.matrix ?? [];
+      setCorrelationColumns(cols);
+      setCorrelationData(matrix);
     } catch (err: any) {
       console.error(err);
       alert(`Correlation analysis failed: ${err.message}`);
@@ -241,14 +339,30 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Forecast Periods
                 </label>
-                <input
-                  type="number"
+                <select
                   value={forecastConfig.periods}
                   onChange={(e) => setForecastConfig({ ...forecastConfig, periods: parseInt(e.target.value) })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  max="365"
-                />
+                >
+                  {[7, 14, 30, 60, 90].map(p => <option key={p} value={p}>{p} units</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data Frequency
+                </label>
+                <select
+                  value={forecastConfig.freq}
+                  onChange={(e) => setForecastConfig({ ...forecastConfig, freq: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="D">Daily</option>
+                  <option value="h">Hourly</option>
+                  <option value="W">Weekly</option>
+                  <option value="MS">Monthly</option>
+                  <option value="B">Business Daily</option>
+                </select>
               </div>
 
               <button
@@ -364,12 +478,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Value Column
                 </label>
-                <input
-                  type="text"
+                <select
                   value={anomalyConfig.valueColumn}
                   onChange={(e) => setAnomalyConfig({ ...anomalyConfig, valueColumn: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
+                >
+                  <option value="">Select column...</option>
+                  {anomalyColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
 
               <div>
@@ -491,15 +607,23 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Columns (comma-separated)
                 </label>
-                <input
-                  type="text"
-                  value={correlationConfig.columns.join(', ')}
-                  onChange={(e) => setCorrelationConfig({
-                    ...correlationConfig,
-                    columns: e.target.value.split(',').map(c => c.trim())
-                  })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
+                <div className="flex flex-wrap gap-2">
+                  {correlationColumnsList.map(c => (
+                    <label key={c} className="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={correlationConfig.columns.includes(c)}
+                        onChange={(e) => {
+                          const newCols = e.target.checked
+                            ? [...correlationConfig.columns, c]
+                            : correlationConfig.columns.filter(col => col !== c);
+                          setCorrelationConfig({ ...correlationConfig, columns: newCols });
+                        }}
+                      />
+                      <span className="text-sm">{c}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
               <div>

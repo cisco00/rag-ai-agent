@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Radio, Play, Pause, RotateCcw, Activity } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../../lib/api';
@@ -14,7 +14,7 @@ interface DataPoint {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
 
-export function RealTimeStreaming({ }: RealTimeStreamingProps) {
+export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [dataPoints, setDataPoints] = useState<DataPoint[]>([]);
   const [maxDataPoints, setMaxDataPoints] = useState(50);
@@ -64,7 +64,7 @@ export function RealTimeStreaming({ }: RealTimeStreamingProps) {
   // WebSocket lifecycle
   useEffect(() => {
     if (isStreaming && selectedTable) {
-      const wsUrl = `ws://localhost:8000/ws/stream/${selectedTable}`;
+      const wsUrl = `ws://localhost:8000/ws/stream/${selectedTable}?api_key=${apiKey}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

@@ -24,46 +24,73 @@ def perform_forecast(
         
     try:
         # Prepare data
-        df[date_col] = pd.to_datetime(df[date_col])
-        ts_data = df.set_index(date_col)[value_col].sort_index()
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df = df.dropna(subset=[date_col, value_col])
         
-        # Handle duplicates by taking mean
-        ts_data = ts_data.groupby(level=0).mean()
-        
-        # Fill missing values if any (needed for TSA)
-        ts_data = ts_data.asfreq(freq).ffill()
-        
-        # Fit model
-        # Use simple exponential smoothing if data is short, otherwise Holt-Winters
-        if len(ts_data) < 10:
-             logger.warning("Not enough data for forecasting")
-             return {"error": "Not enough data points (min 10 required)"}
+        if df.empty:
+            return {"error": "No valid data points after cleaning (check date/value formats)"}
 
-        model = ExponentialSmoothing(
-            ts_data, 
-            seasonal_periods=7 if freq=='D' else None,
-            trend='add', 
-            seasonal='add' if len(ts_data) > 14 else None
-        ).fit()
+        ts_raw = df.set_index(date_col)[value_col].sort_index()
+        ts_raw = ts_raw.groupby(level=0).mean()
         
-        # Forecast
+        # 1. Resample to the requested frequency 'freq'
+        ts_data = ts_raw.resample(freq).mean().ffill().bfill()
+        
+        # 2. Check if we have enough data at this frequency
+        if len(ts_data) < 5:
+             # Fallback: Try to use inferred frequency if requested was too sparse
+             inferred = pd.infer_freq(ts_raw.index)
+             if inferred and inferred != freq:
+                 ts_data = ts_raw.asfreq(inferred).ffill().bfill()
+                 logger.info(f"Falling back to inferred frequency: {inferred}")
+             
+             if len(ts_data) < 5:
+                  return {"error": f"Not enough data points (found {len(ts_data)}, need min 5)"}
+
+        # 3. Model fitting
+        try:
+            # Full Holt-Winters (Trend + Seasonal)
+            seasonal_periods = 7 if freq.startswith('D') else (24 if freq.startswith('h') else None)
+            model = ExponentialSmoothing(
+                ts_data, 
+                seasonal_periods=seasonal_periods,
+                trend='add', 
+                seasonal='add' if (seasonal_periods and len(ts_data) > 2 * seasonal_periods) else None
+            ).fit()
+        except Exception as e:
+            logger.warning(f"Full HW failed, trying trend only: {e}")
+            try:
+                model = ExponentialSmoothing(ts_data, trend='add', seasonal=None).fit()
+            except:
+                model = ExponentialSmoothing(ts_data, trend=None, seasonal=None).fit()
+        
+        # 4. Forecast the requested number of periods (at current ts_data frequency)
         forecast = model.forecast(periods)
         
-        return {
-            "historical": {
-                "dates": ts_data.index.strftime('%Y-%m-%d').tolist(),
-                "values": ts_data.values.tolist()
-            },
-            "forecast": {
-                "dates": forecast.index.strftime('%Y-%m-%d').tolist(),
-                "values": forecast.values.tolist()
-            },
-            "model_type": "ExponentialSmoothing"
-        }
+        # 5. Merge for output
+        merged_data = {}
+        for d, v in zip(ts_data.index, ts_data.values):
+            d_str = d.strftime('%Y-%m-%d %H:%M:%S') if not freq.startswith('D') else d.strftime('%Y-%m-%d')
+            merged_data[d_str] = {
+                "date": d_str,
+                "actual": float(v) if not pd.isna(v) else None
+            }
+            
+        for d, v in zip(forecast.index, forecast.values):
+            d_str = d.strftime('%Y-%m-%d %H:%M:%S') if not freq.startswith('D') else d.strftime('%Y-%m-%d')
+            if d_str in merged_data:
+                merged_data[d_str]["forecast"] = float(v) if not pd.isna(v) else None
+            else:
+                merged_data[d_str] = {
+                    "date": d_str,
+                    "forecast": float(v) if not pd.isna(v) else None
+                }
+            
+        return sorted(merged_data.values(), key=lambda x: x['date'])
         
     except Exception as e:
         logger.error(f"Forecasting failed: {e}", exc_info=True)
-        return {"error": str(e)}
+        return {"error": f"Forecasting engine error: {str(e)}"}
 
 def detect_anomalies(
     df: pd.DataFrame, 
@@ -91,15 +118,29 @@ def detect_anomalies(
         # -1 indicates anomaly, 1 indicates normal
         data['is_anomaly'] = preds == -1
         
-        anomalies = data[data['is_anomaly']]
+        # Prepare data for frontend - Downsample if too large to prevent browser crash
+        max_points = 2000
+        total_len = len(data)
         
+        if total_len > max_points:
+            step = total_len // max_points
+            data_to_plot = data.iloc[::step].copy()
+        else:
+            data_to_plot = data.copy()
+
+        plot_data = []
+        for i, (idx, row) in enumerate(data_to_plot.iterrows()):
+            val = row[value_col]
+            plot_data.append({
+                "index": int(i),
+                "value": float(val) if not pd.isna(val) else None,
+                "isAnomaly": bool(row['is_anomaly'])
+            })
+            
         return {
-            "anomalies": {
-                "indices": anomalies.index.tolist(),
-                "values": anomalies[value_col].tolist()
-            },
-            "total_points": len(data),
-            "anomaly_count": len(anomalies)
+            "data": plot_data,
+            "total_points": total_len,
+            "anomaly_count": int(data['is_anomaly'].sum())
         }
         
     except Exception as e:
@@ -136,7 +177,7 @@ def calculate_correlation(
         
         return {
             "columns": corr_matrix.columns.tolist(),
-            "matrix": corr_matrix.values.tolist(), # List of lists
+            "correlation_matrix": corr_matrix.values.tolist(), # List of lists
             "method": method
         }
         
