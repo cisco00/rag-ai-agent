@@ -19,4 +19,4 @@ python -m alembic upgrade head
 # Start server
 echo "Starting server..."
 # Use exec to replace shell with python process for proper signal handling
-exec python src/api.py
+exec python api.py

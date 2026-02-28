@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Fresh PostgreSQL Database
   # Access at: localhost:5435
@@ -38,6 +36,33 @@ services:
       - "3308:3306"
     volumes:
       - vantage_mariadb_data:/var/lib/mysql
+    restart: unless-stopped
+
+  vantage-backend:
+    build: ./backend
+    container_name: vantage_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@vantage-db:5432/vantage_db
+      - ADMIN_DB_PATH=/app/admin.db
+      - CORS_ORIGINS=http://localhost:5173,http://localhost
+    depends_on:
+      - vantage-db
+    volumes:
+      - ./backend:/app # Mount for development
+    restart: unless-stopped
+
+  vantage-frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_BASE_URL=http://localhost:8000
+    container_name: vantage_frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - vantage-backend
     restart: unless-stopped
 
 volumes:

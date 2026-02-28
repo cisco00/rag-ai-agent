@@ -104,7 +104,10 @@ def get_org_connection_string(org, prefer_file_db: bool = False) -> Optional[str
 
 @app.get("/")
 async def read_index():
-    return FileResponse(os.path.join(static_dir, "index.html"))
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"status": "Vantage API is running", "ui": "Served separately or not found"}
 
 
 # --- Schema Caching ---
@@ -2188,10 +2191,10 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
 # Mount static files (MUST be last to avoid overriding API routes)
 # Point to the external frontend build directory
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-static_dir = os.path.join(project_root, "fron-end", "dist")
+static_dir = os.path.join(project_root, "frontend", "dist")
 
 if not os.path.exists(static_dir):
-    print(f"Warning: Static dir {static_dir} does not exist. Run 'npm run build' in fron-end/")
+    print(f"Warning: Static dir {static_dir} does not exist. Run 'npm run build' in frontend/")
     # Don't try to mount if it doesn't exist to prevent startup crashes when testing just the API
 else:
     # Mount assets first
