@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Radio, Play, Pause, RotateCcw, Activity } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Radio, Play, Pause, RotateCcw, Activity, Wifi, WifiOff } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../../lib/api';
 
@@ -18,7 +18,11 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [dataPoints, setDataPoints] = useState<DataPoint[]>([]);
   const [maxDataPoints, setMaxDataPoints] = useState(50);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'error'>('idle');
   const wsRef = useRef<WebSocket | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const replayIndexRef = useRef(0);
+  const replayDataRef = useRef<any[]>([]);
 
   // Dynamic source + column selection
   const [tables, setTables] = useState<string[]>([]);
@@ -51,7 +55,8 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
         if (data && data.columns) {
           const cols: string[] = data.columns.map((c: any) => c.name);
           setAvailableColumns(cols);
-          setSelectedColumns(cols.slice(0, 3)); // default: first 3 columns
+          // Auto-select first few numeric-looking columns
+          setSelectedColumns(cols.slice(0, 3));
         }
       } catch (err) {
         console.error('Failed to fetch columns:', err);
@@ -59,44 +64,149 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
     };
     fetchColumns();
     setDataPoints([]);
+    replayIndexRef.current = 0;
+    replayDataRef.current = [];
   }, [selectedTable]);
 
-  // WebSocket lifecycle
+  // Load replay data when streaming starts
+  const loadReplayData = useCallback(async () => {
+    try {
+      const data = await api.get<any>(`/tables/${selectedTable}/preview?limit=50`);
+      if (data && data.rows && data.rows.length > 0) {
+        replayDataRef.current = data.rows;
+        replayIndexRef.current = 0;
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to load replay data:', err);
+    }
+    return false;
+  }, [selectedTable]);
+
+  // Emit the next data point from the replay buffer
+  const emitNextPoint = useCallback(() => {
+    const rows = replayDataRef.current;
+    if (!rows || rows.length === 0) return;
+
+    const row = rows[replayIndexRef.current % rows.length];
+    replayIndexRef.current += 1;
+
+    const point: DataPoint = {
+      timestamp: new Date().toLocaleTimeString(),
+    };
+    selectedColumns.forEach(col => {
+      const val = row[col];
+      if (val !== undefined && val !== null) {
+        point[col] = typeof val === 'string' ? parseFloat(val) || val : val;
+      }
+    });
+
+    setDataPoints(prev => [...prev, point].slice(-maxDataPoints));
+  }, [selectedColumns, maxDataPoints]);
+
+  // Main streaming effect
   useEffect(() => {
-    if (isStreaming && selectedTable) {
+    if (!isStreaming || !selectedTable) {
+      // Stop everything
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      setConnectionStatus('idle');
+      return;
+    }
+
+    let wsConnected = false;
+    let started = false;
+
+    const startPolling = async () => {
+      if (started) return;
+      started = true;
+
+      const loaded = await loadReplayData();
+      if (!loaded) {
+        setConnectionStatus('error');
+        setIsStreaming(false);
+        return;
+      }
+
+      setConnectionStatus('connected');
+      // Emit first point immediately, then every 1.5 seconds
+      emitNextPoint();
+      pollRef.current = setInterval(emitNextPoint, 1500);
+    };
+
+    // Try WebSocket first
+    try {
       const wsUrl = `ws://localhost:8000/ws/stream/${selectedTable}?api_key=${apiKey}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
+      const wsTimeout = setTimeout(() => {
+        if (!wsConnected) {
+          // WS failed to connect - fall back to HTTP polling
+          console.log('WS timeout, falling back to HTTP polling');
+          ws.close();
+          startPolling();
+        }
+      }, 5000);
+
+      ws.onopen = () => {
+        wsConnected = true;
+        clearTimeout(wsTimeout);
+        setConnectionStatus('connected');
+        console.log('WebSocket connected');
+      };
+
       ws.onmessage = (event) => {
         try {
           const raw = JSON.parse(event.data);
+          if (raw.error) {
+            // Server reported error, switch to polling
+            startPolling();
+            return;
+          }
           const point: DataPoint = {
-            timestamp: new Date(raw.timestamp || Date.now()).toLocaleTimeString(),
+            timestamp: new Date().toLocaleTimeString(),
           };
-          // Map selected columns from the raw message
           selectedColumns.forEach(col => {
             if (raw[col] !== undefined) point[col] = raw[col];
-            else if (raw.value !== undefined) point[col] = raw.value;
           });
-          setDataPoints(prev => [...prev, point].slice(-maxDataPoints));
+          if (Object.keys(point).length > 1) {
+            setDataPoints(prev => [...prev, point].slice(-maxDataPoints));
+          }
         } catch (e) {
           console.error('Failed to parse WebSocket message', e);
         }
       };
 
-      ws.onerror = () => setIsStreaming(false);
-      ws.onclose = () => setIsStreaming(false);
-    } else {
-      wsRef.current?.close();
-      wsRef.current = null;
+      ws.onerror = () => {
+        if (!wsConnected) {
+          clearTimeout(wsTimeout);
+          startPolling();
+        } else {
+          setConnectionStatus('error');
+          setIsStreaming(false);
+        }
+      };
+
+      ws.onclose = (event) => {
+        if (!wsConnected && !started) {
+          clearTimeout(wsTimeout);
+          startPolling();
+        } else if (wsConnected) {
+          // WS closed after connection - switch to polling to keep chart alive
+          startPolling();
+        }
+      };
+    } catch (err) {
+      console.error('WebSocket creation failed, using polling', err);
+      startPolling();
     }
 
     return () => {
-      wsRef.current?.close();
-      wsRef.current = null;
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
-  }, [isStreaming, selectedTable, selectedColumns, maxDataPoints]);
+  }, [isStreaming, selectedTable, apiKey]);
 
   const toggleColumn = (col: string) => {
     setSelectedColumns(prev =>
@@ -129,7 +239,7 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
           <h1 className="text-3xl font-bold text-gray-900">Real-Time Data Streaming</h1>
         </div>
         <p className="text-gray-600">
-          Monitor live data from your database tables with low-latency WebSocket connections.
+          Monitor live data from your database tables with low-latency connections.
         </p>
       </div>
 
@@ -219,17 +329,24 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
               </button>
             )}
             <button
-              onClick={() => { setIsStreaming(false); setDataPoints([]); }}
+              onClick={() => { setIsStreaming(false); setDataPoints([]); replayIndexRef.current = 0; }}
               className="px-4 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
             >
               <RotateCcw className="size-4" />
             </button>
           </div>
 
-          {isStreaming && (
+          {/* Status */}
+          {connectionStatus === 'connected' && (
             <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
               <Activity className="size-5 text-green-600 animate-pulse" />
               <span className="text-sm font-medium text-green-700">Streaming Active</span>
+            </div>
+          )}
+          {connectionStatus === 'error' && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <WifiOff className="size-5 text-red-500" />
+              <span className="text-sm font-medium text-red-700">Connection Failed</span>
             </div>
           )}
 
@@ -263,8 +380,15 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-gray-900">Live Data Stream — <span className="text-blue-600 font-mono">{selectedTable}</span></h3>
               <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
-                <span className="text-sm text-gray-600">{isStreaming ? 'Live' : 'Paused'}</span>
+                {connectionStatus === 'connected' ? (
+                  <Wifi className="size-4 text-green-500" />
+                ) : (
+                  <WifiOff className="size-4 text-gray-400" />
+                )}
+                <div className={`w-3 h-3 rounded-full ${isStreaming && connectionStatus === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
+                <span className="text-sm text-gray-600">
+                  {isStreaming && connectionStatus === 'connected' ? 'Live' : isStreaming ? 'Connecting...' : 'Paused'}
+                </span>
               </div>
             </div>
 
@@ -294,7 +418,11 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
               <div className="flex items-center justify-center h-96 text-gray-400">
                 <div className="text-center">
                   <Radio className="size-16 mx-auto mb-3 text-gray-300" />
-                  <p>Select a table and columns, then click <strong>Start</strong></p>
+                  {isStreaming ? (
+                    <p>Connecting and loading data<span className="animate-pulse">...</span></p>
+                  ) : (
+                    <p>Select a table and columns, then click <strong>Start</strong></p>
+                  )}
                 </div>
               </div>
             )}
