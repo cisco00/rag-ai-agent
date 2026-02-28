@@ -688,7 +688,7 @@ async def import_file_to_database(
         original_cols = len(df.columns)
         
         # Create database manager with org's connection string
-        db_manager = DatabaseManager(connection_string=db_conn)
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
         
         # Create file uploader instance
         uploader = FileUploader(db_manager)
@@ -803,7 +803,7 @@ async def import_multiple_files(
     
     # Create database manager with org's connection string
     try:
-        db_manager = DatabaseManager(connection_string=db_conn)
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     uploader = FileUploader(db_manager)
@@ -1077,7 +1077,7 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
              # Auto-provision (reuse logic or error)
              raise HTTPException(status_code=400, detail="Organization has no database configured")
              
-        db_manager = DatabaseManager(connection_string=db_conn)
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
         success = db_manager.load_dataframe(df, request.table_name, if_exists=request.if_exists)
         db_manager.close()
         
