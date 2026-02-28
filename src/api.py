@@ -23,7 +23,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
+from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, update_branding, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
@@ -41,6 +41,19 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_admin_db()
+    # Safe migration: add branding column to organizations if missing
+    try:
+        import sqlite3 as _sqlite3
+        admin_db_path = os.getenv("ADMIN_DB_PATH", "./admin.db")
+        _conn = _sqlite3.connect(admin_db_path)
+        _cols = [row[1] for row in _conn.execute("PRAGMA table_info(organizations)").fetchall()]
+        if "branding" not in _cols:
+            _conn.execute("ALTER TABLE organizations ADD COLUMN branding TEXT")
+            _conn.commit()
+            print("Migrated: added branding column to organizations table.")
+        _conn.close()
+    except Exception as _e:
+        print(f"Branding migration note: {_e}")
     start_scheduler()
     refresh_jobs()
     print("Admin database initialized and scheduler started.")
@@ -429,6 +442,38 @@ The RAG AI Agent Team
                   raise HTTPException(status_code=400, detail={"code": "CONNECTION_FAILED", "message": f"Connection failed: {error_msg}"})
         
         raise HTTPException(status_code=400, detail=f"Failed to connect: {error_msg}")
+
+# ---------------------------------------------------------------------------
+# Branding endpoints
+# ---------------------------------------------------------------------------
+
+class BrandingRequest(BaseModel):
+    org_name: Optional[str] = None
+    tagline: Optional[str] = None
+    primary_color: Optional[str] = None
+    logo_url: Optional[str] = None
+
+@app.get("/branding")
+async def get_branding(org=Depends(get_current_org)):
+    """Return the branding configuration for the authenticated organization."""
+    return org.get_branding()
+
+@app.put("/branding")
+async def save_branding(request: BrandingRequest, org=Depends(get_current_org)):
+    """Save branding configuration for the authenticated organization."""
+    try:
+        current = org.get_branding()
+        updated = {
+            "org_name": request.org_name or current["org_name"],
+            "tagline": request.tagline if request.tagline is not None else current["tagline"],
+            "primary_color": request.primary_color or current["primary_color"],
+            "logo_url": request.logo_url if request.logo_url is not None else current["logo_url"],
+        }
+        update_branding(org.api_key, updated)
+        return {"status": "success", "branding": updated}
+    except Exception as e:
+        logger.error(f"Branding save failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 class CreateDatabaseRequest(BaseModel):
     admin_user: Optional[str] = None

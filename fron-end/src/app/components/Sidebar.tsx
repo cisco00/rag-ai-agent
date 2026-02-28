@@ -1,12 +1,22 @@
-import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut } from 'lucide-react';
+import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut, Palette } from 'lucide-react';
+
+interface Branding {
+  org_name: string;
+  tagline: string;
+  primary_color: string;
+  logo_url: string;
+}
 
 interface SidebarProps {
   currentView: string;
   onNavigate: (view: string) => void;
   isConfigured: boolean;
+  branding: Branding;
 }
 
-export function Sidebar({ currentView, onNavigate, isConfigured }: SidebarProps) {
+export function Sidebar({ currentView, onNavigate, isConfigured, branding }: SidebarProps) {
+  const primaryColor = branding.primary_color || '#2563eb';
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'database', label: 'Database', icon: Database },
@@ -18,15 +28,27 @@ export function Sidebar({ currentView, onNavigate, isConfigured }: SidebarProps)
     { id: 'streaming', label: 'Real-Time Stream', icon: Radio, disabled: !isConfigured },
     { id: 'scheduled', label: 'Scheduled Reports', icon: Clock },
     { id: 'reports', label: 'Reports', icon: Share2 },
+    { id: 'branding', label: 'Branding', icon: Palette },
     { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
-      {/* Logo */}
-      <div className="p-6 border-b border-gray-200">
-        <h1 className="text-2xl font-bold text-blue-600">Vantage AI</h1>
-        <p className="text-sm text-gray-500 mt-1">Analytics Portal</p>
+      {/* Logo / Branding Header */}
+      <div className="p-6 border-b border-gray-200" style={{ borderLeftColor: primaryColor, borderLeftWidth: 4 }}>
+        {branding.logo_url ? (
+          <img
+            src={branding.logo_url}
+            alt={branding.org_name}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            className="h-9 w-auto object-contain mb-1"
+          />
+        ) : (
+          <h1 className="text-2xl font-bold" style={{ color: primaryColor }}>
+            {branding.org_name || 'Vantage AI'}
+          </h1>
+        )}
+        <p className="text-sm text-gray-500 mt-1">{branding.tagline || 'Analytics Portal'}</p>
       </div>
 
       {/* Navigation */}
@@ -43,13 +65,9 @@ export function Sidebar({ currentView, onNavigate, isConfigured }: SidebarProps)
               disabled={isDisabled}
               className={`
                 w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors
-                ${isActive
-                  ? 'bg-blue-50 text-blue-600'
-                  : isDisabled
-                    ? 'text-gray-400 cursor-not-allowed'
-                    : 'text-gray-700 hover:bg-gray-50'
-                }
+                ${isDisabled ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700 hover:bg-gray-50'}
               `}
+              style={isActive ? { backgroundColor: `${primaryColor}15`, color: primaryColor } : {}}
             >
               <Icon className="size-5" />
               <span className="font-medium">{item.label}</span>
@@ -75,8 +93,8 @@ export function Sidebar({ currentView, onNavigate, isConfigured }: SidebarProps)
       {/* Footer */}
       <div className="p-4 border-t border-gray-200">
         <div className="text-xs text-gray-500">
-          <p>Version 1.0</p>
-          <p className="mt-1">© 2026 Vantage AI</p>
+          <p>Version 2.0</p>
+          <p className="mt-1">© 2026 {branding.org_name || 'Vantage AI'}</p>
         </div>
       </div>
     </aside>

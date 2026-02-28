@@ -39,10 +39,27 @@ class Organization(Base):
     email = Column(String(255), nullable=True)
     api_key = Column(String(64), unique=True, nullable=False, index=True)
     db_connection_string = Column(Text, nullable=True)
+    branding = Column(Text, nullable=True)  # JSON: {org_name, tagline, primary_color, logo_url}
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     def __repr__(self):
         return f"<Organization(id={self.id}, name='{self.name}')>"
+
+    def get_branding(self) -> dict:
+        """Return branding config as dict with defaults."""
+        defaults = {
+            "org_name": self.name,
+            "tagline": "Analytics Portal",
+            "primary_color": "#2563eb",
+            "logo_url": ""
+        }
+        if not self.branding:
+            return defaults
+        try:
+            stored = json.loads(self.branding)
+            return {**defaults, **stored}
+        except Exception:
+            return defaults
 
 
 class SharedReport(Base):
@@ -420,6 +437,27 @@ def update_org_db(api_key: str, connection_string: str) -> Organization:
     except Exception as e:
         logger.error(f"Failed to update organization: {e}", exc_info=True)
         raise DatabaseError(f"Failed to update organization: {str(e)}") from e
+
+
+def update_branding(api_key: str, branding_data: dict) -> Organization:
+    """Save branding config for an organization."""
+    try:
+        with get_db() as db:
+            org = db.query(Organization).filter(
+                Organization.api_key == api_key
+            ).first()
+            if not org:
+                raise OrganizationNotFoundError(api_key)
+            org.branding = json.dumps(branding_data)
+            db.flush()
+            db.refresh(org)
+            db.expunge(org)
+            return org
+    except OrganizationNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update branding: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to update branding: {str(e)}") from e
 
 
 def create_shared_report(
