@@ -76,8 +76,17 @@ async function fetchApi<T>(endpoint: string, options: RequestOptions = {}): Prom
     }
 
     if (!response.ok) {
-      // Create a specific error format so components can parse it
-      const errorMessage = data?.detail || typeof data === 'string' ? data : response.statusText;
+      // Extract the most useful message from FastAPI's {detail: ...} format
+      let errorMessage: string;
+      if (data?.detail) {
+        errorMessage = typeof data.detail === 'string'
+          ? data.detail
+          : data.detail?.message || JSON.stringify(data.detail);
+      } else if (typeof data === 'string') {
+        errorMessage = data;
+      } else {
+        errorMessage = response.statusText || `HTTP ${response.status}`;
+      }
       throw new Error(errorMessage);
     }
 

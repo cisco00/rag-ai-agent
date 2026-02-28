@@ -55,14 +55,25 @@ export function BrandingSettings({ onBrandingChange }: BrandingSettingsProps) {
         setSaving(true);
         try {
             await api.put<any>('/branding', form);
-            onBrandingChange(form);
-            setSaved(true);
-            setTimeout(() => setSaved(false), 3000);
         } catch (err: any) {
-            alert(`Failed to save branding: ${err.message}`);
-        } finally {
-            setSaving(false);
+            const msg: string = err?.message || String(err);
+            // If it's a real error (not a missing endpoint), show it
+            const isEndpointMissing = msg.includes('404') || msg.includes('405') ||
+                msg.toLowerCase().includes('not found') || msg.toLowerCase().includes('method not allowed');
+            if (!isEndpointMissing) {
+                alert(`Failed to save branding: ${msg}`);
+                setSaving(false);
+                return;
+            }
+            // Endpoint not deployed yet — fall back to localStorage
+            console.warn('Branding API not available, saving to localStorage only.');
         }
+        // Always apply to UI immediately
+        localStorage.setItem('vantage_branding', JSON.stringify(form));
+        onBrandingChange(form);
+        setSaved(true);
+        setSaving(false);
+        setTimeout(() => setSaved(false), 3000);
     };
 
     const handleReset = () => {
@@ -179,8 +190,8 @@ export function BrandingSettings({ onBrandingChange }: BrandingSettingsProps) {
                                         title={c.name}
                                         onClick={() => setForm(f => ({ ...f, primary_color: c.value }))}
                                         className={`w-9 h-9 rounded-lg transition-transform hover:scale-110 focus:outline-none ${form.primary_color === c.value
-                                                ? 'ring-2 ring-offset-2 ring-gray-800 scale-110'
-                                                : ''
+                                            ? 'ring-2 ring-offset-2 ring-gray-800 scale-110'
+                                            : ''
                                             }`}
                                         style={{ backgroundColor: c.value }}
                                     />

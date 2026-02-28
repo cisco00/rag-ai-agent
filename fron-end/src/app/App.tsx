@@ -34,7 +34,13 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [apiKey, setApiKey] = useState<string | null>(localStorage.getItem('vantage_api_key'));
   const [isConfigured, setIsConfigured] = useState(false);
-  const [branding, setBranding] = useState<Branding>(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState<Branding>(() => {
+    try {
+      const saved = localStorage.getItem('vantage_branding');
+      if (saved) return { ...DEFAULT_BRANDING, ...JSON.parse(saved) };
+    } catch { /* ignore */ }
+    return DEFAULT_BRANDING;
+  });
 
   useEffect(() => {
     const checkConfigStatus = async () => {
@@ -50,15 +56,16 @@ export default function App() {
     checkConfigStatus();
   }, [apiKey]);
 
-  // Fetch branding on load
+  // Fetch branding from API on load, fall back to localStorage
   useEffect(() => {
     if (!apiKey) return;
     const fetchBranding = async () => {
       try {
         const data = await api.get<Branding>('/branding');
         setBranding(data);
+        localStorage.setItem('vantage_branding', JSON.stringify(data));
       } catch (err) {
-        // keep defaults silently
+        // keep whatever was loaded from localStorage
       }
     };
     fetchBranding();
