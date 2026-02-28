@@ -287,3 +287,14 @@ You can now start querying your tables via the dashboard!
 Thanks,
 The RAG AI Agent Team
 
+To: pati@gmail.com
+Subject: Database Connected Successfully
+
+Hello,
+
+Your database connection for organization 'pati' has been verified and successfully linked to your account.
+You can now start querying your tables via the dashboard!
+
+Thanks,
+The RAG AI Agent Team
+

@@ -209,7 +209,13 @@ class DatabaseManager:
                 with self.engine.connect() as connection:
                     # Start explicit transaction to ensure clean state
                     with connection.begin():
-                        result = connection.execute(text(sql))
+                        # Escape colons in the SQL that aren't bind parameters.
+                        # SQLAlchemy's text() treats :word as a named param,
+                        # which breaks date format strings like strftime('%H:%M', ...).
+                        # We escape ALL colons to :: (SQLAlchemy literal colon)
+                        # since we never use actual bind parameters here.
+                        safe_sql = sql.replace(":", "\\:")
+                        result = connection.execute(text(safe_sql))
                         
                         # Check if query returns results
                         query_type = sql.strip().upper().split()[0]
