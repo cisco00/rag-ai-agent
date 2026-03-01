@@ -24,6 +24,41 @@ def clean_llm_json_content(content: str) -> str:
     return content.strip()
 
 
+def clean_proto_data(data: Any) -> Any:
+    """
+    Recursively convert Google Proto-types (MapComposite, RepeatedComposite)
+    to standard Python dicts and lists to ensure JSON serializability.
+    
+    Args:
+        data: The data to clean (can be dict, list, or proto-type)
+    
+    Returns:
+        Standard Python object (dict, list, str, int, etc.)
+    """
+    # Handle list-like objects (RepeatedComposite)
+    if isinstance(data, (list, tuple)):
+        return [clean_proto_data(item) for item in data]
+    
+    # Handle dict-like objects (MapComposite)
+    if isinstance(data, dict):
+        return {k: clean_proto_data(v) for k, v in data.items()}
+    
+    # Try converting to dict if it has a .items() method or is a proto-type
+    # MapComposite and other proto objects often behave like dicts or have a _pb or can be cast
+    try:
+        if hasattr(data, "items") and callable(data.items): # Catches MapComposite
+             return {k: clean_proto_data(v) for k, v in data.items()}
+        
+        # If it's not a basic type and not a dict/list, try to see if it's iterable
+        if hasattr(data, "__iter__") and not isinstance(data, (str, bytes)):
+            return [clean_proto_data(item) for item in data]
+            
+    except Exception:
+        pass
+        
+    return data
+
+
 def parse_llm_json(content: str) -> Any:
     """
     Parse JSON from LLM response, handling markdown code blocks.

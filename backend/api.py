@@ -51,6 +51,12 @@ async def lifespan(app: FastAPI):
             _conn.execute("ALTER TABLE organizations ADD COLUMN branding TEXT")
             _conn.commit()
             print("Migrated: added branding column to organizations table.")
+        # Migration: add visualization column to chat_messages if missing
+        _cols_chat = [row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)").fetchall()]
+        if "visualization" not in _cols_chat:
+            _conn.execute("ALTER TABLE chat_messages ADD COLUMN visualization TEXT")
+            _conn.commit()
+            print("Migrated: added visualization column to chat_messages table.")
         _conn.close()
     except Exception as _e:
         print(f"Branding migration note: {_e}")
@@ -241,6 +247,7 @@ class MessageResponse(BaseModel):
     id: int
     role: str
     content: str
+    visualization: Optional[Dict[str, Any]] = None
     created_at: datetime
     
     class Config:
@@ -1580,9 +1587,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
         if request.session_id:
             try:
                 response_text = result.get("text", "")
-                if result.get("visualization"):
-                     response_text += "\n[Visualization Generated]"
-                add_chat_message(request.session_id, "assistant", response_text)
+                visualization = result.get("visualization")
+                add_chat_message(request.session_id, "assistant", response_text, visualization=visualization)
             except Exception as e:
                 logger.error(f"Failed to save assistant message: {e}")
 
@@ -2111,8 +2117,25 @@ async def list_chat_sessions(org=Depends(get_current_org)):
 async def get_session_messages(session_id: str, org=Depends(get_current_org)):
     """Get messages for a chat session."""
     try:
-        messages = get_chat_history(session_id)
-        return messages
+        db_messages = get_chat_history(session_id)
+        # Parse visualization JSON for each message
+        responses = []
+        for msg in db_messages:
+            viz = None
+            if msg.visualization:
+                try:
+                    viz = json.loads(msg.visualization)
+                except Exception:
+                    logger.warning(f"Failed to parse visualization for message {msg.id}")
+            
+            responses.append({
+                "id": msg.id,
+                "role": msg.role,
+                "content": msg.content,
+                "visualization": viz,
+                "created_at": msg.created_at
+            })
+        return responses
     except Exception as e:
         logger.error(f"Failed to get messages: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

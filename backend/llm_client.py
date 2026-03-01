@@ -9,6 +9,7 @@ from dataclasses import dataclass
 try:
     import google.generativeai as genai
     from google.ai.generativelanguage_v1beta.types import content
+    from utils import clean_llm_json_content, clean_proto_data
     HAS_GOOGLE = True
 except ImportError:
     HAS_GOOGLE = False
@@ -149,9 +150,19 @@ class GoogleGeminiClient(LLMClient):
                 # For now, let's assume simple text history or handle tool calls if present in dict.
                 if "tool_calls" in msg and msg["tool_calls"]:
                      for tc in msg["tool_calls"]:
+                         # Ensure we handle potential proto-types in historical arguments
+                         args_raw = tc["function"]["arguments"]
+                         if isinstance(args_raw, str):
+                             try:
+                                 args_dict = json.loads(args_raw)
+                             except json.JSONDecodeError:
+                                 args_dict = {}
+                         else:
+                             args_dict = args_raw
+                             
                          fc = genai.protos.FunctionCall(
                              name=tc["function"]["name"],
-                             args=json.loads(tc["function"]["arguments"])
+                             args=clean_proto_data(args_dict)
                          )
                          parts.append(genai.protos.Part(function_call=fc))
                 
@@ -300,7 +311,7 @@ class GoogleGeminiClient(LLMClient):
                     id="call_" + part.function_call.name, # Gemini doesn't give ID, generate one
                     function=ToolCallFunction(
                         name=part.function_call.name,
-                        arguments=json.dumps(args_dict)
+                        arguments=json.dumps(clean_proto_data(args_dict))
                     )
                 ))
         

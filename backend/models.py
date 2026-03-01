@@ -198,6 +198,7 @@ class ChatMessage(Base):
     session_id = Column(String(32), nullable=False, index=True) 
     role = Column(String(50), nullable=False) # 'user', 'assistant'
     content = Column(Text, nullable=False)
+    visualization = Column(Text, nullable=True)  # JSON string
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     def __repr__(self):
@@ -278,11 +279,12 @@ def create_chat_session(org_id: int, title: Optional[str] = None) -> ChatSession
         logger.error(f"Failed to create chat session: {e}", exc_info=True)
         raise DatabaseError(f"Failed to create chat session: {str(e)}") from e
 
-def add_chat_message(session_id: str, role: str, content: str) -> ChatMessage:
+def add_chat_message(session_id: str, role: str, content: str, visualization: Optional[dict] = None) -> ChatMessage:
     """Add a message to a chat session."""
     try:
         with get_db() as db:
-            msg = ChatMessage(session_id=session_id, role=role, content=content)
+            viz_json = json.dumps(visualization) if visualization else None
+            msg = ChatMessage(session_id=session_id, role=role, content=content, visualization=viz_json)
             db.add(msg)
             db.flush()
             db.refresh(msg)
