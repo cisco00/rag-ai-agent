@@ -46,7 +46,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@vantage-db:5432/vantage_db
       - ADMIN_DB_PATH=/app/admin.db
-      - CORS_ORIGINS=http://localhost:5173,http://localhost,https://frontend-production-b97e.up.railway.app
+      - CORS_ORIGINS=http://localhost:5173,http://localhost
     depends_on:
       - vantage-db
     volumes:
@@ -57,7 +57,7 @@ services:
     build:
       context: ./frontend
       args:
-        - VITE_API_BASE_URL=https://backend-production-cb574.up.railway.app
+        - VITE_API_BASE_URL=http://localhost:8000
     container_name: vantage_frontend
     ports:
       - "5173:80"
