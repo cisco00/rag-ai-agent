@@ -2,10 +2,11 @@
   "$schema": "https://railway.app/railway.schema.json",
   "services": {
     "vantage-backend": {
+      "source": {
+        "root": "backend"
+      },
       "build": {
-        "builder": "DOCKER",
-        "dockerfilePath": "backend/Dockerfile",
-        "context": "backend"
+        "builder": "DOCKER"
       },
       "deploy": {
         "numReplicas": 1,
@@ -13,10 +14,11 @@
       }
     },
     "vantage-frontend": {
+      "source": {
+        "root": "frontend"
+      },
       "build": {
-        "builder": "DOCKER",
-        "dockerfilePath": "frontend/Dockerfile",
-        "context": "frontend"
+        "builder": "DOCKER"
       },
       "deploy": {
         "numReplicas": 1,
