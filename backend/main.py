@@ -306,12 +306,18 @@ class QueryProcessor:
 
                 tools_used.append(tool_call.function.name)
                 
-                # Add tool result to messages
+                # Add tool result to messages with a safe truncation (50k chars)
+                # to prevent context window overflow even with small row counts
+                content_str = str(tool_result)
+                if len(content_str) > 50000:
+                    content_str = content_str[:50000] + "... [TRUNCATED DUE TO SIZE]"
+                    logger.warning(f"Tool {tool_call.function.name} result truncated")
+
                 messages.append({
                     "role": "tool",
                     "name": tool_call.function.name,
                     "tool_call_id": tool_call.id,
-                    "content": str(tool_result)
+                    "content": content_str
                 })
             
             logger.debug("Feeding tool results back to model")
@@ -398,7 +404,8 @@ class AnalyticsAgent:
         self,
         hf_token: Optional[str] = None,
         connection_string: Optional[str] = None,
-        schema_summary: Optional[str] = None
+        schema_summary: Optional[str] = None,
+        system_prompt_override: Optional[str] = None
     ):
         """
         Initialize the analytics agent.
@@ -407,6 +414,7 @@ class AnalyticsAgent:
             hf_token: HuggingFace API token (deprecated in favor of config)
             connection_string: Database connection string (uses config default if None)
             schema_summary: Optional pre-fetched schema summary to inject into context
+            system_prompt_override: Optional override for the default system prompt
         """
         # Get configuration
         self.config = get_agent_config()
@@ -418,6 +426,7 @@ class AnalyticsAgent:
         # Initialize database manager
         self.db = DatabaseManager(connection_string)
         self.schema_summary = schema_summary
+        self.system_prompt_override = system_prompt_override
         
         # Get tools
         self.tools_schema, self.tool_map = get_db_tools(self.db)
@@ -486,7 +495,7 @@ class AnalyticsAgent:
             # Prepare messages
             messages = history if history else []
             
-            system_prompt = self.config.system_prompt
+            system_prompt = self.system_prompt_override or self.config.system_prompt
             if self.schema_summary:
                 system_prompt += f"\n\nDATABASE SCHEMA CACHE:\n{self.schema_summary}\n\nNOTE: You do NOT need to call list_tables or describe_table for the tables listed above. Use this schema directly."
             

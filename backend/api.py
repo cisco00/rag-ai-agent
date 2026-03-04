@@ -23,12 +23,14 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, get_org_by_api_key, update_org_db, update_branding, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
+from models import init_admin_db, create_org, Organization, get_org_by_api_key, update_org_db, update_branding, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
 from utils import send_email_mock, clean_llm_json_content
 from validators import sanitize_table_name
+from org_context_manager import OrgContextManager, ensure_context_tables
+from insight_engine import InsightEngine, InsightScheduler, ensure_insight_tables
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -38,9 +40,14 @@ from export_manager import ExportManager
 
 load_dotenv()
 
+# Global scheduler for proactive insights
+insight_scheduler: Optional[InsightScheduler] = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global insight_scheduler
     init_admin_db()
+    ensure_insight_tables() # Initialize org_insights table
     # Safe migration: add branding column to organizations if missing
     try:
         import sqlite3 as _sqlite3
@@ -62,9 +69,31 @@ async def lifespan(app: FastAPI):
         print(f"Branding migration note: {_e}")
     start_scheduler()
     refresh_jobs()
-    print("Admin database initialized and scheduler started.")
+    ensure_context_tables()
+    
+    # Initialize Proactive Insight Scheduler
+    def make_insight_engine(org_id: int):
+        with get_db() as db_session:
+            org = db_session.query(Organization).filter(Organization.id == org_id).first()
+            if not org:
+                return None
+            
+            conn_str = get_org_connection_string(org)
+            if not conn_str:
+                return None
+            
+            db_manager = DatabaseManager(connection_string=conn_str)
+            agent = AnalyticsAgent(connection_string=conn_str)
+            return InsightEngine(db_manager=db_manager, agent=agent, org_id=org_id)
+
+    insight_scheduler = InsightScheduler(engine_factory=make_insight_engine, interval_minutes=60)
+    await insight_scheduler.start()
+    
+    print("Admin database initialized, scheduler started, and context tables/insight engine ensured.")
     yield
     shutdown_scheduler()
+    if insight_scheduler:
+        await insight_scheduler.stop()
     print("Scheduler shutdown.")
 
 app = FastAPI(
@@ -252,6 +281,26 @@ class MessageResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class ContextEntryRequest(BaseModel):
+    key: str
+    definition: str
+    context_type: str = "term"
+    sql_snippet: Optional[str] = None
+    examples: Optional[List[str]] = None
+
+class ContextEntryResponse(BaseModel):
+    id: str
+    key: str
+    definition: str
+    context_type: str
+    sql_snippet: Optional[str]
+    examples: Optional[List[str]]
+    source: str
+    confidence: float
+    usage_count: int
+    created_at: str
+    updated_at: str
 
 # --- Security ---
 async def get_current_org(x_api_key: str = Header(...)):
@@ -1027,6 +1076,20 @@ async def submit_feedback(request: FeedbackRequest, org=Depends(get_current_org)
             vote=request.vote,
             feedback_text=request.feedback_text
         )
+
+        # Record correction for implicit organizational learning if feedback exists
+        if request.feedback_text:
+            try:
+                ctx_manager = OrgContextManager(org.id)
+                ctx_manager.record_correction(
+                    original_query=request.query,
+                    original_response=request.response,
+                    user_correction=request.feedback_text
+                )
+                logger.info(f"Recorded correction for org {org.id}")
+            except Exception as e:
+                logger.error(f"Failed to record correction: {e}")
+
         return {"status": "success", "message": "Feedback submitted successfully", "id": feedback.id}
     except Exception as e:
         logger.error(f"Feedback error: {e}")
@@ -1199,19 +1262,19 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
             "You are a translation layer between natural language and a pandas-backed data transformation pipeline.\n"
             "Based on the user's intent, respond exclusively with a JSON list of operation objects.\n\n"
             "SUPPORTED OPERATIONS (type field):\n"
-            "1. clean_text: {\"type\": \"clean_text\", \"column\": \"col_name\", \"clean_type\": \"lower|upper|trim|title|remove_special\"}\n"
-            "2. filter: {\"type\": \"filter\", \"column\": \"col_name\", \"op\": \">|<|==|!=|>=|<=\", \"value\": \"any\"}\n"
-            "3. rename_col: {\"type\": \"rename_col\", \"column\": \"old_name\", \"new_name\": \"new_name\"}\n"
-            "4. drop_col: {\"type\": \"drop_col\", \"column\": \"col_name\"}\n"
-            "5. change_type: {\"type\": \"change_type\", \"column\": \"col_name\", \"new_type\": \"int|float|str|datetime|bool\"}\n"
-            "6. fill_na: {\"type\": \"fill_na\", \"column\": \"col_name\", \"method\": \"value|mean|median|mode\", \"value\": \"any\"}\n"
-            "7. drop_duplicates: {\"type\": \"clean\", \"method\": \"drop_duplicates\", \"subset\": \"col_name\"}\n"
-            "8. remove_outliers: {\"type\": \"clean\", \"method\": \"remove_outliers\", \"column\": \"col_name\", \"outlier_method\": \"z-score\", \"threshold\": 3.0}\n\n"
+            "1. clean_text: {{\"type\": \"clean_text\", \"column\": \"col_name\", \"clean_type\": \"lower|upper|trim|title|remove_special\"}}\n"
+            "2. filter: {{\"type\": \"filter\", \"column\": \"col_name\", \"op\": \">|<|==|!=|>=|<=\", \"value\": \"any\"}}\n"
+            "3. rename_col: {{\"type\": \"rename_col\", \"column\": \"old_name\", \"new_name\": \"new_name\"}}\n"
+            "4. drop_col: {{\"type\": \"drop_col\", \"column\": \"col_name\"}}\n"
+            "5. change_type: {{\"type\": \"change_type\", \"column\": \"col_name\", \"new_type\": \"int|float|str|datetime|bool\"}}\n"
+            "6. fill_na: {{\"type\": \"fill_na\", \"column\": \"col_name\", \"method\": \"value|mean|median|mode\", \"value\": \"any\"}}\n"
+            "7. drop_duplicates: {{\"type\": \"clean\", \"method\": \"drop_duplicates\", \"subset\": \"col_name\"}}\n"
+            "8. remove_outliers: {{\"type\": \"clean\", \"method\": \"remove_outliers\", \"column\": \"col_name\", \"outlier_method\": \"z-score\", \"threshold\": 3.0}}\n\n"
             "SCHEMA OF DATABASE:\n"
             "{schema_summary}\n\n"
             "Analyze the user prompt carefully against the schema for table '{table_name}'.\n"
             "Output ONLY valid JSON. Do not use Markdown code fences.\n"
-            "Example: [{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\"}]"
+            "Example: [{{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\"}}]"
         )
 
         user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"
@@ -1526,6 +1589,70 @@ async def analyze_file(file: UploadFile = File(...), org=Depends(get_current_org
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error analyzing file: {str(e)}")
 
+# --- Organization Context Endpoints ---
+
+@app.get("/organization/context", response_model=List[ContextEntryResponse])
+async def get_org_context(org=Depends(get_current_org)):
+    """Fetch all business context for the organization."""
+    ctx_manager = OrgContextManager(org.id)
+    return ctx_manager.get_all_context()
+
+@app.post("/organization/context", response_model=ContextEntryResponse)
+async def add_org_context(request: ContextEntryRequest, org=Depends(get_current_org)):
+    """Add or update business context."""
+    ctx_manager = OrgContextManager(org.id)
+    try:
+        return ctx_manager.add_context(
+            key=request.key,
+            definition=request.definition,
+            context_type=request.context_type,
+            sql_snippet=request.sql_snippet,
+            examples=request.examples
+        )
+    except Exception as e:
+        logger.error(f"Failed to add context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/organization/context/{key}")
+async def delete_org_context(key: str, org=Depends(get_current_org)):
+    """Delete context entry."""
+    ctx_manager = OrgContextManager(org.id)
+    ctx_manager.delete_context(key)
+    return {"status": "success", "message": f"Context for {key} deleted."}
+
+@app.get("/organization/context/stats")
+async def get_org_context_stats(org=Depends(get_current_org)):
+    """Get statistics about organizational context."""
+    ctx_manager = OrgContextManager(org.id)
+    return ctx_manager.get_stats()
+
+@app.post("/organization/context/process-corrections")
+async def process_corrections(org=Depends(get_current_org)):
+    """Trigger processing of pending corrections for implicit learning."""
+    from main import AnalyticsAgent
+    from config import get_agent_config
+    
+    config = get_agent_config()
+    db_conn_str = get_org_connection_string(org)
+    
+    # We need an agent to call the LLM
+    agent = AnalyticsAgent(connection_string=db_conn_str)
+    
+    # Define the LLM caller for the context manager
+    async def llm_caller(prompt: str) -> str:
+        response = agent.client.chat_completion(
+            model=config.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000
+        )
+        return response.choices[0].message.content
+
+    ctx_manager = OrgContextManager(org.id, llm_caller=llm_caller)
+    count = await ctx_manager.process_pending_corrections()
+    agent.close()
+    
+    return {"status": "success", "learned_rules_count": count}
+
 @app.post("/query", response_model=QueryResponse)
 async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     conn_str = get_org_connection_string(org, prefer_file_db=getattr(request, 'use_file', False))
@@ -1534,7 +1661,18 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     
     schema_summary = get_cached_schema_summary(conn_str)
     start_time = time.time()
-    agent = AnalyticsAgent(connection_string=conn_str, schema_summary=schema_summary)
+
+    # Inject organizational context
+    from config import get_agent_config
+    config = get_agent_config()
+    ctx_manager = OrgContextManager(org.id)
+    enriched_prompt = ctx_manager.inject_into_prompt(config.system_prompt)
+
+    agent = AnalyticsAgent(
+        connection_string=conn_str, 
+        schema_summary=schema_summary,
+        system_prompt_override=enriched_prompt
+    )
     
     # Save user message if session_id provided
     if request.session_id:
@@ -2211,7 +2349,59 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Mount static files (MUST be last to avoid overriding API routes)
+# --- Insight Endpoints ---
+@app.get("/insights")
+async def get_org_insights(limit: int = 20, org=Depends(get_current_org)):
+    """Fetch proactive insights for the organization."""
+    try:
+        # We need an engine instance to call its data methods
+        # The factory depends on the org ID
+        def _get_engine():
+            conn_str = get_org_connection_string(org)
+            if not conn_str:
+                return None
+            db_manager = DatabaseManager(connection_string=conn_str)
+            agent = AnalyticsAgent(connection_string=conn_str)
+            return InsightEngine(db_manager=db_manager, agent=agent, org_id=org.id)
+            
+        engine = _get_engine()
+        if not engine:
+            return []
+            
+        insights = engine.get_all_insights(limit=limit)
+        return {"status": "success", "insights": insights}
+    except Exception as e:
+        logger.error(f"Failed to fetch insights: {e}", exc_info=True)
+        return {"status": "error", "message": "Failed to fetch insights"}
+
+@app.post("/insights/mark-all-seen")
+async def mark_all_insights_seen(org=Depends(get_current_org)):
+    """Mark all insights as read for the organization."""
+    try:
+        from insight_engine import InsightEngine
+        # Mocking an engine for the mark_all_seen call
+        # InsightEngine just needs the ID for this operation
+        engine = InsightEngine(None, None, org.id)
+        engine.mark_all_seen()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to mark insights seen: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update insights")
+
+@app.post("/insights/{insight_id}/seen")
+async def mark_insight_seen(insight_id: str, org=Depends(get_current_org)):
+    """Mark a specific insight as read."""
+    try:
+        from insight_engine import InsightEngine
+        engine = InsightEngine(None, None, org.id)
+        engine.mark_seen(insight_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to mark insight seen: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update insight")
+
+
+# Mount static files ...
 # Point to the external frontend build directory
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 static_dir = os.path.join(project_root, "frontend", "dist")

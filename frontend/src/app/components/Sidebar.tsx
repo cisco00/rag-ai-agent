@@ -1,4 +1,4 @@
-import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut, Palette } from 'lucide-react';
+import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut, Palette, Lightbulb } from 'lucide-react';
 
 interface Branding {
   org_name: string;
@@ -12,13 +12,15 @@ interface SidebarProps {
   onNavigate: (view: string) => void;
   isConfigured: boolean;
   branding: Branding;
+  unseenInsights: number;
 }
 
-export function Sidebar({ currentView, onNavigate, isConfigured, branding }: SidebarProps) {
+export function Sidebar({ currentView, onNavigate, isConfigured, branding, unseenInsights }: SidebarProps) {
   const primaryColor = branding.primary_color || '#2563eb';
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'insights', label: 'Insights', icon: Lightbulb, badge: unseenInsights > 0 ? unseenInsights : undefined },
     { id: 'database', label: 'Database', icon: Database },
     { id: 'management', label: 'Data Management', icon: Database, disabled: !isConfigured },
     { id: 'import', label: 'Import Files', icon: Upload },
@@ -70,7 +72,12 @@ export function Sidebar({ currentView, onNavigate, isConfigured, branding }: Sid
               style={isActive ? { backgroundColor: `${primaryColor}15`, color: primaryColor } : {}}
             >
               <Icon className="size-5" />
-              <span className="font-medium">{item.label}</span>
+              <span className="font-medium flex-1">{item.label}</span>
+              {item.badge !== undefined && (
+                <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                  {item.badge}
+                </span>
+              )}
             </button>
           );
         })}

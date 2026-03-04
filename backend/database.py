@@ -172,7 +172,8 @@ class DatabaseManager:
         self,
         sql: str,
         validate: bool = True,
-        allow_modifications: bool = True
+        allow_modifications: bool = True,
+        max_rows: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Execute an SQL statement and return results as dictionaries.
@@ -181,6 +182,7 @@ class DatabaseManager:
             sql: SQL query to execute
             validate: Whether to validate the query
             allow_modifications: Whether to allow modification queries
+            max_rows: Optional maximum number of rows to return
         
         Returns:
             List of dictionaries representing query results
@@ -200,7 +202,8 @@ class DatabaseManager:
             "Executing query",
             extra={
                 "query_preview": sql[:100],
-                "query_length": len(sql)
+                "query_length": len(sql),
+                "max_rows": max_rows
             }
         )
         
@@ -210,21 +213,21 @@ class DatabaseManager:
                     # Start explicit transaction to ensure clean state
                     with connection.begin():
                         # Escape colons in the SQL that aren't bind parameters.
-                        # SQLAlchemy's text() treats :word as a named param,
-                        # which breaks date format strings like strftime('%H:%M', ...).
-                        # We escape ALL colons to :: (SQLAlchemy literal colon)
-                        # since we never use actual bind parameters here.
                         safe_sql = sql.replace(":", "\\:")
                         result = connection.execute(text(safe_sql))
                         
                         # Check if query returns results
                         query_type = sql.strip().upper().split()[0]
                         if query_type in ["SELECT", "PRAGMA", "SHOW", "DESCRIBE"]:
-                            rows = result.fetchall()
+                            if max_rows:
+                                rows = result.fetchmany(max_rows)
+                            else:
+                                rows = result.fetchall()
+                                
                             data = [dict(row._mapping) for row in rows]
                             logger.info(
                                 "Query executed successfully",
-                                extra={"rows_returned": len(data)}
+                                extra={"rows_returned": len(data), "max_rows": max_rows}
                             )
                             return data
                         else:

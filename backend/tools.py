@@ -74,7 +74,8 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
                 "description": (
                     "Execute a SQL query and return the results. "
                     "Use this to retrieve data from the database. "
-                    "Always use SELECT queries for data retrieval."
+                    "Always use SELECT queries for data retrieval. "
+                    "Note: Results are limited to 200 rows to prevent context overflow."
                 ),
                 "parameters": {
                     "type": "object",
@@ -163,7 +164,8 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
         """Execute query with logging."""
         logger.info(f"Tool called: execute_query(sql={sql[:100]}...)")
         try:
-            result = db.execute_query(sql)
+            # Enforce 200 row limit for agent tool calls
+            result = db.execute_query(sql, max_rows=200)
             logger.debug(f"execute_query returned {len(result)} rows")
             return result
         except Exception as e:

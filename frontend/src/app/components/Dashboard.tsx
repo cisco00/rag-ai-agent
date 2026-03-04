@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, Database, FileUp, MessageSquare, TrendingUp } from 'lucide-react';
+import { BarChart3, Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DashboardProps {
@@ -16,24 +16,28 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
   ]);
 
   const [recentQueries, setRecentQueries] = useState<any[]>([]);
+  const [recentInsights, setRecentInsights] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const [historyRes, tablesRes, sharedRes] = await Promise.all([
+        const [historyRes, tablesRes, sharedRes, insightsRes, sourcesRes] = await Promise.all([
           api.get<{ history: any[] }>('/history?limit=10'),
           api.get<{ tables: any[] }>('/tables').catch(() => ({ tables: [] })),
-          api.get<{ reports: any[] }>('/shared').catch(() => ({ reports: [] }))
+          api.get<{ reports: any[] }>('/shared').catch(() => ({ reports: [] })),
+          api.get<{ insights: any[] }>('/insights?limit=3').catch(() => ({ insights: [] })),
+          api.get<any[]>('/data/sources').catch(() => [])
         ]);
 
         const historyLength = historyRes?.history?.length || 0;
         const tablesLength = tablesRes?.tables?.length || 0;
         const sharedLength = sharedRes?.reports?.length || 0;
+        const filesCount = (sourcesRes || []).filter((s: any) => s.source_type === 'upload').length;
 
         setStats([
           { label: 'Total Queries', value: historyLength.toString(), change: '+0', icon: MessageSquare, color: 'blue' },
           { label: 'Databases Connected', value: tablesLength.toString(), change: '+0', icon: Database, color: 'green' },
-          { label: 'Files Imported', value: '0', change: '+0', icon: FileUp, color: 'purple' },
+          { label: 'Files Imported', value: filesCount.toString(), change: `+${filesCount}`, icon: FileUp, color: 'purple' },
           { label: 'Shared Reports', value: sharedLength.toString(), change: '+0', icon: BarChart3, color: 'orange' },
         ]);
 
@@ -44,12 +48,19 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
         }));
 
         setRecentQueries(formattedQueries.slice(0, 4));
+        setRecentInsights(insightsRes?.insights || []);
       } catch (error) {
         console.error('Error fetching dashboard stats:', error);
       }
     };
     fetchDashboardData();
   }, []);
+
+  const getSeverityIcon = (severity: string) => {
+    if (severity === 'high') return <AlertCircle className="size-4 text-red-600" />;
+    if (severity === 'medium') return <AlertTriangle className="size-4 text-orange-600" />;
+    return <Lightbulb className="size-4 text-blue-600" />;
+  };
 
   return (
     <div className="p-8">
@@ -106,6 +117,48 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Proactive Insights Summary */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900">Proactive Insights</h2>
+            <button onClick={() => onNavigate('insights')} className="text-sm text-blue-600 hover:text-blue-700">View All</button>
+          </div>
+          <div className="space-y-4">
+            {recentInsights.length === 0 ? (
+              <div className="text-center py-8">
+                <Lightbulb className="size-10 text-gray-200 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">No anomalies detected yet.</p>
+              </div>
+            ) : (
+              recentInsights.map((insight, index) => (
+                <div
+                  key={index}
+                  onClick={() => onNavigate('insights')}
+                  className="p-4 rounded-lg border border-gray-100 hover:border-blue-200 hover:bg-blue-50 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    {getSeverityIcon(insight.severity)}
+                    <span className="text-xs font-bold text-gray-500 uppercase tracking-tight">{insight.metric_column}</span>
+                  </div>
+                  <p className="text-sm font-bold text-gray-900 line-clamp-1">{insight.headline}</p>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className={`text-xs font-bold ${insight.change_pct > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {insight.change_pct > 0 ? '+' : ''}{insight.change_pct}%
+                    </span>
+                    <ChevronRight className="size-4 text-gray-400" />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <button
+            onClick={() => onNavigate('insights')}
+            className="w-full mt-6 flex items-center justify-center gap-2 p-3 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+          >
+            Go to Insights Center
+          </button>
         </div>
 
         {/* Quick Actions */}

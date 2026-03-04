@@ -12,9 +12,10 @@ import { AdvancedAnalytics } from './components/AdvancedAnalytics';
 import { RealTimeStreaming } from './components/RealTimeStreaming';
 import { DataManagement } from './components/DataManagement';
 import { BrandingSettings } from './components/BrandingSettings';
+import { Insights } from './components/Insights';
 import { api } from '../lib/api';
 
-type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' | 'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding';
+type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' | 'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' | 'insights';
 
 interface Branding {
   org_name: string;
@@ -34,6 +35,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [apiKey, setApiKey] = useState<string | null>(localStorage.getItem('vantage_api_key'));
   const [isConfigured, setIsConfigured] = useState(false);
+  const [unseenCount, setUnseenCount] = useState(0);
   const [branding, setBranding] = useState<Branding>(() => {
     try {
       const saved = localStorage.getItem('vantage_branding');
@@ -71,6 +73,23 @@ export default function App() {
     fetchBranding();
   }, [apiKey]);
 
+  // Fetch unseen insights count
+  useEffect(() => {
+    if (!apiKey) return;
+    const fetchUnseenCount = async () => {
+      try {
+        const data = await api.get<{ insights: any[] }>('/insights?limit=100');
+        const count = (data.insights || []).filter((i: any) => i.seen === 0).length;
+        setUnseenCount(count);
+      } catch (err) {
+        console.error('Failed to fetch unseen insights', err);
+      }
+    };
+    fetchUnseenCount();
+    const interval = setInterval(fetchUnseenCount, 30000); // 30s
+    return () => clearInterval(interval);
+  }, [apiKey]);
+
   const handleApiKeySet = (key: string) => {
     setApiKey(key);
     localStorage.setItem('vantage_api_key', key);
@@ -88,6 +107,7 @@ export default function App() {
         onNavigate={(view) => setCurrentView(view as View)}
         isConfigured={isConfigured}
         branding={branding}
+        unseenInsights={unseenCount}
       />
       <main className="flex-1 overflow-auto">
         {currentView === 'dashboard' && <Dashboard onNavigate={(view) => setCurrentView(view as View)} isConfigured={isConfigured} />}
@@ -106,6 +126,7 @@ export default function App() {
         {currentView === 'transform' && <DataTransformation apiKey={apiKey} />}
         {currentView === 'analytics' && <AdvancedAnalytics apiKey={apiKey} />}
         {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey} />}
+        {currentView === 'insights' && <Insights />}
         {currentView === 'branding' && (
           <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
         )}

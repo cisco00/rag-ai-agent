@@ -61,6 +61,8 @@ services:
     container_name: vantage_frontend
     ports:
       - "5173:80"
+    environment:
+      - PORT=80
     depends_on:
       - vantage-backend
     restart: unless-stopped
