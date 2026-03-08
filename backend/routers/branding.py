@@ -114,10 +114,13 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
                 )
             )
 
-        cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{request.new_db_name}'")
-        if not cur.fetchone():
-            if not request.new_db_name.isalnum():
-                raise HTTPException(status_code=400, detail="Database name must be alphanumeric")
+        cur.execute(sql.SQL("SELECT 1 FROM pg_database WHERE datname = {}").format(sql.Literal(request.new_db_name)))
+        if cur.fetchone():
+            raise HTTPException(status_code=400, detail=f"Database '{request.new_db_name}' already exists. Please choose a different name.")
+        else:
+            import re
+            if not re.match(r'^[a-zA-Z0-9_\-]+$', request.new_db_name):
+                raise HTTPException(status_code=400, detail="Database name must be alphanumeric, underscores, or hyphens")
             cur.execute(
                 sql.SQL("CREATE DATABASE {} OWNER {}").format(
                     sql.Identifier(request.new_db_name), sql.Identifier(request.new_user)

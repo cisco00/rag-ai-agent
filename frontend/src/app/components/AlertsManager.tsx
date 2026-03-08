@@ -17,6 +17,7 @@ interface AlertRule {
   notify_webhook?: string;
   cooldown_minutes: number;
   last_triggered_at?: string;
+  timestamp_column?: string;
 }
 
 interface AlertHistory {
@@ -43,6 +44,7 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
     name: '', alert_type: 'metric', table_name: '', column_name: '',
     aggregate: 'avg', operator: '>', threshold_value: '', lookback_hours: 24,
     notify_email: '', notify_webhook: '', cooldown_minutes: 60,
+    timestamp_column: 'created_at',
   });
 
   const fetchAlerts = async () => {
@@ -66,7 +68,7 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
     try {
       await api.post('/alerts', { ...form, threshold_value: Number(form.threshold_value) });
       setShowCreate(false);
-      setForm({ name: '', alert_type: 'metric', table_name: '', column_name: '', aggregate: 'avg', operator: '>', threshold_value: '', lookback_hours: 24, notify_email: '', notify_webhook: '', cooldown_minutes: 60 });
+      setForm({ name: '', alert_type: 'metric', table_name: '', column_name: '', aggregate: 'avg', operator: '>', threshold_value: '', lookback_hours: 24, notify_email: '', notify_webhook: '', cooldown_minutes: 60, timestamp_column: 'created_at' });
       fetchAlerts();
     } catch (e: any) { alert(e.message || 'Failed to create alert'); }
     setLoading(false);
@@ -147,6 +149,13 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
               <input type="number" value={form.lookback_hours} onChange={e => setForm(f => ({ ...f, lookback_hours: Number(e.target.value) }))}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
             </div>
+            {form.operator.startsWith('pct_change') && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Timestamp Column</label>
+                <input value={form.timestamp_column} onChange={e => setForm(f => ({ ...f, timestamp_column: e.target.value }))}
+                  placeholder="created_at" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Notify Email</label>
               <input value={form.notify_email} onChange={e => setForm(f => ({ ...f, notify_email: e.target.value }))}
@@ -191,6 +200,9 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
                   <p className="text-sm text-gray-500 mt-0.5">
                     {alert.aggregate?.toUpperCase()}({alert.column_name}) {alert.operator} {alert.threshold_value}
                     {' '}in <span className="font-mono text-xs bg-gray-100 px-1 rounded">{alert.table_name}</span>
+                    {alert.timestamp_column && alert.timestamp_column !== 'created_at' && (
+                      <span className="text-xs text-gray-400 ml-2"> (via {alert.timestamp_column})</span>
+                    )}
                   </p>
                   {alert.last_triggered_at && (
                     <p className="text-xs text-orange-600 mt-1 flex items-center gap-1">

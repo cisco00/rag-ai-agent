@@ -259,6 +259,16 @@ def get_user_by_email(org_id: int, email: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_user_by_email_global(email: str) -> Optional[dict]:
+    """Find a user by email across all organizations. Returns first active match."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM users WHERE email = :email AND is_active = 1 LIMIT 1"),
+            {"email": email.lower().strip()}
+        ).mappings().first()
+    return dict(row) if row else None
+
+
 def list_org_users(org_id: int) -> list[dict]:
     with admin_engine.connect() as conn:
         rows = conn.execute(
@@ -291,13 +301,28 @@ def deactivate_user(org_id: int, user_id: int):
 
 # ─── Login / Refresh / Logout ─────────────────────────────────────────────────
 
-def login_user(org_id: int, email: str, password: str) -> dict:
-    user = get_user_by_email(org_id, email)
+def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
+    if org_id:
+        user = get_user_by_email(org_id, email)
+    else:
+        user = get_user_by_email_global(email)
+        
     if not user or not verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
+    effective_org_id = user["org_id"]
+    
+    # Get the organization API key to return it for the frontend
+    with admin_engine.connect() as conn:
+        org_row = conn.execute(
+            text("SELECT api_key FROM organizations WHERE id = :id"),
+            {"id": effective_org_id}
+        ).mappings().first()
+    
+    api_key = org_row["api_key"] if org_row else None
+
     # Generate tokens
-    access_token          = _make_access_token(user["id"], org_id, user["role"])
+    access_token          = _make_access_token(user["id"], effective_org_id, user["role"])
     raw_refresh, ref_hash = _make_refresh_token()
     expires_at            = (datetime.utcnow() + timedelta(days=REFRESH_TOKEN_TTL)).isoformat()
     now                   = datetime.utcnow().isoformat()
@@ -319,6 +344,7 @@ def login_user(org_id: int, email: str, password: str) -> dict:
     return {
         "access_token":  access_token,
         "refresh_token": raw_refresh,
+        "api_key":       api_key,
         "token_type":    "bearer",
         "expires_in":    ACCESS_TOKEN_TTL * 60,
         "user": {
@@ -418,7 +444,7 @@ def accept_invite(raw_token: str, password: str, display_name: Optional[str] = N
                 {"h": token_hash}
             )
 
-    return login_user(invite["org_id"], invite["email"], password)
+    return login_user(email=invite["email"], password=password, org_id=invite["org_id"])
 
 
 # ─── FastAPI dependencies ─────────────────────────────────────────────────────

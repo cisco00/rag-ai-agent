@@ -50,12 +50,7 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
   const [sessions, setSessions] = useState<any[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [exampleQueries, setExampleQueries] = useState<string[]>([
-    'What are the top 5 products by revenue?',
-    'Show me sales trends over the last quarter',
-    'Which customers have the highest lifetime value?',
-    'Compare product categories by profit margin',
-  ]);
+  const [exampleQueries, setExampleQueries] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   useEffect(() => {
@@ -487,7 +482,7 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
         </div>
 
         {/* Example Queries (shown when no messages) */}
-        {messages.length === 1 && (
+        {messages.length === 1 && (isLoadingSuggestions || exampleQueries.length > 0) && (
           <div className="p-6 bg-white border-t border-gray-200">
             <div className="max-w-5xl mx-auto">
               <p className="text-sm font-medium text-gray-700 mb-3">Try asking:</p>

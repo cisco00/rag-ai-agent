@@ -78,6 +78,7 @@ def ensure_alert_tables():
 
             -- Metadata
             created_by          INTEGER,
+            timestamp_column    {text_} DEFAULT 'created_at',
             created_at          {text_} NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_alert_rules_org_id ON alert_rules (org_id);
@@ -100,6 +101,13 @@ def ensure_alert_tables():
         with conn.begin():
             for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
+                
+            # Backward compatibility: add timestamp_column if it's missing
+            try:
+                conn.execute(text(f"ALTER TABLE alert_rules ADD COLUMN timestamp_column {text_} DEFAULT 'created_at'"))
+            except Exception as e:
+                # Column likely already exists
+                pass
 
 
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -112,11 +120,13 @@ def create_alert_rule(org_id: int, data: dict) -> dict:
                 INSERT INTO alert_rules
                     (org_id, name, is_active, alert_type, table_name, column_name,
                      aggregate, operator, threshold_value, lookback_hours,
-                     notify_email, notify_webhook, cooldown_minutes, created_by, created_at)
+                     notify_email, notify_webhook, cooldown_minutes, created_by, 
+                     timestamp_column, created_at)
                 VALUES
                     (:org_id, :name, 1, :alert_type, :table_name, :column_name,
                      :aggregate, :operator, :threshold_value, :lookback_hours,
-                     :notify_email, :notify_webhook, :cooldown_minutes, :created_by, :now)
+                     :notify_email, :notify_webhook, :cooldown_minutes, :created_by,
+                     :timestamp_column, :now)
             """), {
                 "org_id":          org_id,
                 "name":            data["name"],
@@ -131,6 +141,7 @@ def create_alert_rule(org_id: int, data: dict) -> dict:
                 "notify_webhook":  data.get("notify_webhook"),
                 "cooldown_minutes":data.get("cooldown_minutes", 60),
                 "created_by":      data.get("created_by"),
+                "timestamp_column":data.get("timestamp_column", "created_at"),
                 "now":             now,
             })
         row = conn.execute(
@@ -162,7 +173,7 @@ def update_alert_rule(rule_id: int, org_id: int, updates: dict):
     allowed = {
         "name", "is_active", "table_name", "column_name", "aggregate",
         "operator", "threshold_value", "lookback_hours",
-        "notify_email", "notify_webhook", "cooldown_minutes",
+        "notify_email", "notify_webhook", "cooldown_minutes", "timestamp_column",
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
     if not filtered:
@@ -220,20 +231,23 @@ def _evaluate_metric_rule(rule: dict, org_conn_str: str) -> tuple[bool, Optional
     hours      = rule.get("lookback_hours", 24)
 
     dm = DatabaseManager(connection_string=org_conn_str)
+    dialect = dm.engine.dialect.name
+    
     try:
         if op in ("pct_change_gt", "pct_change_lt"):
+            ts_col = rule.get("timestamp_column", "created_at")
             # Compare recent window vs previous window of same length
-            recent_sql = (
-                f'SELECT {agg}("{column}") AS val FROM "{table}" '
-                f'WHERE "{column}" IS NOT NULL '
-                f"AND created_at >= datetime('now', '-{hours} hours')"
-            )
-            prev_sql = (
-                f'SELECT {agg}("{column}") AS val FROM "{table}" '
-                f'WHERE "{column}" IS NOT NULL '
-                f"AND created_at >= datetime('now', '-{hours * 2} hours') "
-                f"AND created_at < datetime('now', '-{hours} hours')"
-            )
+            if dialect == "postgresql":
+                recent_where = f'"{ts_col}" >= CURRENT_TIMESTAMP - INTERVAL \'{hours} hours\''
+                prev_where   = f'"{ts_col}" >= CURRENT_TIMESTAMP - INTERVAL \'{hours * 2} hours\' AND "{ts_col}" < CURRENT_TIMESTAMP - INTERVAL \'{hours} hours\''
+            else:
+                # SQLite fallback
+                recent_where = f'"{ts_col}" >= datetime(\'now\', \'-{hours} hours\')'
+                prev_where   = f'"{ts_col}" >= datetime(\'now\', \'-{hours * 2} hours\') AND "{ts_col}" < datetime(\'now\', \'-{hours} hours\')'
+                
+            recent_sql = f'SELECT {agg}("{column}") AS val FROM "{table}" WHERE "{column}" IS NOT NULL AND {recent_where}'
+            prev_sql   = f'SELECT {agg}("{column}") AS val FROM "{table}" WHERE "{column}" IS NOT NULL AND {prev_where}'
+
             recent  = dm.execute_query(recent_sql)
             prev    = dm.execute_query(prev_sql)
             rv      = recent[0]["val"] if recent and recent[0]["val"] is not None else None

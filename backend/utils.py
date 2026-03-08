@@ -19,7 +19,7 @@ def encrypt_string(text: str) -> str:
     return f.encrypt(text.encode('utf-8')).decode('utf-8')
 
 def decrypt_string(encrypted_text: str) -> str:
-    """Decrypt a string. Falls back to returning plaintext if not encrypted."""
+    """Decrypt a string. Falls back to returning plaintext if not encrypted, or None if decryption fails."""
     if not encrypted_text:
         return encrypted_text
         
@@ -33,8 +33,8 @@ def decrypt_string(encrypted_text: str) -> str:
     try:
         return f.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
     except (InvalidToken, ValueError) as e:
-        logger.warning(f"Failed to decrypt string, treating as plaintext (error: {e})")
-        return encrypted_text
+        logger.warning(f"Failed to decrypt string, returning None (error: {e})")
+        return None
 
 
 def clean_llm_json_content(content: str) -> str:

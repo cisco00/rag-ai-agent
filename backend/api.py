@@ -164,20 +164,17 @@ from prometheus_fastapi_instrumentator import Instrumentator
 Instrumentator().instrument(app).expose(app)
 
 
-# Temporary store for file-based database paths
-# In a real production app, this would be in a cache or persistent DB
-FILE_DB_CACHE = {}
-FILE_DB_CACHE_LOCK = threading.Lock()  # Thread-safe access to cache
 
 
-def get_org_connection_string(org, prefer_file_db: bool = False) -> Optional[str]:
-    """Get connection string for org. If prefer_file_db, use file upload DB when available."""
-    with FILE_DB_CACHE_LOCK:
-        if prefer_file_db and org.api_key in FILE_DB_CACHE:
-            return FILE_DB_CACHE[org.api_key]
-        # prefer_file_db=False: prioritize org's configured database, fallback to file cache
-        return org.db_connection_string or FILE_DB_CACHE.get(org.api_key)
 
+from dependencies import (
+    FILE_DB_CACHE,
+    FILE_DB_CACHE_LOCK,
+    SCHEMA_CACHE,
+    SCHEMA_CACHE_LOCK,
+    get_org_connection_string,
+    get_cached_schema_summary,
+)
 
 @app.get("/")
 async def read_index():
@@ -185,48 +182,6 @@ async def read_index():
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"status": "Vantage API is running", "ui": "Served separately or not found"}
-
-
-# --- Schema Caching ---
-SCHEMA_CACHE = {}  # {connection_string: schema_summary_str}
-SCHEMA_CACHE_LOCK = threading.Lock()
-
-def get_cached_schema_summary(connection_string: str) -> Optional[str]:
-    """
-    Get or create a schema summary string for a connection string.
-    This speeds up LLM initialization by avoiding repeated list_tables/describe_table calls.
-    """
-    if not connection_string:
-        return None
-        
-    with SCHEMA_CACHE_LOCK:
-        if connection_string in SCHEMA_CACHE:
-            return SCHEMA_CACHE[connection_string]
-            
-    # Cache miss - generate summary
-    logger.info(f"Generating schema summary for cache: {connection_string[:20]}...")
-    try:
-        db_manager = DatabaseManager(connection_string=connection_string)
-        try:
-            tables = db_manager.list_tables()
-            summary_parts = []
-            for table in tables:
-                schema = db_manager.describe_table(table)
-                cols = ", ".join([f"{col[0]} ({col[1]})" for col in schema])
-                summary_parts.append(f"Table '{table}': {cols}")
-            
-            summary = "\n".join(summary_parts)
-            
-            with SCHEMA_CACHE_LOCK:
-                SCHEMA_CACHE[connection_string] = summary
-                
-            return summary
-        finally:
-            db_manager.close()
-    except Exception as e:
-        logger.error(f"Failed to generate schema summary: {e}")
-        return None
-
 
 # --- Models ---
 class RegisterRequest(BaseModel):
@@ -392,6 +347,64 @@ async def register(request: RegisterRequest):
     except Exception as e:
         logger.error(f"Registration error: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
+
+# --- Authentication Endpoints ---
+
+@app.post("/auth/register")
+async def register_user_endpoint(request: RegisterUserRequest, org: Organization = Depends(get_current_org)):
+    """Create the initial owner user for an organization."""
+    try:
+        # Check if org already has any users. If yes, only admins can add more (or use invite flow).
+        # For this endpoint, we assume it's the initial owner creation right after org registration.
+        users = list_org_users(org.id)
+        role = "owner" if not users else "analyst"
+        
+        user = create_user(
+            org_id=org.id,
+            email=request.email,
+            password=request.password,
+            display_name=request.display_name,
+            role=role
+        )
+        # Auto-login after registration
+        return login_user(email=request.email, password=request.password, org_id=org.id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"User registration error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/auth/login")
+async def login_endpoint(request: LoginRequest):
+    """Login a user within an organization."""
+    return login_user(request.email, request.password)
+
+@app.post("/auth/refresh")
+async def refresh_token_endpoint(refresh_token: str = Header(...)):
+    """Refresh the access token using a refresh token."""
+    return refresh_access_token(refresh_token)
+
+@app.post("/auth/logout")
+async def logout_endpoint(refresh_token: str = Header(...)):
+    """Logout a user by revoking their refresh token."""
+    logout_user(refresh_token)
+    return {"message": "Logged out successfully"}
+
+@app.get("/auth/me")
+async def get_me_endpoint(user: dict = Depends(get_current_user)):
+    """Get current logged-in user info."""
+    return user
+
+@app.post("/auth/invite")
+async def invite_user_endpoint(request: InviteRequest, admin: dict = Depends(require_min_role("admin"))):
+    """Invite a new user to the organization."""
+    token = create_invite(admin["org_id"], request.email, request.role, admin["id"])
+    return {"invite_token": token, "email": request.email}
+
+@app.post("/auth/accept")
+async def accept_invite_endpoint(request: AcceptInviteRequest):
+    """Accept an invitation to join an organization."""
+    return accept_invite(request.token, request.password, request.display_name)
 
 async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
     """
@@ -653,13 +666,14 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
              ))
         
         # 3. Check if DB exists
-        cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{request.new_db_name}'")
+        cur.execute(sql.SQL("SELECT 1 FROM pg_database WHERE datname = {}").format(sql.Literal(request.new_db_name)))
         if cur.fetchone():
-             pass 
+             raise HTTPException(status_code=400, detail=f"Database '{request.new_db_name}' already exists. Please choose a different name.")
         else:
             # Create it with new user as owner
-            if not request.new_db_name.isalnum():
-                 raise HTTPException(status_code=400, detail="Database name must be alphanumeric")
+            import re
+            if not re.match(r'^[a-zA-Z0-9_\-]+$', request.new_db_name):
+                 raise HTTPException(status_code=400, detail="Database name must be alphanumeric, underscores, or hyphens")
             
             # CREATE DATABASE cannot be executed with sql parameters easily for identifier?
             # actually sql.Identifier works

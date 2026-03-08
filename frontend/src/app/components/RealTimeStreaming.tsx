@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSessionStorage } from '../../hooks/useSessionStorage';
 import { Radio, Play, Pause, RotateCcw, Activity, Wifi, WifiOff } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../../lib/api';
@@ -15,20 +16,42 @@ interface DataPoint {
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
 
 export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [dataPoints, setDataPoints] = useState<DataPoint[]>([]);
-  const [maxDataPoints, setMaxDataPoints] = useState(50);
+  const [isStreaming, setIsStreaming] = useSessionStorage('realtime_isStreaming', false);
+  const [dataPoints, setDataPoints] = useSessionStorage<DataPoint[]>('realtime_dataPoints', []);
+  const [maxDataPoints, setMaxDataPoints] = useSessionStorage('realtime_maxDataPoints', 50);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'error'>('idle');
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const replayIndexRef = useRef(0);
   const replayDataRef = useRef<any[]>([]);
+  // Use a ref for current threshold state so it's fresh in websocket callbacks without needing recreating the socket
+  const configRef = useRef({ enableAnomalyDetection, anomalyThreshold });
+
+  useEffect(() => {
+    configRef.current = { enableAnomalyDetection, anomalyThreshold };
+  }, [enableAnomalyDetection, anomalyThreshold]);
+
+  // Helper function to detect anomaly based on recent history
+  const detectAnomaly = (val: number, history: number[], threshold: number): boolean => {
+    if (history.length < 5) return false; // Need minimum points for stats
+    const mean = history.reduce((a, b) => a + b, 0) / history.length;
+    const sqDiffs = history.map(v => Math.pow(v - mean, 2));
+    const variance = sqDiffs.reduce((a, b) => a + b, 0) / history.length;
+    const stdDev = Math.sqrt(variance);
+    if (stdDev === 0) return false;
+    const zScore = Math.abs((val - mean) / stdDev);
+    return zScore > threshold;
+  };
 
   // Dynamic source + column selection
   const [tables, setTables] = useState<string[]>([]);
-  const [selectedTable, setSelectedTable] = useState('');
+  const [selectedTable, setSelectedTable] = useSessionStorage('realtime_selectedTable', '');
   const [availableColumns, setAvailableColumns] = useState<string[]>([]);
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useSessionStorage<string[]>('realtime_selectedColumns', []);
+
+  // Anomaly detection states
+  const [enableAnomalyDetection, setEnableAnomalyDetection] = useSessionStorage('realtime_enableAnomalyDetection', false);
+  const [anomalyThreshold, setAnomalyThreshold] = useSessionStorage('realtime_anomalyThreshold', 3.0);
 
   // Fetch tables on mount
   useEffect(() => {
@@ -37,7 +60,9 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
         const resp = await api.get<{ tables: string[] }>('/tables');
         if (resp.tables && resp.tables.length > 0) {
           setTables(resp.tables);
-          setSelectedTable(resp.tables[0]);
+          if (!selectedTable) {
+            setSelectedTable(resp.tables[0]);
+          }
         }
       } catch (err) {
         console.error('Failed to fetch tables:', err);
@@ -55,21 +80,27 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
         if (data && data.columns) {
           const cols: string[] = data.columns.map((c: any) => c.name);
           setAvailableColumns(cols);
-          // Auto-select first few numeric-looking columns
-          setSelectedColumns(cols.slice(0, 3));
+          // Only auto-select first few numeric-looking columns if none were previously stored
+          if (selectedColumns.length === 0) {
+            setSelectedColumns(cols.slice(0, 3));
+          }
         }
       } catch (err) {
         console.error('Failed to fetch columns:', err);
       }
     };
     fetchColumns();
-    setDataPoints([]);
-    replayIndexRef.current = 0;
-    replayDataRef.current = [];
+    // Only clear data points if we don't have existing stream data for this table
+    if (dataPoints.length === 0) {
+      setDataPoints([]);
+      replayIndexRef.current = 0;
+      replayDataRef.current = [];
+    }
   }, [selectedTable]);
 
   // Load replay data when streaming starts
   const loadReplayData = useCallback(async () => {
+    if (!selectedTable) return false;
     try {
       const data = await api.get<any>(`/tables/${selectedTable}/preview?limit=50`);
       if (data && data.rows && data.rows.length > 0) {
@@ -101,7 +132,23 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
       }
     });
 
-    setDataPoints(prev => [...prev, point].slice(-maxDataPoints));
+    setDataPoints(prev => {
+      // Evaluate anomalies if enabled
+      let isAnomaly = false;
+      const { enableAnomalyDetection, anomalyThreshold } = configRef.current;
+
+      if (enableAnomalyDetection && selectedColumns.length > 0) {
+        // Evaluate based on the primary (first) selected column
+        const primaryCol = selectedColumns[0];
+        const val = point[primaryCol];
+        if (typeof val === 'number') {
+          const history = prev.map(p => p[primaryCol]).filter(v => typeof v === 'number') as number[];
+          isAnomaly = detectAnomaly(val, history, anomalyThreshold);
+        }
+      }
+
+      return [...prev, { ...point, isAnomaly }].slice(-maxDataPoints);
+    });
   }, [selectedColumns, maxDataPoints]);
 
   // Main streaming effect
@@ -171,7 +218,21 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
             if (raw[col] !== undefined) point[col] = raw[col];
           });
           if (Object.keys(point).length > 1) {
-            setDataPoints(prev => [...prev, point].slice(-maxDataPoints));
+            setDataPoints(prev => {
+              let isAnomaly = false;
+              const { enableAnomalyDetection, anomalyThreshold } = configRef.current;
+
+              if (enableAnomalyDetection && selectedColumns.length > 0) {
+                const primaryCol = selectedColumns[0];
+                const val = point[primaryCol];
+                if (typeof val === 'number') {
+                  const history = prev.map(p => p[primaryCol]).filter(v => typeof v === 'number') as number[];
+                  isAnomaly = detectAnomaly(val, history, anomalyThreshold);
+                }
+              }
+
+              return [...prev, { ...point, isAnomaly }].slice(-maxDataPoints);
+            });
           }
         } catch (e) {
           console.error('Failed to parse WebSocket message', e);
@@ -310,6 +371,37 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
             />
           </div>
 
+          {/* Anomaly Detection Toggle */}
+          <div className="pt-4 border-t border-gray-100 space-y-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableAnomalyDetection}
+                onChange={(e) => setEnableAnomalyDetection(e.target.checked)}
+                className="accent-red-600 size-4"
+              />
+              <span className="text-sm font-bold text-gray-900">Enable Live Anomaly Detection</span>
+            </label>
+
+            {enableAnomalyDetection && (
+              <div className="pl-6 space-y-2">
+                <label className="block text-xs font-medium text-gray-700">
+                  Sensitivity Threshold (Z-Score: {anomalyThreshold})
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  step="0.1"
+                  value={anomalyThreshold}
+                  onChange={(e) => setAnomalyThreshold(parseFloat(e.target.value))}
+                  className="w-full accent-red-600"
+                />
+                <p className="text-xs text-gray-500">Lower = more sensitive. Above 3.0 represents a &gt;99.7% statistical deviation.</p>
+              </div>
+            )}
+          </div>
+
           {/* Start / Pause / Reset */}
           <div className="flex gap-2">
             {!isStreaming ? (
@@ -400,18 +492,27 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Legend />
-                  {selectedColumns.map((col, i) => (
-                    <Line
-                      key={col}
-                      type="monotone"
-                      dataKey={col}
-                      stroke={COLORS[i % COLORS.length]}
-                      strokeWidth={2}
-                      dot={false}
-                      name={col}
-                      isAnimationActive={false}
-                    />
-                  ))}
+                  {selectedColumns.map((col, i) => {
+                    const isPrimaryCol = enableAnomalyDetection && i === 0;
+                    return (
+                      <Line
+                        key={col}
+                        type="monotone"
+                        dataKey={col}
+                        stroke={COLORS[i % COLORS.length]}
+                        strokeWidth={2}
+                        dot={isPrimaryCol ? (props: any) => {
+                          const { cx, cy, payload } = props;
+                          if (payload && payload.isAnomaly) {
+                            return <circle key={`anomaly-${cx}-${cy}`} cx={cx} cy={cy} r={5} fill="red" stroke="white" strokeWidth={2} />;
+                          }
+                          return <span key={`empty-${cx}-${cy}`} />;
+                        } : false}
+                        name={col + (isPrimaryCol ? ' (Analyzed)' : '')}
+                        isAnimationActive={false}
+                      />
+                    );
+                  })}
                 </LineChart>
               </ResponsiveContainer>
             ) : (

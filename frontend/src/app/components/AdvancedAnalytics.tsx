@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSessionStorage } from '../../hooks/useSessionStorage';
 import { TrendingUp, Activity, Grid3x3, Play, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { LineChart, Line, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -10,15 +11,15 @@ interface AdvancedAnalyticsProps {
 type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation';
 
 export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
-  const [activeTab, setActiveTab] = useState<AnalyticsTab>('forecast');
+  const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [forecastData, setForecastData] = useState<any[]>([]);
-  const [anomalyData, setAnomalyData] = useState<any[]>([]);
-  const [correlationData, setCorrelationData] = useState<any[][]>([]);
-  const [correlationColumns, setCorrelationColumns] = useState<string[]>([]);
+  const [forecastData, setForecastData] = useSessionStorage<any[]>('advanced_analytics_forecastData', []);
+  const [anomalyData, setAnomalyData] = useSessionStorage<any[]>('advanced_analytics_anomalyData', []);
+  const [correlationData, setCorrelationData] = useSessionStorage<any[][]>('advanced_analytics_correlationData', []);
+  const [correlationColumns, setCorrelationColumns] = useSessionStorage<string[]>('advanced_analytics_correlationColumns', []);
 
   // Forecast configuration
-  const [forecastConfig, setForecastConfig] = useState({
+  const [forecastConfig, setForecastConfig] = useSessionStorage('advanced_analytics_forecastConfig', {
     table: 'sales',
     dateColumn: 'date',
     valueColumn: 'revenue',
@@ -27,14 +28,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   });
 
   // Anomaly configuration
-  const [anomalyConfig, setAnomalyConfig] = useState({
+  const [anomalyConfig, setAnomalyConfig] = useSessionStorage('advanced_analytics_anomalyConfig', {
     table: 'sales',
     valueColumn: 'revenue',
     contamination: 0.05,
   });
 
   // Correlation configuration
-  const [correlationConfig, setCorrelationConfig] = useState({
+  const [correlationConfig, setCorrelationConfig] = useSessionStorage('advanced_analytics_correlationConfig', {
     table: 'sales',
     columns: ['revenue', 'quantity', 'profit', 'discount'],
     method: 'pearson',
@@ -109,9 +110,10 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       if (resp.tables) {
         setTables(resp.tables);
         if (resp.tables.length > 0) {
-          setForecastConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
-          setAnomalyConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
-          setCorrelationConfig((prev: any) => ({ ...prev, table: resp.tables[0] }));
+          // Only auto-select table if not already configured in session storage
+          setForecastConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
+          setAnomalyConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
+          setCorrelationConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
         }
       }
     } catch (err) {

@@ -1,6 +1,6 @@
 /**
  * Core API utility for making standard fetch requests to the Vantage AI backend.
- * Automatically handles the X-API-KEY header and JSON serialization.
+ * Automatically handles the X-API-KEY header and JWT Authorization header.
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
@@ -10,10 +10,18 @@ interface RequestOptions extends RequestInit {
 }
 
 /**
- * Gets the current API key from local storage
+ * Session storage helpers
  */
-export const getApiKey = (): string | null => {
-  return localStorage.getItem('vantage_api_key');
+export const getApiKey = (): string | null => localStorage.getItem('vantage_api_key');
+export const getAccessToken = (): string | null => localStorage.getItem('vantage_access_token');
+export const getRefreshToken = (): string | null => localStorage.getItem('vantage_refresh_token');
+
+export const clearSession = () => {
+  localStorage.removeItem('vantage_api_key');
+  localStorage.removeItem('vantage_access_token');
+  localStorage.removeItem('vantage_refresh_token');
+  localStorage.removeItem('vantage_user');
+  localStorage.removeItem('vantage_branding');
 };
 
 /**
@@ -29,11 +37,14 @@ const buildUrl = (endpoint: string, params?: Record<string, string>): string => 
   return url.toString();
 };
 
+let isRefreshing = false;
+
 /**
  * Core fetch wrapper
  */
 async function fetchApi<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const apiKey = getApiKey();
+  const accessToken = getAccessToken();
   const { params, headers: customHeaders, ...customConfig } = options;
 
   const config: RequestInit = {
@@ -41,9 +52,15 @@ async function fetchApi<T>(endpoint: string, options: RequestOptions = {}): Prom
   };
 
   const myHeaders = new Headers(customHeaders as any || {});
+
   if (apiKey) {
     myHeaders.set('X-API-KEY', apiKey);
   }
+
+  if (accessToken) {
+    myHeaders.set('Authorization', `Bearer ${accessToken}`);
+  }
+
   if (!(config.body instanceof FormData) && !myHeaders.has('Content-Type')) {
     myHeaders.set('Content-Type', 'application/json');
   }
@@ -59,6 +76,38 @@ async function fetchApi<T>(endpoint: string, options: RequestOptions = {}): Prom
   try {
     const response = await fetch(url, config);
 
+    // Handle 401 Unauthorized (Stale token)
+    if (response.status === 401 && !endpoint.includes('/auth/login')) {
+      const refreshToken = getRefreshToken();
+
+      if (refreshToken && !isRefreshing) {
+        isRefreshing = true;
+        try {
+          // Attempt to refresh
+          const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'refresh-token': refreshToken }
+          });
+
+          if (refreshRes.ok) {
+            const data = await refreshRes.json();
+            localStorage.setItem('vantage_access_token', data.access_token);
+            isRefreshing = false;
+            // Retry once
+            return fetchApi(endpoint, options);
+          }
+        } catch (e) {
+          console.error("Token refresh failed", e);
+        }
+        isRefreshing = false;
+      }
+
+      // If refresh failed or no token, clear and bounce
+      clearSession();
+      window.location.reload();
+      throw new Error("Session expired. Please log in again.");
+    }
+
     // Check if the response is JSON
     const contentType = response.headers.get("content-type");
     let data;
@@ -66,13 +115,6 @@ async function fetchApi<T>(endpoint: string, options: RequestOptions = {}): Prom
       data = await response.json();
     } else {
       data = await response.text();
-    }
-
-    if (response.status === 401) {
-      // Clear stale api key and bounce back to auth screen
-      localStorage.removeItem('vantage_api_key');
-      window.location.reload();
-      throw new Error("Unauthorized - invalid API key");
     }
 
     if (!response.ok) {

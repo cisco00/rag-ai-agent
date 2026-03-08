@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight } from 'lucide-react';
+import { Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight, LayoutGrid, Bell } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DashboardProps {
@@ -9,10 +9,10 @@ interface DashboardProps {
 
 export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
   const [stats, setStats] = useState([
-    { label: 'Total Queries', value: '0', change: '0', icon: MessageSquare, color: 'blue' },
-    { label: 'Databases Connected', value: '0', change: '0', icon: Database, color: 'green' },
-    { label: 'Files Imported', value: '0', change: '0', icon: FileUp, color: 'purple' },
-    { label: 'Shared Reports', value: '0', change: '0', icon: BarChart3, color: 'orange' },
+    { label: 'Total Queries', value: '0', change: '+0', icon: MessageSquare, color: 'blue' },
+    { label: 'Dashboards', value: '0', change: '+0', icon: LayoutGrid, color: 'purple' },
+    { label: 'Active Alerts', value: '0', change: '+0', icon: Bell, color: 'orange' },
+    { label: 'Insights Detected', value: '0', change: '+0', icon: Lightbulb, color: 'yellow' },
   ]);
 
   const [recentQueries, setRecentQueries] = useState<any[]>([]);
@@ -21,30 +21,29 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        const [historyRes, tablesRes, sharedRes, insightsRes, sourcesRes] = await Promise.all([
+        const [historyRes, insightsRes, dashboardsRes, alertsRes] = await Promise.all([
           api.get<{ history: any[] }>('/history?limit=10'),
-          api.get<{ tables: any[] }>('/tables').catch(() => ({ tables: [] })),
-          api.get<{ reports: any[] }>('/shared').catch(() => ({ reports: [] })),
           api.get<{ insights: any[] }>('/insights?limit=3').catch(() => ({ insights: [] })),
-          api.get<any[]>('/data/sources').catch(() => [])
+          api.get<{ dashboards: any[] }>('/dashboards').catch(() => ({ dashboards: [] })),
+          api.get<{ alerts: any[] }>('/alerts').catch(() => ({ alerts: [] })),
         ]);
 
         const historyLength = historyRes?.history?.length || 0;
-        const tablesLength = tablesRes?.tables?.length || 0;
-        const sharedLength = sharedRes?.reports?.length || 0;
-        const filesCount = (sourcesRes || []).filter((s: any) => s.source_type === 'upload').length;
+        const dashboardsCount = dashboardsRes?.dashboards?.length || 0;
+        const activeAlertsCount = (alertsRes?.alerts || []).filter((a: any) => a.is_active).length;
+        const insightsCount = insightsRes?.insights?.length || 0;
 
         setStats([
-          { label: 'Total Queries', value: historyLength.toString(), change: '+0', icon: MessageSquare, color: 'blue' },
-          { label: 'Databases Connected', value: tablesLength.toString(), change: '+0', icon: Database, color: 'green' },
-          { label: 'Files Imported', value: filesCount.toString(), change: `+${filesCount}`, icon: FileUp, color: 'purple' },
-          { label: 'Shared Reports', value: sharedLength.toString(), change: '+0', icon: BarChart3, color: 'orange' },
+          { label: 'Total Queries', value: historyLength.toString(), change: `+${historyLength}`, icon: MessageSquare, color: 'blue' },
+          { label: 'Dashboards', value: dashboardsCount.toString(), change: `+${dashboardsCount}`, icon: LayoutGrid, color: 'purple' },
+          { label: 'Active Alerts', value: activeAlertsCount.toString(), change: `+${activeAlertsCount}`, icon: Bell, color: 'orange' },
+          { label: 'Insights Detected', value: insightsCount.toString(), change: `+${insightsCount}`, icon: Lightbulb, color: 'yellow' },
         ]);
 
         const formattedQueries = (historyRes?.history || []).map((h: any) => ({
           query: h.query,
           time: new Date(h.created_at).toLocaleDateString(),
-          status: 'success'
+          status: 'success',
         }));
 
         setRecentQueries(formattedQueries.slice(0, 4));
@@ -66,7 +65,7 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+        <h1 className="text-3xl font-bold text-gray-900">Overview</h1>
         <p className="text-gray-600 mt-2">Welcome back! Here's an overview of your analytics activity.</p>
       </div>
 
@@ -76,9 +75,9 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
           const Icon = stat.icon;
           const colorClasses = {
             blue: 'bg-blue-100 text-blue-600',
-            green: 'bg-green-100 text-green-600',
             purple: 'bg-purple-100 text-purple-600',
             orange: 'bg-orange-100 text-orange-600',
+            yellow: 'bg-yellow-100 text-yellow-600',
           }[stat.color];
 
           return (
@@ -101,90 +100,104 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
         <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold text-gray-900">Recent Queries</h2>
-            <button className="text-sm text-blue-600 hover:text-blue-700">View All</button>
+            <button onClick={() => onNavigate('query')} className="text-sm text-blue-600 hover:text-blue-700">View All</button>
           </div>
           <div className="space-y-4">
-            {recentQueries.map((query, index) => (
-              <div key={index} className="flex items-start gap-4 p-4 rounded-lg hover:bg-gray-50 transition-colors">
-                <MessageSquare className="size-5 text-gray-400 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-gray-900 font-medium">{query.query}</p>
-                  <p className="text-sm text-gray-500 mt-1">{query.time}</p>
-                </div>
-                <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded">
-                  {query.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Proactive Insights Summary */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-gray-900">Proactive Insights</h2>
-            <button onClick={() => onNavigate('insights')} className="text-sm text-blue-600 hover:text-blue-700">View All</button>
-          </div>
-          <div className="space-y-4">
-            {recentInsights.length === 0 ? (
+            {recentQueries.length === 0 ? (
               <div className="text-center py-8">
-                <Lightbulb className="size-10 text-gray-200 mx-auto mb-2" />
-                <p className="text-sm text-gray-500">No anomalies detected yet.</p>
+                <MessageSquare className="size-10 text-gray-200 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">No queries yet. Start by asking a question!</p>
               </div>
             ) : (
-              recentInsights.map((insight, index) => (
-                <div
-                  key={index}
-                  onClick={() => onNavigate('insights')}
-                  className="p-4 rounded-lg border border-gray-100 hover:border-blue-200 hover:bg-blue-50 transition-all cursor-pointer"
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    {getSeverityIcon(insight.severity)}
-                    <span className="text-xs font-bold text-gray-500 uppercase tracking-tight">{insight.metric_column}</span>
+              recentQueries.map((query, index) => (
+                <div key={index} className="flex items-start gap-4 p-4 rounded-lg hover:bg-gray-50 transition-colors">
+                  <MessageSquare className="size-5 text-gray-400 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-900 font-medium truncate">{query.query}</p>
+                    <p className="text-sm text-gray-500 mt-1">{query.time}</p>
                   </div>
-                  <p className="text-sm font-bold text-gray-900 line-clamp-1">{insight.headline}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className={`text-xs font-bold ${insight.change_pct > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {insight.change_pct > 0 ? '+' : ''}{insight.change_pct}%
-                    </span>
-                    <ChevronRight className="size-4 text-gray-400" />
-                  </div>
+                  <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded flex-shrink-0">
+                    {query.status}
+                  </span>
                 </div>
               ))
             )}
           </div>
-          <button
-            onClick={() => onNavigate('insights')}
-            className="w-full mt-6 flex items-center justify-center gap-2 p-3 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-          >
-            Go to Insights Center
-          </button>
         </div>
 
-        {/* Quick Actions */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-6">Quick Actions</h2>
-          <div className="space-y-3">
-            <button
-              onClick={() => onNavigate('query')}
-              disabled={!isConfigured}
-              className={`w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 transition-colors ${isConfigured ? 'hover:border-blue-300 hover:bg-blue-50' : 'opacity-50 cursor-not-allowed'}`}
-            >
-              <MessageSquare className="size-5 text-blue-600" />
-              <span className="font-medium text-gray-900">New Query {!isConfigured && '(Requires DB)'}</span>
-            </button>
-            <button
-              onClick={() => onNavigate('import')}
-              disabled={!isConfigured}
-              className={`w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 transition-colors ${isConfigured ? 'hover:border-green-300 hover:bg-green-50' : 'opacity-50 cursor-not-allowed'}`}
-            >
-              <FileUp className="size-5 text-green-600" />
-              <span className="font-medium text-gray-900">Import File {!isConfigured && '(Requires DB)'}</span>
-            </button>
-            <button onClick={() => onNavigate('database')} className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-colors">
-              <Database className="size-5 text-purple-600" />
-              <span className="font-medium text-gray-900">Connect Database</span>
-            </button>
+        {/* Right column: Insights + Quick Actions stacked */}
+        <div className="flex flex-col gap-6">
+          {/* Proactive Insights Summary */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-gray-900">Proactive Insights</h2>
+              <button onClick={() => onNavigate('insights')} className="text-sm text-blue-600 hover:text-blue-700">View All</button>
+            </div>
+            <div className="space-y-3">
+              {recentInsights.length === 0 ? (
+                <div className="text-center py-6">
+                  <Lightbulb className="size-10 text-gray-200 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500">No anomalies detected yet.</p>
+                </div>
+              ) : (
+                recentInsights.map((insight, index) => (
+                  <div
+                    key={index}
+                    onClick={() => onNavigate('insights')}
+                    className="p-3 rounded-lg border border-gray-100 hover:border-blue-200 hover:bg-blue-50 transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      {getSeverityIcon(insight.severity)}
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-tight">{insight.metric_column}</span>
+                    </div>
+                    <p className="text-sm font-bold text-gray-900 line-clamp-1">{insight.headline}</p>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className={`text-xs font-bold ${insight.change_pct > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {insight.change_pct > 0 ? '+' : ''}{insight.change_pct}%
+                      </span>
+                      <ChevronRight className="size-4 text-gray-400" />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Quick Actions</h2>
+            <div className="space-y-3">
+              <button
+                onClick={() => onNavigate('query')}
+                disabled={!isConfigured}
+                className={`w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 transition-colors ${isConfigured ? 'hover:border-blue-300 hover:bg-blue-50' : 'opacity-50 cursor-not-allowed'}`}
+              >
+                <MessageSquare className="size-5 text-blue-600" />
+                <span className="font-medium text-gray-900">New Query{!isConfigured && ' (Requires DB)'}</span>
+              </button>
+              <button
+                onClick={() => onNavigate('import')}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-green-300 hover:bg-green-50 transition-colors"
+              >
+                <FileUp className="size-5 text-green-600" />
+                <span className="font-medium text-gray-900">Import File</span>
+              </button>
+              <button
+                onClick={() => onNavigate('database')}
+                className="w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-colors"
+              >
+                <Database className="size-5 text-purple-600" />
+                <span className="font-medium text-gray-900">Connect Database</span>
+              </button>
+              <button
+                onClick={() => onNavigate('alerts')}
+                disabled={!isConfigured}
+                className={`w-full flex items-center gap-3 p-4 rounded-lg border-2 border-gray-200 transition-colors ${isConfigured ? 'hover:border-orange-300 hover:bg-orange-50' : 'opacity-50 cursor-not-allowed'}`}
+              >
+                <Bell className="size-5 text-orange-600" />
+                <span className="font-medium text-gray-900">Manage Alerts{!isConfigured && ' (Requires DB)'}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
