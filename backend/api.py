@@ -23,7 +23,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from main import AnalyticsAgent
-from models import init_admin_db, create_org, Organization, get_org_by_api_key, update_org_db, update_branding, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history
+from models import init_admin_db, create_org, Organization, get_org_by_api_key, update_org_db, update_branding, create_shared_report, get_shared_report, get_org_shared_reports, ScheduledReport, get_db, create_feedback, create_query_history, get_org_history, DataSource, ChatSession, ChatMessage, create_chat_session, add_chat_message, get_chat_history, engine as admin_engine
 from analytics import perform_forecast, detect_anomalies, calculate_correlation
 from database import DatabaseManager
 from scheduler import start_scheduler, shutdown_scheduler, schedule_job_for_report, refresh_jobs
@@ -31,6 +31,31 @@ from utils import send_email_mock, clean_llm_json_content
 from validators import sanitize_table_name
 from org_context_manager import OrgContextManager, ensure_context_tables
 from insight_engine import InsightEngine, InsightScheduler, ensure_insight_tables
+
+# ── New features ──────────────────────────────────────────────────────────────
+from auth import (
+    ensure_auth_tables, get_current_user, require_min_role,
+    login_user, logout_user, refresh_access_token,
+    create_user, get_user_by_id, list_org_users,
+    update_user_role, deactivate_user,
+    create_invite, accept_invite,
+    LoginRequest, RegisterUserRequest, InviteRequest,
+    AcceptInviteRequest, UpdateRoleRequest, ChangePasswordRequest,
+    hash_password, verify_password, validate_password_strength,
+)
+from alerts import (
+    ensure_alert_tables, create_alert_rule, get_alert_rules,
+    get_alert_rule, update_alert_rule, delete_alert_rule,
+    get_alert_history, evaluate_all_alerts,
+)
+from dashboards import (
+    ensure_dashboard_tables, create_dashboard, get_dashboards,
+    get_dashboard, get_dashboard_by_share_token,
+    update_dashboard, delete_dashboard,
+    publish_dashboard, unpublish_dashboard,
+    add_card, get_cards, update_card, remove_card, reorder_cards, refresh_card,
+)
+from profiler import profile_table, profile_all_tables, profile_to_prompt_block
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -70,6 +95,23 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     refresh_jobs()
     ensure_context_tables()
+    ensure_auth_tables()
+    ensure_alert_tables()
+    ensure_dashboard_tables()
+
+    # Wire alert evaluation into APScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    from alerts import ALERT_CHECK_INTERVAL_MINUTES
+    from scheduler import scheduler as _scheduler
+    try:
+        _scheduler.add_job(
+            lambda: asyncio.get_event_loop().run_until_complete(evaluate_all_alerts()),
+            trigger=IntervalTrigger(minutes=ALERT_CHECK_INTERVAL_MINUTES),
+            id="alert_evaluator",
+            replace_existing=True,
+        )
+    except Exception as _e:
+        logger.warning(f"Could not register alert evaluator: {_e}")
     
     # Initialize Proactive Insight Scheduler
     def make_insight_engine(org_id: int):
@@ -2402,6 +2444,464 @@ async def mark_insight_seen(insight_id: str, org=Depends(get_current_org)):
 
 
 # Mount static files ...
+# ═════════════════════════════════════════════════════════════════════════════
+# AUTH ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.post("/auth/register-first-user")
+async def register_first_user(request: RegisterUserRequest, org=Depends(get_current_org)):
+    """
+    Create the first user for an org (bootstrap — no auth required).
+    After this, use /auth/invite to add more users.
+    Fails if the org already has any users.
+    """
+    with admin_engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE org_id=:org_id"),
+            {"org_id": org.id}
+        ).scalar()
+    if count and count > 0:
+        raise HTTPException(status_code=409, detail="Org already has users. Use /auth/invite.")
+    user = create_user(org.id, request.email, request.password,
+                       role="owner", display_name=request.display_name)
+    return {"status": "success", "user": user}
+
+
+@app.post("/auth/login")
+async def login(request: LoginRequest, org=Depends(get_current_org)):
+    """Email + password login. Returns access + refresh tokens."""
+    return login_user(org.id, request.email, request.password)
+
+
+@app.post("/auth/refresh")
+async def refresh(refresh_token: str):
+    """Exchange a valid refresh token for a new access token."""
+    return refresh_access_token(refresh_token)
+
+
+@app.post("/auth/logout")
+async def logout(refresh_token: str):
+    """Invalidate a refresh token."""
+    logout_user(refresh_token)
+    return {"status": "success"}
+
+
+@app.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    """Return the current authenticated user's profile."""
+    return user
+
+
+@app.post("/auth/change-password")
+async def change_password(
+    request: ChangePasswordRequest,
+    user: dict = Depends(get_current_user),
+):
+    from auth import get_user_by_email, hash_password, verify_password
+    full = None
+    with admin_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM users WHERE id=:id"), {"id": user["id"]}
+        ).mappings().first()
+        full = dict(row) if row else None
+    if not full or not verify_password(request.current_password, full["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+    validate_password_strength(request.new_password)
+    new_hash = hash_password(request.new_password)
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(
+                text("UPDATE users SET password_hash=:h WHERE id=:id"),
+                {"h": new_hash, "id": user["id"]}
+            )
+    return {"status": "success"}
+
+
+# ── User management (admin+) ──────────────────────────────────────────────────
+
+@app.get("/auth/users")
+async def list_users(
+    org=Depends(get_current_org),
+    user: dict = Depends(require_min_role("admin")),
+):
+    return {"users": list_org_users(org.id)}
+
+
+@app.post("/auth/invite")
+async def invite_user(
+    request: InviteRequest,
+    org=Depends(get_current_org),
+    user: dict = Depends(require_min_role("admin")),
+):
+    from utils import send_email_mock
+    token = create_invite(org.id, request.email, request.role, invited_by=user["id"])
+    # In production replace with real email delivery
+    invite_url = f"{os.getenv('APP_URL', 'https://your-app.com')}/accept-invite?token={token}"
+    send_email_mock(
+        request.email,
+        f"You've been invited to {org.name} on Vantage AI",
+        f"Click to accept your invitation:\n{invite_url}\n\nExpires in 7 days.",
+    )
+    return {"status": "success", "message": f"Invite sent to {request.email}"}
+
+
+@app.post("/auth/accept-invite")
+async def accept_invite_endpoint(request: AcceptInviteRequest):
+    return accept_invite(request.token, request.password, request.display_name)
+
+
+@app.patch("/auth/users/{user_id}/role")
+async def change_user_role(
+    user_id: int,
+    request: UpdateRoleRequest,
+    org=Depends(get_current_org),
+    actor: dict = Depends(require_min_role("admin")),
+):
+    target = get_user_by_id(user_id)
+    if not target or target["org_id"] != org.id:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target["role"] == "owner" and actor["role"] != "owner":
+        raise HTTPException(status_code=403, detail="Only the owner can change another owner's role.")
+    update_user_role(org.id, user_id, request.role)
+    return {"status": "success"}
+
+
+@app.delete("/auth/users/{user_id}")
+async def remove_user(
+    user_id: int,
+    org=Depends(get_current_org),
+    actor: dict = Depends(require_min_role("admin")),
+):
+    target = get_user_by_id(user_id)
+    if not target or target["org_id"] != org.id:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target["role"] == "owner":
+        raise HTTPException(status_code=403, detail="Cannot deactivate the org owner.")
+    deactivate_user(org.id, user_id)
+    return {"status": "success"}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ALERT ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+from pydantic import BaseModel as _BM
+from typing import Optional as _Opt
+
+class AlertRuleRequest(_BM):
+    name:             str
+    alert_type:       str             = "metric"       # "metric" | "freshness"
+    table_name:       _Opt[str]       = None
+    column_name:      _Opt[str]       = None
+    aggregate:        str             = "avg"           # avg | sum | count | min | max
+    operator:         str             = ">"             # see METRIC_OPS / FRESHNESS_OPS
+    threshold_value:  _Opt[float]     = None
+    lookback_hours:   int             = 24
+    notify_email:     _Opt[str]       = None
+    notify_webhook:   _Opt[str]       = None
+    cooldown_minutes: int             = 60
+
+
+@app.get("/alerts")
+async def list_alerts(org=Depends(get_current_org)):
+    """List all alert rules for the org."""
+    return {"alerts": get_alert_rules(org.id)}
+
+
+@app.post("/alerts")
+async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org)):
+    """Create a new alert rule."""
+    data = request.model_dump()
+    rule = create_alert_rule(org.id, data)
+    return {"status": "success", "alert": rule}
+
+
+@app.patch("/alerts/{rule_id}")
+async def update_alert(rule_id: int, request: AlertRuleRequest, org=Depends(get_current_org)):
+    rule = get_alert_rule(rule_id, org.id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Alert rule not found.")
+    update_alert_rule(rule_id, org.id, request.model_dump(exclude_unset=True))
+    return {"status": "success", "alert": get_alert_rule(rule_id, org.id)}
+
+
+@app.delete("/alerts/{rule_id}")
+async def remove_alert(rule_id: int, org=Depends(get_current_org)):
+    if not get_alert_rule(rule_id, org.id):
+        raise HTTPException(status_code=404, detail="Alert rule not found.")
+    delete_alert_rule(rule_id, org.id)
+    return {"status": "success"}
+
+
+@app.post("/alerts/{rule_id}/toggle")
+async def toggle_alert(rule_id: int, org=Depends(get_current_org)):
+    rule = get_alert_rule(rule_id, org.id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Alert rule not found.")
+    update_alert_rule(rule_id, org.id, {"is_active": 0 if rule["is_active"] else 1})
+    return {"status": "success", "is_active": not rule["is_active"]}
+
+
+@app.post("/alerts/{rule_id}/test")
+async def test_alert(rule_id: int, org=Depends(get_current_org)):
+    """Manually trigger evaluation of one rule right now (ignores cooldown)."""
+    rule     = get_alert_rule(rule_id, org.id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Alert rule not found.")
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+    from alerts import _evaluate_metric_rule, _evaluate_freshness_rule
+    try:
+        if rule.get("alert_type") == "freshness":
+            triggered, val, msg = _evaluate_freshness_rule({**rule, "org_id": org.id})
+        else:
+            triggered, val, msg = _evaluate_metric_rule(rule, conn_str)
+        return {"triggered": triggered, "current_value": val, "message": msg}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/alerts/history")
+async def alert_history(rule_id: Optional[int] = None, org=Depends(get_current_org)):
+    return {"history": get_alert_history(org.id, rule_id=rule_id)}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DASHBOARD ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+class DashboardRequest(_BM):
+    name:        str
+    description: _Opt[str] = None
+
+class CardRequest(_BM):
+    title:           _Opt[str]   = None
+    query_text:      _Opt[str]   = None
+    response_text:   _Opt[str]   = None
+    visualization:   _Opt[dict]  = None
+    sql_query:       _Opt[str]   = None
+    card_type:       str         = "query"
+    layout_x:        int         = 0
+    layout_y:        int         = 0
+    layout_w:        int         = 6
+    layout_h:        int         = 4
+    refresh_minutes: _Opt[int]   = None
+
+class CardLayoutItem(_BM):
+    id:  int
+    x:   int = 0
+    y:   int = 0
+    w:   int = 6
+    h:   int = 4
+
+
+@app.get("/dashboards")
+async def list_dashboards(org=Depends(get_current_org)):
+    return {"dashboards": get_dashboards(org.id)}
+
+
+@app.post("/dashboards")
+async def create_new_dashboard(request: DashboardRequest, org=Depends(get_current_org)):
+    dash = create_dashboard(org.id, request.name, request.description)
+    return {"status": "success", "dashboard": dash}
+
+
+@app.get("/dashboards/{dashboard_id}")
+async def get_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
+    dash = get_dashboard(dashboard_id, org.id)
+    if not dash:
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    cards = get_cards(dashboard_id, org.id)
+    return {"dashboard": dash, "cards": cards}
+
+
+@app.patch("/dashboards/{dashboard_id}")
+async def update_one_dashboard(
+    dashboard_id: int, request: DashboardRequest, org=Depends(get_current_org)
+):
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    dash = update_dashboard(dashboard_id, org.id, request.model_dump(exclude_unset=True))
+    return {"status": "success", "dashboard": dash}
+
+
+@app.delete("/dashboards/{dashboard_id}")
+async def delete_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    delete_dashboard(dashboard_id, org.id)
+    return {"status": "success"}
+
+
+@app.post("/dashboards/{dashboard_id}/publish")
+async def publish_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    token    = publish_dashboard(dashboard_id, org.id)
+    base_url = os.getenv("APP_URL", "https://your-app.com")
+    return {"status": "success", "share_url": f"{base_url}/dashboards/shared/{token}"}
+
+
+@app.post("/dashboards/{dashboard_id}/unpublish")
+async def unpublish_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    unpublish_dashboard(dashboard_id, org.id)
+    return {"status": "success"}
+
+
+@app.get("/dashboards/shared/{token}")
+async def view_shared_dashboard(token: str):
+    """Public endpoint — no auth required."""
+    dash = get_dashboard_by_share_token(token)
+    if not dash:
+        raise HTTPException(status_code=404, detail="Dashboard not found or no longer shared.")
+    cards = get_cards(dash["id"], dash["org_id"])
+    return {"dashboard": dash, "cards": cards}
+
+
+# ── Cards ─────────────────────────────────────────────────────────────────────
+
+@app.post("/dashboards/{dashboard_id}/cards")
+async def add_dashboard_card(
+    dashboard_id: int, request: CardRequest, org=Depends(get_current_org)
+):
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    card = add_card(dashboard_id, org.id, request.model_dump())
+    return {"status": "success", "card": card}
+
+
+@app.patch("/dashboards/{dashboard_id}/cards/{card_id}")
+async def update_dashboard_card(
+    dashboard_id: int, card_id: int,
+    request: CardRequest, org=Depends(get_current_org)
+):
+    card = update_card(card_id, org.id, request.model_dump(exclude_unset=True))
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found.")
+    return {"status": "success", "card": card}
+
+
+@app.delete("/dashboards/{dashboard_id}/cards/{card_id}")
+async def delete_dashboard_card(
+    dashboard_id: int, card_id: int, org=Depends(get_current_org)
+):
+    remove_card(card_id, org.id)
+    return {"status": "success"}
+
+
+@app.post("/dashboards/{dashboard_id}/layout")
+async def update_dashboard_layout(
+    dashboard_id: int, layout: List[CardLayoutItem], org=Depends(get_current_org)
+):
+    """Bulk update card positions after drag-and-drop."""
+    if not get_dashboard(dashboard_id, org.id):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    reorder_cards(dashboard_id, org.id, [i.model_dump() for i in layout])
+    return {"status": "success"}
+
+
+@app.post("/dashboards/{dashboard_id}/cards/{card_id}/refresh")
+async def refresh_dashboard_card(
+    dashboard_id: int, card_id: int, org=Depends(get_current_org)
+):
+    """Re-run the card's saved query and update its content."""
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+    agent  = AnalyticsAgent(connection_string=conn_str)
+    result = await refresh_card(card_id, org.id, conn_str, agent)
+    return result
+
+
+# ── Pin query to dashboard ─────────────────────────────────────────────────────
+
+class PinQueryRequest(_BM):
+    dashboard_id:  int
+    title:         _Opt[str]  = None
+    query_text:    str
+    response_text: _Opt[str]  = None
+    visualization: _Opt[dict] = None
+    sql_query:     _Opt[str]  = None
+
+@app.post("/dashboards/pin")
+async def pin_query_to_dashboard(request: PinQueryRequest, org=Depends(get_current_org)):
+    """
+    Save any query result as a card on an existing dashboard.
+    Designed to be called directly from the chat UI's 'Pin to Dashboard' button.
+    """
+    dash = get_dashboard(request.dashboard_id, org.id)
+    if not dash:
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+
+    # Auto-position: put new card at end of layout
+    existing = get_cards(request.dashboard_id, org.id)
+    max_y    = max((c["layout_y"] + c["layout_h"] for c in existing), default=0)
+
+    card = add_card(request.dashboard_id, org.id, {
+        "title":         request.title or request.query_text[:60],
+        "query_text":    request.query_text,
+        "response_text": request.response_text,
+        "visualization": request.visualization,
+        "sql_query":     request.sql_query,
+        "card_type":     "query",
+        "layout_x":      0,
+        "layout_y":      max_y,
+        "layout_w":      6,
+        "layout_h":      4,
+    })
+    return {"status": "success", "card": card}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DATA PROFILING ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.get("/tables/{table_name}/profile")
+async def get_table_profile(
+    table_name: str,
+    force: bool = False,
+    org=Depends(get_current_org),
+):
+    """
+    Return a column-by-column data profile for a table.
+    Results are cached for 10 minutes. Use ?force=true to bypass cache.
+
+    Includes: null%, distinct count, numeric stats (min/max/mean/median/p25/p75/std),
+    text top-values, date ranges, and sample values for each column.
+    """
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+    try:
+        profile = await run_in_threadpool(profile_table, conn_str, table_name, force)
+        return {"status": "success", "profile": profile}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Profile failed for {table_name}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/profile")
+async def get_all_profiles(org=Depends(get_current_org)):
+    """
+    Profile every table in the org's database.
+    Returns a dict keyed by table name.
+    """
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+    try:
+        profiles = await run_in_threadpool(profile_all_tables, conn_str)
+        return {"status": "success", "profiles": profiles}
+    except Exception as exc:
+        logger.error(f"Profile all failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # Point to the external frontend build directory
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 static_dir = os.path.join(project_root, "frontend", "dist")

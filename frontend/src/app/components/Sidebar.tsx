@@ -1,4 +1,4 @@
-import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut, Palette, Lightbulb } from 'lucide-react';
+import { LayoutDashboard, Database, Upload, MessageSquare, Share2, Settings, Clock, Wrench, TrendingUp, Radio, LogOut, Palette, Lightbulb, Bell, PinIcon, BarChart3 } from 'lucide-react';
 
 interface Branding {
   org_name: string;
@@ -21,9 +21,12 @@ export function Sidebar({ currentView, onNavigate, isConfigured, branding, unsee
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'insights', label: 'Insights', icon: Lightbulb, badge: unseenInsights > 0 ? unseenInsights : undefined },
+    { id: 'boards', label: 'Dashboards', icon: PinIcon, disabled: !isConfigured },
+    { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured },
     { id: 'database', label: 'Database', icon: Database },
     { id: 'management', label: 'Data Management', icon: Database, disabled: !isConfigured },
     { id: 'import', label: 'Import Files', icon: Upload },
+    { id: 'profiler', label: 'Data Profiler', icon: BarChart3, disabled: !isConfigured },
     { id: 'query', label: 'Query', icon: MessageSquare, disabled: !isConfigured },
     { id: 'transform', label: 'Transform Data', icon: Wrench, disabled: !isConfigured },
     { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured },

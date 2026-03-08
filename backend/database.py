@@ -878,3 +878,131 @@ class DatabaseManager:
         """Context manager exit."""
         self.close()
         return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OrgConnectionPool — one engine per org, reused across requests
+# ═════════════════════════════════════════════════════════════════════════════
+
+import hashlib
+import threading as _threading
+from typing import Optional as _Optional
+
+class OrgConnectionPool:
+    """
+    Process-wide pool of SQLAlchemy engines, keyed by org_id.
+
+    Why not just reuse DatabaseManager?
+    ────────────────────────────────────
+    DatabaseManager creates a new Engine (and its underlying connection pool)
+    on every instantiation, then calls engine.dispose() in close().  For a
+    busy API this means dozens of new TCP connections per second to Postgres.
+
+    OrgConnectionPool keeps one Engine alive per org for the lifetime of the
+    process.  Requests borrow a connection from the pool, use it, and return
+    it — no setup/teardown overhead.
+
+    Thread safety
+    ─────────────
+    A threading.Lock guards the _engines dict so concurrent requests for the
+    same org don't race to create duplicate engines.
+
+    Usage (in api.py)
+    ─────────────────
+        dm = ORG_POOL.get(org.id, conn_str)
+        # use dm exactly like a regular DatabaseManager
+        # DO NOT call dm.close() — the pool owns the engine
+    """
+
+    def __init__(self) -> None:
+        self._engines:      dict                  = {}   # org_id → Engine
+        self._conn_hashes:  dict                  = {}   # org_id → sha256(conn_str)
+        self._lock:         _threading.Lock       = _threading.Lock()
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def get(self, org_id: int, connection_string: str) -> "DatabaseManager":
+        """
+        Return a DatabaseManager that wraps the shared engine for org_id.
+
+        If the connection string has changed since the engine was created
+        (e.g. the org reconfigured their DB), the old engine is disposed and
+        a new one is created transparently.
+
+        The returned DatabaseManager must NOT have close() called on it —
+        doing so would dispose the shared engine.  Use get_unmanaged() if
+        you need a fully independent instance.
+        """
+        conn_hash = hashlib.sha256(connection_string.encode()).hexdigest()
+
+        with self._lock:
+            # Invalidate if connection string changed
+            if org_id in self._engines and self._conn_hashes.get(org_id) != conn_hash:
+                logger.info(f"OrgConnectionPool: conn string changed for org {org_id}, recycling engine")
+                try:
+                    self._engines[org_id].dispose()
+                except Exception:
+                    pass
+                del self._engines[org_id]
+                del self._conn_hashes[org_id]
+
+            if org_id not in self._engines:
+                logger.info(f"OrgConnectionPool: creating engine for org {org_id}")
+                dm = DatabaseManager(connection_string=connection_string)
+                self._engines[org_id]     = dm.engine
+                self._conn_hashes[org_id] = conn_hash
+                # Keep the manager's engine reference for reuse but don't
+                # rely on this dm instance for future calls.
+
+            engine = self._engines[org_id]
+
+        # Wrap the shared engine in a lightweight DatabaseManager shell.
+        # We monkey-patch the engine so we don't re-open TCP connections.
+        dm = object.__new__(DatabaseManager)
+        dm.connection_string = connection_string
+        dm.engine            = engine
+        try:
+            from sqlalchemy import inspect as _inspect
+            dm.inspector = _inspect(engine)
+        except Exception:
+            dm.inspector = None
+        return dm
+
+    def invalidate(self, org_id: int) -> None:
+        """
+        Force-dispose and remove the engine for an org.
+        Call this when an org updates their connection string.
+        """
+        with self._lock:
+            if org_id in self._engines:
+                try:
+                    self._engines[org_id].dispose()
+                except Exception:
+                    pass
+                del self._engines[org_id]
+                self._conn_hashes.pop(org_id, None)
+                logger.info(f"OrgConnectionPool: disposed engine for org {org_id}")
+
+    def dispose_all(self) -> None:
+        """Dispose every engine — call from lifespan shutdown."""
+        with self._lock:
+            for engine in self._engines.values():
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+            self._engines.clear()
+            self._conn_hashes.clear()
+        logger.info("OrgConnectionPool: all engines disposed")
+
+    def stats(self) -> dict:
+        """Return a summary dict — useful for a /health endpoint."""
+        with self._lock:
+            return {
+                "active_orgs": len(self._engines),
+                "org_ids":     list(self._engines.keys()),
+            }
+
+
+# Singleton — import this from api.py
+ORG_POOL = OrgConnectionPool()

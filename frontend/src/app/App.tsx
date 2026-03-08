@@ -13,9 +13,14 @@ import { RealTimeStreaming } from './components/RealTimeStreaming';
 import { DataManagement } from './components/DataManagement';
 import { BrandingSettings } from './components/BrandingSettings';
 import { Insights } from './components/Insights';
+import { AlertsManager } from './components/AlertsManager';
+import { DashboardsView } from './components/DashboardsView';
+import { DataProfiler } from './components/DataProfiler';
 import { api } from '../lib/api';
 
-type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' | 'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' | 'insights';
+type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
+  'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
+  'insights' | 'alerts' | 'boards' | 'profiler';
 
 interface Branding {
   org_name: string;
@@ -136,6 +141,9 @@ export default function App() {
             existingKey={apiKey}
           />
         )}
+        {currentView === 'alerts' && <AlertsManager apiKey={apiKey} />}
+        {currentView === 'boards' && <DashboardsView apiKey={apiKey} />}
+        {currentView === 'profiler' && <DataProfiler apiKey={apiKey} />}
       </main>
     </div>
   );

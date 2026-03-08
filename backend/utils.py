@@ -1,7 +1,40 @@
-
 import os
 import json
+import logging
 from typing import Any
+from cryptography.fernet import Fernet, InvalidToken
+
+logger = logging.getLogger(__name__)
+
+# Import config lazily or internally to avoid circular imports? No, utils is typically imported at bottom of dependency tree.
+# We'll import get_security_config inside the functions to be perfectly safe from circular imports during init.
+
+def encrypt_string(text: str) -> str:
+    """Encrypt a string using the application's security key."""
+    if not text:
+        return text
+    from config import get_security_config
+    key = get_security_config().encryption_key
+    f = Fernet(key.encode('utf-8'))
+    return f.encrypt(text.encode('utf-8')).decode('utf-8')
+
+def decrypt_string(encrypted_text: str) -> str:
+    """Decrypt a string. Falls back to returning plaintext if not encrypted."""
+    if not encrypted_text:
+        return encrypted_text
+        
+    # Fernet tokens start with gAAAAA...
+    if not encrypted_text.startswith('gAAAAA'):
+        return encrypted_text
+        
+    from config import get_security_config
+    key = get_security_config().encryption_key
+    f = Fernet(key.encode('utf-8'))
+    try:
+        return f.decrypt(encrypted_text.encode('utf-8')).decode('utf-8')
+    except (InvalidToken, ValueError) as e:
+        logger.warning(f"Failed to decrypt string, treating as plaintext (error: {e})")
+        return encrypted_text
 
 
 def clean_llm_json_content(content: str) -> str:

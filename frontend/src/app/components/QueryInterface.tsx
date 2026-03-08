@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Send, Loader2, FileDown, Share2, BarChart3, Mic, MicOff, ThumbsUp, ThumbsDown, MessageSquare, Plus, Trash2, Menu, X } from 'lucide-react';
+import { Send, Loader2, FileDown, Share2, BarChart3, Mic, MicOff, ThumbsUp, ThumbsDown, MessageSquare, Plus, Trash2, Menu, X, Pin, Check } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
@@ -37,6 +37,14 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
   const [showShareModal, setShowShareModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+
+  // Pin-to-dashboard state
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinMessage, setPinMessage] = useState<Message | null>(null);
+  const [pinUserQuery, setPinUserQuery] = useState<string>('');
+  const [dashboards, setDashboards] = useState<any[]>([]);
+  const [pinningId, setPinningId] = useState<number | null>(null);
+  const [pinnedIds, setPinnedIds] = useState<number[]>([]);
 
   // Chat Session states
   const [sessions, setSessions] = useState<any[]>([]);
@@ -272,6 +280,35 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
     setShowExportModal(true);
   };
 
+  const handleOpenPin = async (message: Message, index: number) => {
+    setPinMessage(message);
+    setPinnedIds([]);
+    // find the preceding user message to use as the query label
+    const prevUser = messages.slice(0, index).reverse().find(m => m.role === 'user');
+    setPinUserQuery(prevUser?.content || message.content.substring(0, 80));
+    try {
+      const d = await api.get<{ dashboards: any[] }>('/dashboards');
+      setDashboards(d.dashboards || []);
+    } catch (e) { setDashboards([]); }
+    setShowPinModal(true);
+  };
+
+  const handlePinToBoard = async (dashboardId: number) => {
+    if (!pinMessage || pinningId !== null) return;
+    setPinningId(dashboardId);
+    try {
+      await api.post(`/dashboards/${dashboardId}/cards`, {
+        title: pinUserQuery.substring(0, 80),
+        query_text: pinUserQuery,
+        response_text: pinMessage.content,
+        visualization: pinMessage.visualization || null,
+        card_type: pinMessage.visualization ? 'chart' : 'text',
+      });
+      setPinnedIds(prev => [...prev, dashboardId]);
+    } catch (e: any) { alert(e.message || 'Failed to pin card'); }
+    setPinningId(null);
+  };
+
   return (
     <div className="h-full flex flex-col md:flex-row bg-gray-50 overflow-hidden relative">
       {/* Mobile Sidebar Toggle */}
@@ -397,6 +434,13 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
                           </button>
                         </>
                       )}
+                      <button
+                        onClick={() => handleOpenPin(message, index)}
+                        className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
+                      >
+                        <Pin className="size-4" />
+                        Pin to Dashboard
+                      </button>
 
                       {/* Feedback buttons */}
                       <div className="ml-auto flex items-center gap-2">
@@ -524,6 +568,62 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
             onClose={() => setShowExportModal(false)}
             apiKey={apiKey}
           />
+        )}
+
+        {/* Pin to Dashboard Modal */}
+        {showPinModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+              <div className="flex items-center justify-between p-5 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Pin className="size-5 text-purple-600" />
+                  <h2 className="font-semibold text-gray-900">Pin to Dashboard</h2>
+                </div>
+                <button onClick={() => setShowPinModal(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                  <X className="size-4" />
+                </button>
+              </div>
+              <div className="p-4">
+                {dashboards.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    No dashboards yet. Create one in the
+                    <span className="font-medium text-purple-600"> Dashboards </span>section first.
+                  </p>
+                ) : (
+                  <ul className="space-y-2 max-h-64 overflow-y-auto">
+                    {dashboards.map((d: any) => {
+                      const pinned = pinnedIds.includes(d.id);
+                      const loading = pinningId === d.id;
+                      return (
+                        <li key={d.id}>
+                          <button
+                            onClick={() => handlePinToBoard(d.id)}
+                            disabled={loading || pinned}
+                            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors ${pinned
+                              ? 'bg-green-50 border-green-200 text-green-700'
+                              : 'bg-gray-50 border-gray-200 hover:bg-purple-50 hover:border-purple-300 text-gray-800'
+                              }`}
+                          >
+                            <span className="text-sm font-medium font-medium">{d.name}</span>
+                            {pinned && <Check className="size-4 text-green-600" />}
+                            {loading && <Loader2 className="size-4 animate-spin text-purple-500" />}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+              <div className="px-4 pb-4">
+                <button
+                  onClick={() => setShowPinModal(false)}
+                  className="w-full py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  {pinnedIds.length > 0 ? 'Done' : 'Cancel'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

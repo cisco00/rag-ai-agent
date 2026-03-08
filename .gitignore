@@ -20,6 +20,8 @@ node-v*/
 
 # Data
 *.sqlite
+*.db-shm
+*.db-wal
 
 # Misc
 *.tar.xz

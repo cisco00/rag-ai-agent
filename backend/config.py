@@ -12,7 +12,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from exceptions import MissingConfigurationError, InvalidConfigurationError
-
+import base64
+import secrets
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +48,33 @@ class DatabaseConfig:
             raise InvalidConfigurationError("pool_size", "Must be at least 1")
         if self.query_timeout < 1:
             raise InvalidConfigurationError("query_timeout", "Must be at least 1")
+
+
+@dataclass
+class SecurityConfig:
+    """Security configuration settings."""
+    
+    # Encryption key for data at rest (e.g., database connection strings)
+    # If not provided, a random key will be generated for the session, but warnings will be printed.
+    encryption_key: Optional[str] = field(default_factory=lambda: os.getenv("ENCRYPTION_KEY"))
+    
+    def validate(self) -> None:
+        """Validate security configuration."""
+        if not self.encryption_key:
+            # Generate a random 32-byte url-safe base64-encoded string, standard for Fernet
+            self.encryption_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+            print("WARNING: ENCRYPTION_KEY not found in environment variables. "
+                  "A random key has been generated for this session. "
+                  "Any encrypted data will NOT be recoverable after restart. "
+                  "Please set ENCRYPTION_KEY in your .env file.")
+        
+        try:
+            # Verify it's a valid Fernet key
+            decoded = base64.urlsafe_b64decode(self.encryption_key.encode('utf-8'))
+            if len(decoded) != 32:
+                raise ValueError("Key must be 32 url-safe base64-encoded bytes")
+        except Exception as e:
+            raise InvalidConfigurationError("encryption_key", f"Must be a valid Fernet key (32 url-safe base64-encoded bytes): {e}")
 
 
 @dataclass
@@ -318,6 +346,7 @@ class AppConfig:
     """Main application configuration."""
     
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
     file_upload: FileUploadConfig = field(default_factory=FileUploadConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -333,6 +362,7 @@ class AppConfig:
     def validate(self) -> None:
         """Validate all configuration sections."""
         self.database.validate()
+        self.security.validate()
         self.file_upload.validate()
         self.agent.validate()
         self.api.validate()
@@ -379,6 +409,11 @@ def get_config() -> AppConfig:
 def get_db_config() -> DatabaseConfig:
     """Get database configuration."""
     return config.database
+
+
+def get_security_config() -> SecurityConfig:
+    """Get security configuration."""
+    return config.security
 
 
 def get_file_upload_config() -> FileUploadConfig:

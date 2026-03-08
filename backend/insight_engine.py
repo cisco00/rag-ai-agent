@@ -4,20 +4,33 @@ Proactive Insight Engine for Vantage AI
 Automatically detects anomalies and metric changes in org databases,
 then uses the AI agent to explain WHY — surfacing insights proactively
 without the user needing to ask.
+
+Storage backend: SQLAlchemy (works with SQLite AND PostgreSQL).
+The raw sqlite3 dependency has been removed — this module now uses the same
+admin DB engine as models.py, so it works correctly when ADMIN_DB_URL points
+to a Postgres instance.
 """
 
 import asyncio
 import json
-import logging
 import uuid
 from datetime import datetime
 from typing import Optional
-import sqlite3
-import os
 
+from sqlalchemy import text
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin DB access via shared SQLAlchemy engine (same engine as models.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_admin_engine():
+    """Return the SQLAlchemy engine that models.py already initialised."""
+    from models import engine as admin_engine
+    return admin_engine
+
 
 # Keywords that identify likely KPI columns
 KPI_KEYWORDS = [
@@ -33,48 +46,56 @@ DATE_KEYWORDS = [
 ]
 
 
-def _get_admin_db_path() -> str:
-    """Standardized admin database path resolution matching org_context_manager."""
-    db_url = os.getenv("ADMIN_DB_URL") or os.getenv("ADMIN_DB_PATH") or "./admin.db"
-    
-    if db_url.startswith("sqlite:///"):
-        path = db_url.replace("sqlite:///", "")
-    elif db_url.startswith("sqlite://"):
-        path = db_url.replace("sqlite://", "")
-    else:
-        path = db_url
-        
-    return os.path.abspath(path)
-
-
-def _admin_conn():
-    c = sqlite3.connect(_get_admin_db_path())
-    c.row_factory = sqlite3.Row
-    return c
-
-
 def ensure_insight_tables():
     """
-    Create insight storage tables in admin.db.
+    Create org_insights table in the admin DB if it doesn't exist.
+    Uses SQLAlchemy so it works for both SQLite and PostgreSQL.
     Call from lifespan startup in api.py.
     """
-    with _admin_conn() as c:
-        c.executescript("""
+    engine = _get_admin_engine()
+    dialect = engine.dialect.name
+
+    if dialect == "postgresql":
+        ddl = """
             CREATE TABLE IF NOT EXISTS org_insights (
-                id TEXT PRIMARY KEY,
-                org_id INTEGER NOT NULL,
-                metric_table TEXT,
+                id          TEXT PRIMARY KEY,
+                org_id      INTEGER NOT NULL,
+                metric_table  TEXT,
                 metric_column TEXT,
-                change_pct REAL,
-                period TEXT,
-                headline TEXT,
+                change_pct  DOUBLE PRECISION,
+                period      TEXT,
+                headline    TEXT,
                 explanation TEXT,
                 likely_causes TEXT,
-                severity TEXT DEFAULT 'medium',
-                seen INTEGER DEFAULT 0,
-                created_at TEXT
+                severity    TEXT DEFAULT 'medium',
+                seen        INTEGER DEFAULT 0,
+                created_at  TEXT
             );
-        """)
+            CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
+        """
+    else:
+        ddl = """
+            CREATE TABLE IF NOT EXISTS org_insights (
+                id          TEXT PRIMARY KEY,
+                org_id      INTEGER NOT NULL,
+                metric_table  TEXT,
+                metric_column TEXT,
+                change_pct  REAL,
+                period      TEXT,
+                headline    TEXT,
+                explanation TEXT,
+                likely_causes TEXT,
+                severity    TEXT DEFAULT 'medium',
+                seen        INTEGER DEFAULT 0,
+                created_at  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
+        """
+
+    with engine.connect() as conn:
+        with conn.begin():
+            for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
+                conn.execute(text(stmt))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -84,53 +105,54 @@ def ensure_insight_tables():
 class InsightEngine:
     """
     Monitors an org's database for significant metric changes,
-    uses AI to explain anomalies, and stores results in admin.db.
+    uses AI to explain anomalies, and stores results in the admin DB.
     """
 
     def __init__(
         self,
-        db_manager,         # DatabaseManager instance for org's data DB
-        agent,              # AnalyticsAgent instance
+        db_manager,         # DatabaseManager for the org's data DB
+        agent,              # AnalyticsAgent
         org_id: int,
         threshold_pct: float = 10.0,
         lookback_days: int = 7,
         max_stored: int = 20,
     ):
-        self.db = db_manager
-        self.agent = agent
-        self.org_id = org_id
+        self.db            = db_manager
+        self.agent         = agent
+        self.org_id        = org_id
         self.threshold_pct = threshold_pct
         self.lookback_days = lookback_days
-        self.max_stored = max_stored
+        self.max_stored    = max_stored
         ensure_insight_tables()
 
-    # ─────────────────────────────────────────────
-    # METRIC DISCOVERY
-    # ─────────────────────────────────────────────
+    # ── Metric discovery ──────────────────────────────────────────────────────
 
     def _discover_key_metrics(self) -> list[dict]:
-        """Auto-detect KPI columns from org's database schema."""
+        """Auto-detect KPI columns from the org's database schema."""
         metrics = []
         try:
             tables = self.db.list_tables()
             for table in tables:
-                schema = self.db.describe_table(table)
+                schema   = self.db.describe_table(table)
                 date_col = self._find_date_col(schema)
                 for col_name, col_type in schema:
                     name_lower = col_name.lower()
                     type_lower = col_type.lower()
                     is_numeric = any(t in type_lower for t in [
-                        "int", "float", "real", "numeric", "decimal", "double", "number"
+                        "int", "float", "real", "numeric", "decimal",
+                        "double", "number", "bigint", "smallint",
                     ])
                     is_kpi = any(kw in name_lower for kw in KPI_KEYWORDS)
                     if is_numeric and is_kpi:
                         metrics.append({
-                            "table": table,
-                            "column": col_name,
+                            "table":       table,
+                            "column":      col_name,
                             "date_column": date_col,
                         })
-        except Exception as e:
-            logger.warning(f"[InsightEngine] Metric discovery failed for org {self.org_id}: {e}")
+        except Exception as exc:
+            logger.warning(
+                f"[InsightEngine] Metric discovery failed for org {self.org_id}: {exc}"
+            )
         return metrics
 
     def _find_date_col(self, schema) -> Optional[str]:
@@ -139,139 +161,182 @@ class InsightEngine:
                 return col_name
         return None
 
-    # ─────────────────────────────────────────────
-    # BASELINE COMPARISON
-    # ─────────────────────────────────────────────
+    # ── Baseline comparison ───────────────────────────────────────────────────
 
-    def _get_recent_value(self, table: str, column: str, date_col: Optional[str]) -> Optional[float]:
+    def _get_recent_value(
+        self, table: str, column: str, date_col: Optional[str]
+    ) -> Optional[float]:
         """24-hour average for the metric."""
         try:
             if date_col:
-                sql = f'SELECT AVG("{column}") as val FROM "{table}" WHERE "{date_col}" >= date(\'now\', \'-1 day\') AND "{column}" IS NOT NULL'
+                # Use CURRENT_TIMESTAMP - 1 day (ANSI SQL, works on both dialects)
+                sql = (
+                    f'SELECT AVG("{column}") AS val FROM "{table}" '
+                    f'WHERE "{date_col}" >= CURRENT_TIMESTAMP - INTERVAL \'1 day\' '
+                    f'AND "{column}" IS NOT NULL'
+                )
+                # SQLite uses date() not INTERVAL — fall back
+                try:
+                    result = self.db.execute_query(sql)
+                except Exception:
+                    sql = (
+                        f'SELECT AVG("{column}") AS val FROM "{table}" '
+                        f'WHERE "{date_col}" >= date(\'now\', \'-1 day\') '
+                        f'AND "{column}" IS NOT NULL'
+                    )
+                    result = self.db.execute_query(sql)
             else:
-                sql = f'SELECT AVG("{column}") as val FROM "{table}" WHERE "{column}" IS NOT NULL'
-            result = self.db.execute_query(sql)
+                sql = (
+                    f'SELECT AVG("{column}") AS val FROM "{table}" '
+                    f'WHERE "{column}" IS NOT NULL'
+                )
+                result = self.db.execute_query(sql)
+
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
-        except Exception as e:
-            logger.debug(f"[InsightEngine] recent_value failed {table}.{column}: {e}")
+        except Exception as exc:
+            logger.debug(
+                f"[InsightEngine] recent_value failed {table}.{column}: {exc}"
+            )
         return None
 
-    def _get_baseline_value(self, table: str, column: str, date_col: Optional[str]) -> Optional[float]:
-        """Rolling N-day average (excluding last 24h) as baseline."""
+    def _get_baseline_value(
+        self, table: str, column: str, date_col: Optional[str]
+    ) -> Optional[float]:
+        """Rolling N-day average (excluding last 24 h) as baseline."""
         try:
             if date_col:
-                sql = f'SELECT AVG("{column}") as val FROM "{table}" WHERE "{date_col}" >= date(\'now\', \'-{self.lookback_days} days\') AND "{date_col}" < date(\'now\', \'-1 day\') AND "{column}" IS NOT NULL'
+                sql = (
+                    f'SELECT AVG("{column}") AS val FROM "{table}" '
+                    f'WHERE "{date_col}" >= date(\'now\', \'-{self.lookback_days} days\') '
+                    f'AND "{date_col}" < date(\'now\', \'-1 day\') '
+                    f'AND "{column}" IS NOT NULL'
+                )
             else:
-                sql = f'SELECT AVG("{column}") as val FROM "{table}" WHERE "{column}" IS NOT NULL'
+                sql = (
+                    f'SELECT AVG("{column}") AS val FROM "{table}" '
+                    f'WHERE "{column}" IS NOT NULL'
+                )
             result = self.db.execute_query(sql)
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
-        except Exception as e:
-            logger.debug(f"[InsightEngine] baseline_value failed {table}.{column}: {e}")
+        except Exception as exc:
+            logger.debug(
+                f"[InsightEngine] baseline_value failed {table}.{column}: {exc}"
+            )
         return None
 
-    # ─────────────────────────────────────────────
-    # AI EXPLANATION
-    # ─────────────────────────────────────────────
+    # ── AI explanation ────────────────────────────────────────────────────────
 
     def _explain_anomaly(self, metric: dict, change_pct: float) -> dict:
-        """
-        Call the AnalyticsAgent Investigation root cause.
-        Returns a structured explanation dict.
-        """
         direction = "increased" if change_pct > 0 else "dropped"
-        abs_pct = abs(change_pct)
-
+        abs_pct   = abs(change_pct)
         prompt = (
             f"INTERNAL ANALYSIS — DO NOT SHOW SQL.\n\n"
             f"ANOMALY DETECTED: '{metric['column']}' in table '{metric['table']}' "
-            f"has {direction} by {abs_pct:.1f}% compared to the {self.lookback_days}-day average.\n\n"
-            f"Investigate silently by:\n"
-            f"1. Checking if specific segments (categories, regions, products) drove the change\n"
+            f"has {direction} by {abs_pct:.1f}% vs the {self.lookback_days}-day average.\n\n"
+            f"Investigate by:\n"
+            f"1. Checking if specific segments drove the change\n"
             f"2. Looking for correlated columns that changed simultaneously\n"
-            f"3. Checking for data quality issues (nulls, duplicates, outliers)\n"
+            f"3. Checking for data quality issues\n"
             f"4. Identifying when the change started\n\n"
-            f"Respond ONLY in this JSON format:\n"
-            f'{{"headline":"one-line description","explanation":"2-3 sentences",'
-            f'"likely_causes":["cause 1","cause 2"],"severity":"high|medium|low",'
-            f'"recommended_action":"one actionable step"}}'
+            f"Respond ONLY in JSON:\n"
+            f'{{"headline":"...","explanation":"...","likely_causes":["..."],'
+            f'"severity":"low|medium|high","recommended_action":"..."}}'
         )
-
         try:
-            # Note: AnalyticsAgent.run_query is sync in this codebase
             result = self.agent.run_query(prompt, history=[])
-            text = result.get("text", "")
-            start, end = text.find("{"), text.rfind("}") + 1
+            text_  = result.get("text", "")
+            start, end = text_.find("{"), text_.rfind("}") + 1
             if start >= 0 and end > start:
-                return json.loads(text[start:end])
-        except Exception as e:
-            logger.warning(f"[InsightEngine] explain_anomaly LLM failed: {e}")
+                return json.loads(text_[start:end])
+        except Exception as exc:
+            logger.warning(f"[InsightEngine] LLM explanation failed: {exc}")
 
-        # Fallback — return basic explanation without AI
         direction_word = "increased" if change_pct > 0 else "decreased"
         return {
             "headline": f"{metric['column']} {direction_word} by {abs(change_pct):.1f}%",
             "explanation": (
                 f"Significant change detected in {metric['column']} "
-                f"({direction_word} {abs(change_pct):.1f}% vs {self.lookback_days}-day average)."
+                f"({direction_word} {abs(change_pct):.1f}% vs {self.lookback_days}-day avg)."
             ),
-            "likely_causes": ["Investigate data for root cause"],
-            "severity": "high" if abs(change_pct) > 25 else "medium",
+            "likely_causes":      ["Investigate data for root cause"],
+            "severity":           "high" if abs(change_pct) > 25 else "medium",
             "recommended_action": f"Query '{metric['column']}' broken down by key dimensions.",
         }
 
-    # ─────────────────────────────────────────────
-    # STORAGE
-    # ─────────────────────────────────────────────
+    # ── Storage (SQLAlchemy) ──────────────────────────────────────────────────
 
     def _store_insight(self, metric: dict, change_pct: float, explanation: dict):
         insight_id = str(uuid.uuid4())
+        engine     = _get_admin_engine()
         try:
-            with _admin_conn() as c:
-                c.execute("""
-                    INSERT INTO org_insights
-                    (id, org_id, metric_table, metric_column, change_pct, period,
-                     headline, explanation, likely_causes, severity, seen, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """, [
-                    insight_id, self.org_id,
-                    metric["table"], metric["column"],
-                    round(change_pct, 2),
-                    f"Last 24h vs {self.lookback_days}-day avg",
-                    explanation.get("headline", ""),
-                    explanation.get("explanation", ""),
-                    json.dumps(explanation.get("likely_causes", [])),
-                    explanation.get("severity", "medium"),
-                    datetime.utcnow().isoformat(),
-                ])
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("""
+                        INSERT INTO org_insights
+                            (id, org_id, metric_table, metric_column, change_pct,
+                             period, headline, explanation, likely_causes,
+                             severity, seen, created_at)
+                        VALUES
+                            (:id, :org_id, :metric_table, :metric_column, :change_pct,
+                             :period, :headline, :explanation, :likely_causes,
+                             :severity, 0, :created_at)
+                    """), {
+                        "id":            insight_id,
+                        "org_id":        self.org_id,
+                        "metric_table":  metric["table"],
+                        "metric_column": metric["column"],
+                        "change_pct":    round(change_pct, 2),
+                        "period":        f"Last 24h vs {self.lookback_days}-day avg",
+                        "headline":      explanation.get("headline", ""),
+                        "explanation":   explanation.get("explanation", ""),
+                        "likely_causes": json.dumps(explanation.get("likely_causes", [])),
+                        "severity":      explanation.get("severity", "medium"),
+                        "created_at":    datetime.utcnow().isoformat(),
+                    })
 
-                # Trim to max_stored
-                c.execute("""
-                    DELETE FROM org_insights
-                    WHERE org_id = ? AND id NOT IN (
-                        SELECT id FROM org_insights WHERE org_id = ?
-                        ORDER BY created_at DESC LIMIT ?
-                    )
-                """, [self.org_id, self.org_id, self.max_stored])
-        except Exception as e:
-            logger.error(f"[InsightEngine] Failed to store insight for org {self.org_id}: {e}")
+                    # Trim to max_stored per org
+                    dialect = engine.dialect.name
+                    if dialect == "postgresql":
+                        trim_sql = text("""
+                            DELETE FROM org_insights
+                            WHERE org_id = :org_id AND id NOT IN (
+                                SELECT id FROM org_insights
+                                WHERE org_id = :org_id
+                                ORDER BY created_at DESC
+                                LIMIT :max_stored
+                            )
+                        """)
+                    else:
+                        trim_sql = text("""
+                            DELETE FROM org_insights
+                            WHERE org_id = :org_id AND id NOT IN (
+                                SELECT id FROM org_insights
+                                WHERE org_id = :org_id
+                                ORDER BY created_at DESC
+                                LIMIT :max_stored
+                            )
+                        """)
+                    conn.execute(trim_sql, {
+                        "org_id":     self.org_id,
+                        "max_stored": self.max_stored,
+                    })
+        except Exception as exc:
+            logger.error(
+                f"[InsightEngine] Failed to store insight for org {self.org_id}: {exc}"
+            )
 
-    # ─────────────────────────────────────────────
-    # PUBLIC API
-    # ─────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def run_watchdog(self):
-        """
-        Main detection loop. Discovers KPI metrics, compares vs baseline,
-        calls AI explanation for anomalies, stores results.
-        """
+        """Discover KPIs, compare vs baseline, explain anomalies, store results."""
         logger.info(f"[InsightEngine] Running watchdog for org {self.org_id}")
         metrics = self._discover_key_metrics()
 
         for metric in metrics:
             try:
-                recent = self._get_recent_value(
+                recent   = self._get_recent_value(
                     metric["table"], metric["column"], metric.get("date_column")
                 )
                 baseline = self._get_baseline_value(
@@ -286,45 +351,62 @@ class InsightEngine:
                 if abs(change_pct) >= self.threshold_pct:
                     logger.info(
                         f"[InsightEngine] Anomaly: {metric['column']} "
-                        f"changed {change_pct:.1f}% in org {self.org_id}"
+                        f"changed {change_pct:.1f}% for org {self.org_id}"
                     )
                     explanation = self._explain_anomaly(metric, change_pct)
                     self._store_insight(metric, change_pct, explanation)
 
-            except Exception as e:
-                logger.warning(f"[InsightEngine] Watchdog check failed for {metric}: {e}")
+            except Exception as exc:
+                logger.warning(
+                    f"[InsightEngine] Check failed for {metric}: {exc}"
+                )
 
-    def get_unseen_insights(self) -> list[dict]:
-        with _admin_conn() as c:
-            rows = c.execute("""
-                SELECT id, metric_table, metric_column, change_pct, period,
-                       headline, explanation, likely_causes, severity, created_at
-                FROM org_insights
-                WHERE org_id = ? AND seen = 0
-                ORDER BY created_at DESC
-            """, [self.org_id]).fetchall()
-        return [self._parse_insight(dict(r)) for r in rows]
-
-    def get_all_insights(self, limit: int = 20) -> list[dict]:
-        with _admin_conn() as c:
-            rows = c.execute("""
+    def _fetch_insights(self, where_extra: str, params: dict) -> list[dict]:
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(text(f"""
                 SELECT id, metric_table, metric_column, change_pct, period,
                        headline, explanation, likely_causes, severity, seen, created_at
                 FROM org_insights
-                WHERE org_id = ? ORDER BY created_at DESC LIMIT ?
-            """, [self.org_id, limit]).fetchall()
+                WHERE org_id = :org_id {where_extra}
+                ORDER BY created_at DESC
+                LIMIT 50
+            """), params).mappings().all()
+        return [self._parse_insight(dict(r)) for r in rows]
+
+    def get_unseen_insights(self) -> list[dict]:
+        return self._fetch_insights("AND seen = 0", {"org_id": self.org_id})
+
+    def get_all_insights(self, limit: int = 20) -> list[dict]:
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT id, metric_table, metric_column, change_pct, period,
+                       headline, explanation, likely_causes, severity, seen, created_at
+                FROM org_insights
+                WHERE org_id = :org_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+            """), {"org_id": self.org_id, "limit": limit}).mappings().all()
         return [self._parse_insight(dict(r)) for r in rows]
 
     def mark_seen(self, insight_id: str):
-        with _admin_conn() as c:
-            c.execute(
-                "UPDATE org_insights SET seen=1 WHERE id=? AND org_id=?",
-                [insight_id, self.org_id]
-            )
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(
+                    text("UPDATE org_insights SET seen=1 WHERE id=:id AND org_id=:org_id"),
+                    {"id": insight_id, "org_id": self.org_id},
+                )
 
     def mark_all_seen(self):
-        with _admin_conn() as c:
-            c.execute("UPDATE org_insights SET seen=1 WHERE org_id=?", [self.org_id])
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(
+                    text("UPDATE org_insights SET seen=1 WHERE org_id=:org_id"),
+                    {"org_id": self.org_id},
+                )
 
     def _parse_insight(self, row: dict) -> dict:
         row["likely_causes"] = json.loads(row.get("likely_causes") or "[]")
@@ -332,29 +414,21 @@ class InsightEngine:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# InsightScheduler — background loop for all orgs
+# InsightScheduler — background asyncio loop for all orgs
 # ─────────────────────────────────────────────────────────────────────────────
 
 class InsightScheduler:
-    """
-    Background asyncio task that runs InsightEngine for all orgs
-    on a configurable interval.
-    """
+    """Background task that runs InsightEngine for every org on a set interval."""
 
     def __init__(self, engine_factory, interval_minutes: int = 60):
-        """
-        Args:
-            engine_factory: callable(org_id) -> InsightEngine
-            interval_minutes: How often to run the watchdog
-        """
-        self.engine_factory = engine_factory
+        self.engine_factory   = engine_factory
         self.interval_minutes = interval_minutes
-        self._running = False
-        self._task = None
+        self._running         = False
+        self._task            = None
 
     async def start(self):
         self._running = True
-        self._task = asyncio.create_task(self._loop())
+        self._task    = asyncio.create_task(self._loop())
         logger.info(f"[InsightScheduler] Started (interval: {self.interval_minutes}min)")
 
     async def stop(self):
@@ -373,24 +447,32 @@ class InsightScheduler:
             await asyncio.sleep(self.interval_minutes * 60)
 
     async def _run_all_orgs(self):
-        """Run watchdog for every registered org with a configured DB."""
+        """Run watchdog for every org that has a configured database."""
         try:
-            with _admin_conn() as c:
-                orgs = c.execute(
-                    "SELECT id FROM organizations WHERE db_connection_string IS NOT NULL"
-                ).fetchall()
+            # Use SQLAlchemy admin engine — no raw sqlite3
+            from models import engine as admin_engine
+            with admin_engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT id FROM organizations "
+                        "WHERE db_connection_string IS NOT NULL"
+                    )
+                ).mappings().all()
 
-            for org_row in orgs:
+            for row in rows:
                 if not self._running:
                     break
-                org_id = org_row["id"]
+                org_id = row["id"]
                 try:
                     engine = self.engine_factory(org_id)
                     if engine:
-                        # Run blocking watchdog in threadpool to avoid blocking event loop
-                        await asyncio.get_event_loop().run_in_executor(None, engine.run_watchdog)
-                except Exception as e:
-                    logger.error(f"[InsightScheduler] Watchdog failed for org {org_id}: {e}")
+                        await asyncio.get_event_loop().run_in_executor(
+                            None, engine.run_watchdog
+                        )
+                except Exception as exc:
+                    logger.error(
+                        f"[InsightScheduler] Watchdog failed for org {org_id}: {exc}"
+                    )
 
-        except Exception as e:
-            logger.error(f"[InsightScheduler] Loop error: {e}")
+        except Exception as exc:
+            logger.error(f"[InsightScheduler] Loop error: {exc}")

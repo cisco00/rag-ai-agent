@@ -3,7 +3,7 @@
 ## Executive Summary
 
 **Product Name:** Vantage AI: Commercial Analytics Portal  
-**Version:** 2.1  
+**Version:** 2.2  
 **Last Updated:** March 2026  
 **Document Owner:** Product Team
 
@@ -416,6 +416,111 @@ POST /transform/suggest
 #### User Stories
 - As a **manager**, I want a daily sales summary delivered automatically
 
+### 13. Dashboards (Pinned Boards)
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Users can create named dashboard boards to collect and organise AI query results
+- Any AI response (text + chart) can be pinned to a dashboard directly from the Query page using a 📌 Pin button
+- Dashboards support one-click public sharing via a unique URL (publish/unpublish toggle)
+- Individual cards can be refreshed (re-run the original query) or removed at any time
+- Dashboard list, card grid, and share state are all persisted per organization
+
+#### Features
+- **Create / Delete Boards:** Named boards with an optional description
+- **Pin Cards:** Save any query response (chart + analysis text) to a chosen board
+- **Publish / Unpublish:** Generate a public share URL for read-only board access; revoke at any time
+- **Card Refresh:** Re-execute the original query to update the card's data and visualization
+- **Mixed Card Types:** Cards may contain a chart, analysis text, or both
+
+#### User Stories
+- As a **business analyst**, I want to pin my most important charts to a board so I can revisit them without re-running queries
+- As an **executive**, I want to publish a dashboard board so stakeholders can view live results without logging in
+
+#### API Endpoints
+```
+GET  /dashboards                          → list all boards
+POST /dashboards                          → create a board
+GET  /dashboards/{id}                     → get board + cards
+DELETE /dashboards/{id}                   → delete board
+POST /dashboards/{id}/publish             → make public, returns share_url
+POST /dashboards/{id}/unpublish           → revoke public access
+POST /dashboards/{id}/cards/{cid}/refresh → re-run card query
+DELETE /dashboards/{id}/cards/{cid}       → remove card
+```
+
+---
+
+### 14. Alerts Manager
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Users can define threshold-based alert rules on any table column without writing code
+- Rules are evaluated on a configurable lookback window and support standard numeric operators as well as percentage-change operators
+- Notifications are delivered via email and/or webhook
+- A cooldown period prevents alert spam
+- Full trigger history is persisted and shown in the UI
+
+#### Features
+- **Rule Builder:** Name, table, column, aggregate function (AVG / SUM / COUNT / MIN / MAX), operator, threshold, lookback hours
+- **Operators:** `>`, `<`, `>=`, `<=`, `==`, `!=`, `pct_change_gt`, `pct_change_lt`
+- **Notifications:** Email address and/or webhook URL per rule
+- **Cooldown:** Configurable minimum minutes between repeated triggers
+- **Enable / Disable:** Toggle rules on or off without deleting them
+- **Test Now:** Manually evaluate a rule immediately to verify configuration
+- **Alert History:** Collapsible log of past trigger events with delivery status
+
+#### User Stories
+- As a **data manager**, I want to be notified by email when daily revenue drops more than 10% so I can react quickly
+- As a **developer**, I want to receive webhook calls when anomalies are detected so downstream systems can respond automatically
+
+#### API Endpoints
+```
+GET    /alerts              → list all rules
+POST   /alerts              → create a rule
+DELETE /alerts/{id}         → delete a rule
+POST   /alerts/{id}/toggle  → activate / deactivate
+POST   /alerts/{id}/test    → evaluate rule now and return result
+GET    /alerts/history      → full trigger log
+```
+
+---
+
+### 15. Data Profiler
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Provide column-level statistical profiling for any table in the connected database
+- Results are cached and can be force-refreshed on demand
+- Profiles help users understand data quality before analysis or transformation
+
+#### Features
+- **Table Summary:** Row count, column count, average null percentage
+- **Per-Column Stats:**
+  - Data type, total count, null count, null percentage (with colour-coded bar: green / amber / red)
+  - Distinct value count
+  - For **numeric columns:** min, P25, median, mean, max, standard deviation
+  - For **categorical columns:** top-5 value frequency distribution with inline bar chart
+  - Sample values (up to 8) for any column type
+- **Expandable Rows:** Column details are collapsed by default for a clean overview; click to expand
+- **Force Refresh:** Bypass cache to re-profile a table after data changes
+
+#### User Stories
+- As a **data analyst**, I want to see the null rate and value distribution for every column before I start querying so I know the data quality
+- As a **data manager**, I want to identify high-null columns quickly so I can decide which ones to drop or impute
+
+#### API Endpoints
+```
+GET /tables/{table_name}/profile           → get cached profile
+GET /tables/{table_name}/profile?force=true → force re-profile
+```
+
 ---
 
 ## Technical Architecture
@@ -495,6 +600,9 @@ POST /transform/suggest
 - ✅ PDF and PowerPoint export
 - ✅ Proactive Insight Engine and Detection Pipeline
 - ✅ AI Transformation Wizard
+- ✅ Dashboards / Pinned Boards with public sharing
+- ✅ Alerts Manager with email and webhook notifications
+- ✅ Data Profiler with column-level statistics
 
 ### Phase 3 (Q2 2026)
 - 🔲 Advanced visualizations (heatmaps, treemaps, candlestick)
@@ -545,6 +653,6 @@ POST /transform/suggest
 - [FILE_IMPORT_GUIDE.md](FILE_IMPORT_GUIDE.md) - File import documentation
 - [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md) - Code quality guidelines
 
-**Document Version:** 2.1  
+**Document Version:** 2.2  
 **Last Updated:** March 2026  
 **Next Review:** June 2026
