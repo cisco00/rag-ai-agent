@@ -139,6 +139,22 @@ class ScheduledReport(Base):
         return f"<ScheduledReport(id={self.id}, org_id={self.org_id}, freq='{self.frequency}')>"
 
 
+
+class ConnectedDatabase(Base):
+    """
+    Model for tracking previously used database connections per organization.
+    """
+    __tablename__ = 'connected_databases'
+    
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    connection_string = Column(EncryptedString, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f"<ConnectedDatabase(id={self.id}, org_id={self.org_id})>"
+
+
 class Feedback(Base):
     """
     Model for storing user feedback (thumbs up/down).
@@ -487,6 +503,46 @@ def update_org_db(api_key: str, connection_string: str) -> Organization:
     except Exception as e:
         logger.error(f"Failed to update organization: {e}", exc_info=True)
         raise DatabaseError(f"Failed to update organization: {str(e)}") from e
+
+
+def log_connection(org_id: int, connection_string: str):
+    """Save a connection string to the history for an organization."""
+    try:
+        with get_db() as db:
+            # Check if it already exists in history to avoid duplicates
+            exists = db.query(ConnectedDatabase).filter(
+                ConnectedDatabase.org_id == org_id,
+                ConnectedDatabase.connection_string == connection_string
+            ).first()
+            
+            if not exists:
+                conn_hist = ConnectedDatabase(org_id=org_id, connection_string=connection_string)
+                db.add(conn_hist)
+                db.flush()
+                logger.debug(f"Logged new connection for org {org_id}")
+    except Exception as e:
+        logger.error(f"Failed to log connection for org {org_id}: {e}")
+
+
+def get_org_connection_history(org_id: int) -> list[str]:
+    """Retrieve unique connection strings previously used by the organization."""
+    try:
+        with get_db() as db:
+            rows = db.query(ConnectedDatabase).filter(
+                ConnectedDatabase.org_id == org_id
+            ).order_by(ConnectedDatabase.created_at.desc()).all()
+            
+            # Extract strings, ensuring uniqueness while preserving order
+            seen = set()
+            history = []
+            for r in rows:
+                if r.connection_string not in seen:
+                    history.append(r.connection_string)
+                    seen.add(r.connection_string)
+            return history
+    except Exception as e:
+        logger.error(f"Failed to get connection history for org {org_id}: {e}")
+        return []
 
 
 def update_branding(api_key: str, branding_data: dict) -> Organization:

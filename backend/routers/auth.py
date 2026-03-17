@@ -429,6 +429,10 @@ async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
         db_manager.list_tables()
         db_manager.close()
         org = update_org_db(org.api_key, request.connection_string)
+        # Log connection to history
+        from models import log_connection
+        log_connection(org.id, request.connection_string)
+        
         # Clear file cache if they switch to a real DB
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)

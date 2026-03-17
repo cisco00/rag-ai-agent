@@ -54,7 +54,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
   }, []);
 
   useEffect(() => {
-    if (configMode === 'create') {
+    if (configMode === 'existing') {
       const fetchDatabases = async () => {
         try {
           const res = await api.get<{ status: string; databases: string[] }>('/database/available');
@@ -339,6 +339,27 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
             </p>
           </div>
 
+          {/* Available Databases / History */}
+          {availableDatabases.length > 0 && (
+            <div className="pt-4 border-t border-gray-100">
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                Previously Connected Databases
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {availableDatabases.map((db, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setConnectionString(db)}
+                    className="px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-blue-50 hover:border-blue-300 transition-colors flex items-center gap-2"
+                  >
+                    <Database className="size-4 text-blue-500" />
+                    <span className="truncate max-w-[250px]">{db}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Status Message */}
           {status === 'error' && (
             <div className="flex items-start gap-2 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
@@ -475,23 +496,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Available Databases
-              </label>
-              <select
-                value={createForm.newDbName}
-                onChange={(e) => setCreateForm({ ...createForm, newDbName: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-              >
-                <option value="">-- Select an existing database or type a new one below --</option>
-                {availableDatabases.map((db, idx) => (
-                  <option key={idx} value={db}>{db}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Or Enter New Database Name *
+                Enter New Database Name *
               </label>
               <input
                 type="text"

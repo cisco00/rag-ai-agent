@@ -178,32 +178,13 @@ class ScheduledReportRequest(BaseModel):
 
 @router.get("/database/available")
 async def get_available_databases(org=Depends(get_current_org)):
-    """Fetch a list of available databases on the PostgreSQL cluster."""
-    import psycopg2
-    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-    
-    admin_user = os.getenv("POSTGRES_SYS_ADMIN_USER", "postgres")
-    admin_password = os.getenv("POSTGRES_SYS_ADMIN_PASSWORD", "")
-    host = os.getenv("POSTGRES_HOST", "localhost")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    
+    """Fetch connection history for the organization."""
+    from models import get_org_connection_history
     try:
-        conn = psycopg2.connect(
-            user=admin_user, 
-            password=admin_password, 
-            host=host, 
-            port=port, 
-            dbname='postgres'
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute("SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';")
-        rows = cur.fetchall()
-        databases = [row[0] for row in rows]
-        conn.close()
-        return {"status": "success", "databases": databases}
+        history = get_org_connection_history(org.id)
+        return {"status": "success", "databases": history}
     except Exception as e:
-        logger.error(f"Failed to fetch databases: {e}")
+        logger.error(f"Failed to fetch connection history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -287,6 +268,10 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
         
         # 5. Update Org Config
         update_org_db(org.api_key, new_conn_str)
+        # Log to connection history
+        from models import log_connection
+        log_connection(org.id, new_conn_str)
+
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)
             

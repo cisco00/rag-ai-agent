@@ -273,7 +273,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
     config = get_agent_config()
     ctx_manager = OrgContextManager(org.id)
     enriched_prompt = ctx_manager.inject_into_prompt(config.system_prompt)
-
+    
+    from main import AnalyticsAgent
     agent = AnalyticsAgent(
         connection_string=conn_str, 
         schema_summary=schema_summary,
