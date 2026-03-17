@@ -215,6 +215,17 @@ app.include_router(insights.router,                                  tags=["Insi
 app.include_router(org_context.router,                               tags=["Organization Context"])
 
 
+@app.get("/")
+async def root():
+    """Root endpoint for health checks and API status."""
+    return {
+        "status": "online",
+        "message": "Vantage AI API is running",
+        "version": "2.0.0",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
 # ── WebSocket Streaming ───────────────────────────────────────────────────────
 @app.websocket("/ws/stream/{table_name}")
 async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Optional[str] = None):
