@@ -34,143 +34,10 @@ router = APIRouter()
 
 
 
-# ── Pydantic models ──
-
-class RegisterRequest(BaseModel):
-    name: str
-    email: Optional[str] = None
-
-class ConfigRequest(BaseModel):
-    connection_string: str
-
-class QueryRequest(BaseModel):
-    query: str
-    session_id: Optional[str] = None
-    history: Optional[List[Dict[str, Any]]] = None
-    tables: Optional[List[str]] = None
-    verify_only: bool = False
-    confirmed_sql: Optional[str] = None
-
-class QueryResponse(BaseModel):
-    query: str
-    response: str
-    visualization: Optional[dict] = None
-    status: str
-    sql_query: Optional[str] = None
-
-class FeedbackRequest(BaseModel):
-    query: str
-    response: str
-    vote: int
-    feedback_text: Optional[str] = None
-
-class DataSourceResponse(BaseModel):
-    id: int
-    name: str
-    source_type: str
-    table_name: Optional[str] = None
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-class ApiImportRequest(BaseModel):
-    url: str
-    method: str = "GET"
-    headers: Optional[Dict[str, str]] = None
-    params: Optional[Dict[str, str]] = None
-    table_name: str
-    if_exists: str = "replace"
-
-class TransformRequest(BaseModel):
-    table_name: str
-    operations: List[Dict[str, Any]]
-    target_table: Optional[str] = None
-
-class TransformSuggestRequest(BaseModel):
-    table_name: str
-    prompt: str
-
-class ForecastRequest(BaseModel):
-    table_name: str
-    date_column: str
-    value_column: str
-    periods: int = 30
-    freq: str = 'D'
-
-class AnomalyRequest(BaseModel):
-    table_name: str
-    value_column: str
-    contamination: float = 0.05
-
-class CorrelationRequest(BaseModel):
-    table_name: str
-    columns: Optional[List[str]] = None
-    method: str = 'pearson'
-
-class CreateSessionRequest(BaseModel):
-    title: Optional[str] = None
-
-class SessionResponse(BaseModel):
-    id: str
-    title: Optional[str] = None
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-class MessageResponse(BaseModel):
-    id: int
-    role: str
-    content: str
-    visualization: Optional[Dict[str, Any]] = None
-    created_at: datetime
-    class Config:
-        from_attributes = True
-
-class ContextEntryRequest(BaseModel):
-    key: str
-    definition: str
-    context_type: str = "term"
-    sql_snippet: Optional[str] = None
-    examples: Optional[List[str]] = None
-
-class ContextEntryResponse(BaseModel):
-    id: str
-
-class BrandingRequest(BaseModel):
-    org_name: Optional[str] = None
-    tagline: Optional[str] = None
-    primary_color: Optional[str] = None
-    logo_url: Optional[str] = None
-
-class CreateDatabaseRequest(BaseModel):
-    admin_user: Optional[str] = None
-    admin_password: Optional[str] = None
-    new_db_name: str
-    new_user: str
-    new_password: str
-    email: Optional[str] = None
-
-class SuggestQueriesResponse(BaseModel):
-    queries: List[str]
-
-class UpdateCellRequest(BaseModel):
-    row_id: Any
-    column: str
-    value: Any
-
-class FillMissingRequest(BaseModel):
-    strategy: str
-    value: Optional[Any] = None
-    weight_column: Optional[str] = None
-
-class RenameColumnRequest(BaseModel):
-    old_column: str
-    new_column: str
-
-class ScheduledReportRequest(BaseModel):
-    query: str
-    frequency: str = "biweekly"
-    recipients: str
+from schemas import (
+    CreateDatabaseRequest, DataSourceResponse, UpdateCellRequest,
+    FeedbackRequest, RenameColumnRequest, FillMissingRequest, ApiImportRequest
+)
 
 
 
@@ -1022,10 +889,7 @@ async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=
         if db_manager:
             db_manager.close()
 
-class FillMissingRequest(BaseModel):
-    strategy: str
-    value: Optional[Any] = None
-    weight_column: Optional[str] = None
+
 
 
 @router.post("/tables/{table_name}/columns/{column_name}/fill")
@@ -1081,9 +945,7 @@ async def delete_table_endpoint(table_name: str, org=Depends(get_current_org)):
         if db_manager:
             db_manager.close()
 
-class RenameColumnRequest(BaseModel):
-    old_column: str
-    new_column: str
+
 
 
 @router.post("/tables/{table_name}/columns/rename")

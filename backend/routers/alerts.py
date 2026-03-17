@@ -1,29 +1,20 @@
-from typing import List, Optional
+"""
+routers/alerts.py — Alerting and monitoring routes.
+"""
+
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from dependencies import get_current_org, get_org_connection_string
 from alerts import (
     get_alert_rules, create_alert_rule, get_alert_rule, update_alert_rule,
     delete_alert_rule, get_alert_history, _evaluate_metric_rule, _evaluate_freshness_rule
 )
+from schemas import AlertRuleRequest
 
 router = APIRouter()
 
-class AlertRuleRequest(BaseModel):
-    name:             str
-    description:      Optional[str]   = None
-    alert_type:       str             = "metric"
-    table_name:       str
-    column_name:      Optional[str]   = None
-    aggregate:        Optional[str]   = None
-    operator:         str
-    threshold_value:  float
-    is_active:        int             = 1
-    notify_email:     Optional[str]   = None
-    notify_webhook:   Optional[str]   = None
-    cooldown_minutes: int             = 60
-    lookback_hours:   int             = 24
+# ── Routes ──
 
 @router.get("/alerts")
 async def list_alerts(org=Depends(get_current_org)):

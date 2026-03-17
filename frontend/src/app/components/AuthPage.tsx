@@ -6,89 +6,55 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
-interface AuthPageProps {
+// --- Shared Types ---
+
+interface LoginFormProps {
     onLoginSuccess: (apiKey: string, accessToken: string, refreshToken: string, user: any) => void;
-    existingKey?: string;
-    isSettingsMode?: boolean;
+    setError: (err: string | null) => void;
+    isLoading: boolean;
+    setIsLoading: (val: boolean) => void;
 }
 
-export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPageProps) {
-    const [activeTab, setActiveTab] = useState<'login' | 'register' | 'invite'>(
-        isSettingsMode ? 'invite' : (existingKey ? 'login' : 'register')
-    );
-    const [step, setStep] = useState(1); // For registration wizard
+interface RegisterFormProps {
+    setNewApiKey: (val: string) => void;
+    setStep: (val: number) => void;
+    setError: (err: string | null) => void;
+    isLoading: boolean;
+    setIsLoading: (val: boolean) => void;
+}
 
-    // Registration State
-    const [orgName, setOrgName] = useState('');
-    const [regEmail, setRegEmail] = useState('');
-    const [regPassword, setRegPassword] = useState('');
-    const [regDisplayName, setRegDisplayName] = useState('');
+interface InviteAcceptFormProps {
+    inviteToken: string;
+    setInviteToken: (val: string) => void;
+    setActiveTab: (val: 'login' | 'register' | 'invite') => void;
+    setError: (err: string | null) => void;
+    isLoading: boolean;
+    setIsLoading: (val: boolean) => void;
+}
 
-    // Login State
+// --- Sub-components (outside to prevent re-creation on re-render) ---
+
+const InputField = ({ icon: Icon, label, id, ...props }: any) => (
+    <div className="space-y-1.5 group">
+        <label htmlFor={id} className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1 group-focus-within:text-blue-500 transition-colors">
+            {label}
+        </label>
+        <div className="relative">
+            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <Icon size={18} />
+            </div>
+            <input
+                {...props}
+                id={id}
+                className="w-full pl-11 pr-4 py-3 bg-white/50 backdrop-blur-sm border border-slate-200/60 rounded-xl focus:border-blue-500/50 focus:bg-white focus:ring-4 focus:ring-blue-500/5 outline-none text-slate-800 placeholder:text-slate-300 shadow-sm"
+            />
+        </div>
+    </div>
+);
+
+function LoginForm({ onLoginSuccess, setError, isLoading, setIsLoading }: LoginFormProps) {
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
-
-    // Invite State
-    const [inviteToken, setInviteToken] = useState('');
-    const [invitePassword, setInvitePassword] = useState('');
-    const [inviteDisplayName, setInviteDisplayName] = useState('');
-
-    const [isLoading, setIsLoading] = useState(false);
-    const [newApiKey, setNewApiKey] = useState('');
-    const [sendInviteMessage, setSendInviteMessage] = useState<string | null>(null);
-    const [inviteEmail, setInviteEmail] = useState('');
-    const [inviteRole, setInviteRole] = useState('analyst');
-    const [generatedInviteLink, setGeneratedInviteLink] = useState<string | null>(null);
-    const [copied, setCopied] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get('invite_token');
-        if (token) {
-            setInviteToken(token);
-            setActiveTab('invite');
-        }
-    }, []);
-
-    const handleRegister = async () => {
-        if (!orgName.trim() || !regEmail.trim() || !regPassword.trim()) {
-            setError('All fields are required.');
-            return;
-        }
-
-        setIsLoading(true);
-        setError(null);
-
-        try {
-            // 1. Register Organization
-            const orgRes = await api.post<{ api_key: string }>('/register', {
-                name: orgName,
-                email: regEmail
-            });
-
-            const apiKey = orgRes.api_key;
-            setNewApiKey(apiKey);
-            localStorage.setItem('vantage_api_key', apiKey);
-
-            // 2. Register Owner User
-            const authRes = await api.post<any>('/auth/register-first-user', {
-                email: regEmail,
-                password: regPassword,
-                display_name: regDisplayName || regEmail.split('@')[0]
-            });
-
-            localStorage.setItem('vantage_access_token', authRes.access_token);
-            localStorage.setItem('vantage_refresh_token', authRes.refresh_token);
-            localStorage.setItem('vantage_user', JSON.stringify(authRes.user));
-
-            setStep(2); // Success step
-        } catch (err: any) {
-            setError(err.message || 'Registration failed. Check if organization name is unique.');
-        } finally {
-            setIsLoading(false);
-        }
-    };
 
     const handleLogin = async () => {
         if (!loginEmail.trim() || !loginPassword.trim()) {
@@ -118,6 +84,159 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
         }
     };
 
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        handleLogin();
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-8">
+            <div className="space-y-5">
+                <InputField
+                    id="login-email"
+                    icon={Mail}
+                    label="Work Email"
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e: any) => setLoginEmail(e.target.value)}
+                    placeholder="name@company.com"
+                />
+
+                <InputField
+                    id="login-password"
+                    icon={Lock}
+                    label="Password"
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e: any) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                />
+            </div>
+
+            <button
+                type="submit"
+                disabled={isLoading || !loginEmail.trim() || !loginPassword.trim()}
+                className="w-full py-4.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98] mt-2"
+            >
+                {isLoading ? 'AUTHENTICATING...' : 'SIGN IN'}
+            </button>
+        </form>
+    );
+}
+
+function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading }: RegisterFormProps) {
+    const [orgName, setOrgName] = useState('');
+    const [regEmail, setRegEmail] = useState('');
+    const [regPassword, setRegPassword] = useState('');
+    const [regDisplayName, setRegDisplayName] = useState('');
+
+    const handleRegister = async () => {
+        if (!orgName.trim() || !regEmail.trim() || !regPassword.trim()) {
+            setError('All fields are required.');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            const orgRes = await api.post<{ api_key: string }>('/auth/register', {
+                name: orgName,
+                email: regEmail
+            });
+
+            const apiKey = orgRes.api_key;
+            setNewApiKey(apiKey);
+            localStorage.setItem('vantage_api_key', apiKey);
+
+            const authRes = await api.post<any>('/auth/register-first-user', {
+                email: regEmail,
+                password: regPassword,
+                display_name: regDisplayName || regEmail.split('@')[0]
+            });
+
+            localStorage.setItem('vantage_access_token', authRes.access_token);
+            localStorage.setItem('vantage_refresh_token', authRes.refresh_token);
+            localStorage.setItem('vantage_user', JSON.stringify(authRes.user));
+
+            setStep(2); // Success step
+        } catch (err: any) {
+            setError(err.message || 'Registration failed.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        handleRegister();
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-4">
+                <InputField
+                    id="reg-org"
+                    icon={Building2}
+                    label="Company Name"
+                    value={orgName}
+                    onChange={(e: any) => setOrgName(e.target.value)}
+                    placeholder="e.g. Nexus Forge"
+                />
+
+                <InputField
+                    id="reg-email"
+                    icon={Mail}
+                    label="Work Email"
+                    type="email"
+                    value={regEmail}
+                    onChange={(e: any) => setRegEmail(e.target.value)}
+                    placeholder="name@company.com"
+                />
+
+                <div className="grid grid-cols-2 gap-4">
+                    <InputField
+                        id="reg-nickname"
+                        icon={User}
+                        label="Nick Name"
+                        value={regDisplayName}
+                        onChange={(e: any) => setRegDisplayName(e.target.value)}
+                        placeholder="Alex"
+                    />
+                    <InputField
+                        id="reg-password"
+                        icon={Lock}
+                        label="Password"
+                        type="password"
+                        value={regPassword}
+                        onChange={(e: any) => setRegPassword(e.target.value)}
+                        placeholder="••••••••"
+                    />
+                </div>
+            </div>
+
+            <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50 flex gap-3 items-center">
+                <div className="p-2 bg-white rounded-lg text-blue-500 shadow-sm"><Globe size={16} /></div>
+                <p className="text-[11px] text-blue-600 font-bold leading-tight">
+                    A dedicated database and secure workspace will be provisioned on the fly.
+                </p>
+            </div>
+
+            <button
+                type="submit"
+                disabled={isLoading || !orgName.trim() || !regEmail.trim() || !regPassword.trim()}
+                className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98] mt-2 mb-4"
+            >
+                {isLoading ? 'INITIATING...' : 'CREATE WORKSPACE'}
+            </button>
+        </form>
+    );
+}
+
+function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError, isLoading, setIsLoading }: InviteAcceptFormProps) {
+    const [invitePassword, setInvitePassword] = useState('');
+    const [inviteDisplayName, setInviteDisplayName] = useState('');
+
     const handleAcceptInvite = async () => {
         if (!inviteToken.trim() || !invitePassword.trim()) {
             setError('Invite Token and Password are required.');
@@ -142,6 +261,91 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
             setIsLoading(false);
         }
     };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        handleAcceptInvite();
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-4">
+                <div className="space-y-1.5 group">
+                    <label htmlFor="invite-token" className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1">Invite Token</label>
+                    <input
+                        id="invite-token"
+                        type="text"
+                        value={inviteToken}
+                        onChange={(e) => setInviteToken(e.target.value)}
+                        placeholder="Token from email"
+                        className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-xl font-mono text-xs focus:border-blue-500/50 outline-none"
+                    />
+                </div>
+
+                <InputField
+                    id="invite-name"
+                    icon={User}
+                    label="Display Name"
+                    value={inviteDisplayName}
+                    onChange={(e: any) => setInviteDisplayName(e.target.value)}
+                    placeholder="John Doe"
+                />
+
+                <InputField
+                    id="invite-password"
+                    icon={Lock}
+                    label="Set Password"
+                    type="password"
+                    value={invitePassword}
+                    onChange={(e: any) => setInvitePassword(e.target.value)}
+                    placeholder="••••••••"
+                />
+            </div>
+
+            <button
+                type="submit"
+                disabled={isLoading || !inviteToken.trim() || !invitePassword.trim()}
+                className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg transition-all disabled:opacity-50 active:scale-[0.98]"
+            >
+                {isLoading ? 'PROCESSING...' : 'ACCEPT INVITATION'}
+            </button>
+        </form>
+    );
+}
+
+// --- Main Page Component ---
+
+interface AuthPageProps {
+    onLoginSuccess: (apiKey: string, accessToken: string, refreshToken: string, user: any) => void;
+    existingKey?: string;
+    isSettingsMode?: boolean;
+}
+
+export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPageProps) {
+    const [activeTab, setActiveTab] = useState<'login' | 'register' | 'invite'>(
+        isSettingsMode ? 'invite' : (existingKey ? 'login' : 'register')
+    );
+    const [step, setStep] = useState(1); // For registration wizard
+
+    const [isLoading, setIsLoading] = useState(false);
+    const [newApiKey, setNewApiKey] = useState('');
+    const [sendInviteMessage, setSendInviteMessage] = useState<string | null>(null);
+    const [inviteEmail, setInviteEmail] = useState('');
+    const [inviteRole, setInviteRole] = useState('analyst');
+    const [generatedInviteLink, setGeneratedInviteLink] = useState<string | null>(null);
+    const [copied, setCopied] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const [inviteToken, setInviteToken] = useState('');
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('invite_token');
+        if (token) {
+            setInviteToken(token);
+            setActiveTab('invite');
+        }
+    }, []);
 
     const handleSendInvite = async () => {
         if (!inviteEmail.trim()) {
@@ -179,25 +383,6 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
             onLoginSuccess(newApiKey, accessToken, refreshToken, user);
         }
     };
-
-    // --- Sub-components for clean UI ---
-
-    const InputField = ({ icon: Icon, label, ...props }: any) => (
-        <div className="space-y-1.5 group">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1 group-focus-within:text-blue-500 transition-colors">
-                {label}
-            </label>
-            <div className="relative">
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                    <Icon size={18} />
-                </div>
-                <input
-                    {...props}
-                    className="w-full pl-11 pr-4 py-3 bg-white/50 backdrop-blur-sm border border-slate-200/60 rounded-xl focus:border-blue-500/50 focus:bg-white focus:ring-4 focus:ring-blue-500/5 transition-all outline-none text-slate-800 placeholder:text-slate-300 shadow-sm"
-                />
-            </div>
-        </div>
-    );
 
     if (isSettingsMode) {
         return (
@@ -381,128 +566,34 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                                 </button>
                             </div>
                         ) : activeTab === 'register' ? (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
-                                <div className="space-y-4">
-                                    <InputField
-                                        icon={Building2}
-                                        label="Company Name"
-                                        value={orgName}
-                                        onChange={(e: any) => setOrgName(e.target.value)}
-                                        placeholder="e.g. Nexus Forge"
-                                    />
-
-                                    <InputField
-                                        icon={Mail}
-                                        label="Work Email"
-                                        type="email"
-                                        value={regEmail}
-                                        onChange={(e: any) => setRegEmail(e.target.value)}
-                                        placeholder="name@company.com"
-                                    />
-
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <InputField
-                                            icon={User}
-                                            label="Nick Name"
-                                            value={regDisplayName}
-                                            onChange={(e: any) => setRegDisplayName(e.target.value)}
-                                            placeholder="Alex"
-                                        />
-                                        <InputField
-                                            icon={Lock}
-                                            label="Password"
-                                            type="password"
-                                            value={regPassword}
-                                            onChange={(e: any) => setRegPassword(e.target.value)}
-                                            placeholder="••••••••"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50 flex gap-3 items-center">
-                                    <div className="p-2 bg-white rounded-lg text-blue-500 shadow-sm"><Globe size={16} /></div>
-                                    <p className="text-[11px] text-blue-600 font-bold leading-tight">
-                                        A dedicated database and secure workspace will be provisioned on the fly.
-                                    </p>
-                                </div>
-
-                                <button
-                                    onClick={handleRegister}
-                                    disabled={isLoading || !orgName.trim() || !regEmail.trim() || !regPassword.trim()}
-                                    className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98] mt-2 mb-4"
-                                >
-                                    {isLoading ? 'INITIATING...' : 'CREATE WORKSPACE'}
-                                </button>
+                            <div key="reg" className="animate-in fade-in slide-in-from-right-8 duration-500">
+                                <RegisterForm
+                                    setNewApiKey={setNewApiKey}
+                                    setStep={setStep}
+                                    setError={setError}
+                                    isLoading={isLoading}
+                                    setIsLoading={setIsLoading}
+                                />
                             </div>
                         ) : activeTab === 'login' ? (
-                            <div className="space-y-8 animate-in fade-in slide-in-from-left-8 duration-500">
-                                <div className="space-y-5">
-                                    <InputField
-                                        icon={Mail}
-                                        label="Work Email"
-                                        type="email"
-                                        value={loginEmail}
-                                        onChange={(e: any) => setLoginEmail(e.target.value)}
-                                        placeholder="name@company.com"
-                                    />
-
-                                    <InputField
-                                        icon={Lock}
-                                        label="Password"
-                                        type="password"
-                                        value={loginPassword}
-                                        onChange={(e: any) => setLoginPassword(e.target.value)}
-                                        placeholder="••••••••"
-                                    />
-                                </div>
-
-                                <button
-                                    onClick={handleLogin}
-                                    disabled={isLoading || !loginEmail.trim() || !loginPassword.trim()}
-                                    className="w-full py-4.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98] mt-2"
-                                >
-                                    {isLoading ? 'AUTHENTICATING...' : 'SIGN IN'}
-                                </button>
+                            <div key="login" className="animate-in fade-in slide-in-from-left-8 duration-500">
+                                <LoginForm
+                                    onLoginSuccess={onLoginSuccess}
+                                    setError={setError}
+                                    isLoading={isLoading}
+                                    setIsLoading={setIsLoading}
+                                />
                             </div>
                         ) : (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-500">
-                                <div className="space-y-4">
-                                    <div className="space-y-1.5 group">
-                                        <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1">Invite Token</label>
-                                        <input
-                                            type="text"
-                                            value={inviteToken}
-                                            onChange={(e) => setInviteToken(e.target.value)}
-                                            placeholder="Token from email"
-                                            className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-xl font-mono text-xs focus:border-blue-500/50 outline-none"
-                                        />
-                                    </div>
-
-                                    <InputField
-                                        icon={User}
-                                        label="Display Name"
-                                        value={inviteDisplayName}
-                                        onChange={(e: any) => setInviteDisplayName(e.target.value)}
-                                        placeholder="John Doe"
-                                    />
-
-                                    <InputField
-                                        icon={Lock}
-                                        label="Set Password"
-                                        type="password"
-                                        value={invitePassword}
-                                        onChange={(e: any) => setInvitePassword(e.target.value)}
-                                        placeholder="••••••••"
-                                    />
-                                </div>
-
-                                <button
-                                    onClick={handleAcceptInvite}
-                                    disabled={isLoading || !inviteToken.trim() || !invitePassword.trim()}
-                                    className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg transition-all disabled:opacity-50 active:scale-[0.98]"
-                                >
-                                    {isLoading ? 'PROCESSING...' : 'ACCEPT INVITATION'}
-                                </button>
+                            <div key="invite" className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                                <InviteAcceptForm
+                                    inviteToken={inviteToken}
+                                    setInviteToken={setInviteToken}
+                                    setActiveTab={setActiveTab}
+                                    setError={setError}
+                                    isLoading={isLoading}
+                                    setIsLoading={setIsLoading}
+                                />
                             </div>
                         )}
                     </div>

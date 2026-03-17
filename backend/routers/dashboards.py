@@ -1,50 +1,23 @@
-from typing import List, Optional
+"""
+routers/dashboards.py — Visual dashboard and reporting routes.
+"""
+
+from typing import List
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from dependencies import get_current_org, get_org_connection_string
-from main import AnalyticsAgent
 from dashboards import (
     get_dashboards, create_dashboard, get_dashboard, get_cards,
     update_dashboard, delete_dashboard, publish_dashboard, unpublish_dashboard,
     get_dashboard_by_share_token, add_card, update_card, remove_card,
     reorder_cards, refresh_card
 )
+from schemas import DashboardRequest, CardRequest, CardLayoutItem, PinQueryRequest
 
 router = APIRouter()
 
-class DashboardRequest(BaseModel):
-    name:        str
-    description: Optional[str] = None
-
-class CardRequest(BaseModel):
-    title:           Optional[str]   = None
-    query_text:      Optional[str]   = None
-    response_text:   Optional[str]   = None
-    visualization:   Optional[dict]  = None
-    sql_query:       Optional[str]   = None
-    card_type:       str             = "query"
-    layout_x:        int             = 0
-    layout_y:        int             = 0
-    layout_w:        int             = 6
-    layout_h:        int             = 4
-
-class CardLayoutItem(BaseModel):
-    id:       int
-    layout_x: int
-    layout_y: int
-    layout_w: int
-    layout_h: int
-
-class PinQueryRequest(BaseModel):
-    dashboard_id:  int
-    title:         Optional[str]  = None
-    query_text:    str
-    response_text: Optional[str]  = None
-    visualization: Optional[dict] = None
-    sql_query:     Optional[str]  = None
-
+# ── Routes ──
 
 @router.get("/dashboards")
 async def list_dashboards(org=Depends(get_current_org)):
@@ -156,6 +129,7 @@ async def refresh_dashboard_card(
     conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
+    from main import AnalyticsAgent
     agent  = AnalyticsAgent(connection_string=conn_str)
     result = await refresh_card(card_id, org.id, conn_str, agent)
     return result
