@@ -11,7 +11,7 @@ services:
     volumes:
       - vantage_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,7 +28,7 @@ services:
     volumes:
       - vantage_mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -45,7 +45,7 @@ services:
     volumes:
       - vantage_mariadb_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,8 +58,15 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@vantage-db:5432/vantage_db
-      - ADMIN_DB_PATH=/app/admin.db
+      - ADMIN_DB_URL=sqlite:////data/admin.db
+      - ADMIN_DB_PATH=/data/admin.db
       - CORS_ORIGINS=http://localhost:5173,http://localhost
+    env_file:
+      - ./backend/.env
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     depends_on:
       vantage-db:
         condition: service_healthy
@@ -69,13 +76,14 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - vantage_admin_data:/data
     restart: unless-stopped
 
   vantage-frontend:
     build:
       context: ./frontend
       args:
-        - VITE_API_BASE_URL=http://localhost:8000
+        - VITE_API_URL=http://localhost:8000
     container_name: vantage_frontend
     ports:
       - "5173:80"
@@ -89,3 +97,4 @@ volumes:
   vantage_pg_data:
   vantage_mysql_data:
   vantage_mariadb_data:
+  vantage_admin_data:

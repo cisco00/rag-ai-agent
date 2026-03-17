@@ -24,6 +24,17 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const replayIndexRef = useRef(0);
   const replayDataRef = useRef<any[]>([]);
+
+  // Anomaly detection states
+  const [enableAnomalyDetection, setEnableAnomalyDetection] = useSessionStorage('realtime_enableAnomalyDetection', false);
+  const [anomalyThreshold, setAnomalyThreshold] = useSessionStorage('realtime_anomalyThreshold', 3.0);
+
+  // Dynamic source + column selection
+  const [tables, setTables] = useState<string[]>([]);
+  const [selectedTable, setSelectedTable] = useSessionStorage('realtime_selectedTable', '');
+  const [availableColumns, setAvailableColumns] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useSessionStorage<string[]>('realtime_selectedColumns', []);
+
   // Use a ref for current threshold state so it's fresh in websocket callbacks without needing recreating the socket
   const configRef = useRef({ enableAnomalyDetection, anomalyThreshold });
 
@@ -42,16 +53,6 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
     const zScore = Math.abs((val - mean) / stdDev);
     return zScore > threshold;
   };
-
-  // Dynamic source + column selection
-  const [tables, setTables] = useState<string[]>([]);
-  const [selectedTable, setSelectedTable] = useSessionStorage('realtime_selectedTable', '');
-  const [availableColumns, setAvailableColumns] = useState<string[]>([]);
-  const [selectedColumns, setSelectedColumns] = useSessionStorage<string[]>('realtime_selectedColumns', []);
-
-  // Anomaly detection states
-  const [enableAnomalyDetection, setEnableAnomalyDetection] = useSessionStorage('realtime_enableAnomalyDetection', false);
-  const [anomalyThreshold, setAnomalyThreshold] = useSessionStorage('realtime_anomalyThreshold', 3.0);
 
   // Fetch tables on mount
   useEffect(() => {
@@ -183,7 +184,7 @@ export function RealTimeStreaming({ apiKey }: RealTimeStreamingProps) {
 
     // Try WebSocket first
     try {
-      const wsUrl = `ws://localhost:8000/ws/stream/${selectedTable}?api_key=${apiKey}`;
+      const wsUrl = api.wsUrl(`/ws/stream/${selectedTable}`);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight, LayoutGrid, Bell } from 'lucide-react';
+import { Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight, LayoutGrid, Bell, RotateCw } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DashboardProps {
-  onNavigate: (view: string) => void;
+  onNavigate: (view: string, query?: string) => void;
   isConfigured?: boolean;
 }
 
@@ -17,12 +17,29 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
 
   const [recentQueries, setRecentQueries] = useState<any[]>([]);
   const [recentInsights, setRecentInsights] = useState<any[]>([]);
+  const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
+  const fetchSuggestions = async (isRefresh = false) => {
+    if (!isConfigured) return;
+    setIsLoadingSuggestions(true);
+    try {
+      const data = await api.get<{ queries: string[] }>(`/analytics/suggested-queries${isRefresh ? '?refresh=true' : ''}`);
+      if (data && data.queries) {
+        setSuggestedQueries(data.queries.slice(0, 4));
+      }
+    } catch (err) {
+      console.error('Failed to fetch suggestions:', err);
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         const [historyRes, insightsRes, dashboardsRes, alertsRes] = await Promise.all([
-          api.get<{ history: any[] }>('/history?limit=10'),
+          api.get<{ history: any[] }>('/analytics/history?limit=10'),
           api.get<{ insights: any[] }>('/insights?limit=3').catch(() => ({ insights: [] })),
           api.get<{ dashboards: any[] }>('/dashboards').catch(() => ({ dashboards: [] })),
           api.get<{ alerts: any[] }>('/alerts').catch(() => ({ alerts: [] })),
@@ -52,8 +69,14 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
         console.error('Error fetching dashboard stats:', error);
       }
     };
+
     fetchDashboardData();
-  }, []);
+    fetchSuggestions();
+  }, [isConfigured]);
+
+  const handleRefreshSuggestions = () => {
+    fetchSuggestions(true);
+  };
 
   const getSeverityIcon = (severity: string) => {
     if (severity === 'high') return <AlertCircle className="size-4 text-red-600" />;
@@ -96,6 +119,56 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Discovery Card */}
+        {isConfigured && (
+          <div className="lg:col-span-3 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-8 text-white shadow-lg overflow-hidden relative group">
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <Lightbulb className="size-8 text-blue-200" />
+                  <h2 className="text-2xl font-bold">Discover Your Data</h2>
+                </div>
+                <button
+                  onClick={handleRefreshSuggestions}
+                  disabled={isLoadingSuggestions}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors flex items-center gap-2 text-sm"
+                  title="Generate new analytical questions"
+                >
+                  <RotateCw className={`size-4 ${isLoadingSuggestions ? 'animate-spin' : ''}`} />
+                  Refresh Insights
+                </button>
+              </div>
+              <p className="text-blue-100 mb-8 max-w-2xl text-lg">
+                Our AI has analyzed your database schema and is ready to answer your questions.
+                Try one of these suggested analyses or start a new query.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {suggestedQueries.length > 0 ? (
+                  suggestedQueries.map((query, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => onNavigate('query', query)}
+                      className="group flex items-center justify-between p-4 bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl transition-all text-left"
+                    >
+                      <span className="font-medium">{query}</span>
+                      <ChevronRight className="size-5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </button>
+                  ))
+                ) : (
+                  [1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-14 bg-white/5 animate-pulse rounded-xl" />
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Decorative backgrounds */}
+            <div className="absolute -right-20 -bottom-20 size-80 bg-white/10 rounded-full blur-3xl" />
+            <div className="absolute -left-20 -top-20 size-60 bg-blue-400/20 rounded-full blur-3xl" />
+          </div>
+        )}
+
         {/* Recent Queries */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-6">

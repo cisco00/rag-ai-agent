@@ -17,6 +17,19 @@ New in this version
    • Considers: schema verification, error retries, query complexity, iterations
    • Returned in the API response as  confidence  and  confidence_reasoning
    • Frontend can gate auto-execution behind a threshold (e.g. ≥ 75%)
+
+Fixes applied
+─────────────
+Bug #16 — result_preview in session_memory.record() now receives actual query
+           result rows instead of always being None.  The agent loop tracks
+           the last execute_query result and passes it through.
+Bug #17 — _extract_tables_from_tools() now accepts List[Tuple[str, dict]] so
+           it can parse table names from both describe_table args and SQL in
+           execute_query args.  QueryProcessor.process() was updated to collect
+           (tool_name, args) pairs instead of just tool name strings.
+Bug #18 — ConfidenceScorer risky-keyword check now uses word-boundary regex
+           \\b(DELETE|DROP|...)\\b so columns like "created_at" or "updated_at"
+           no longer trigger false-positive near-zero confidence scores.
 """
 
 import os
@@ -51,29 +64,12 @@ logger = get_logger(__name__)
 # ═════════════════════════════════════════════════════════════════════════════
 
 class SessionMemory:
-    """
-    Keeps a compressed, rolling log of what was queried and found during the
-    current chat session.  Injected into every system prompt so the agent can
-    resolve follow-up references like:
-      • "now filter that by region"
-      • "compare with last month"
-      • "show the same breakdown for product B"
-
-    Design goals
-    ────────────
-    • Lean context footprint — only a small result preview is stored.
-    • Rolling window (MAX_ENTRIES) so long sessions don't bloat the prompt.
-    • Structured entries so the agent gets clean, parseable context.
-    """
-
-    MAX_ENTRIES    = 10   # keep the last N turns in memory
-    MAX_ROWS       = 5    # result rows stored per turn
-    MAX_COLS       = 8    # columns per row
+    MAX_ENTRIES = 10
+    MAX_ROWS    = 5
+    MAX_COLS    = 8
 
     def __init__(self) -> None:
         self._entries: List[Dict[str, Any]] = []
-
-    # ── write ────────────────────────────────────────────────────────────────
 
     def record(
         self,
@@ -83,7 +79,6 @@ class SessionMemory:
         summary: str,
         tables_used: List[str],
     ) -> None:
-        """Append a turn to session memory."""
         preview: List[Dict] = []
         if result_preview:
             for row in result_preview[: self.MAX_ROWS]:
@@ -100,17 +95,10 @@ class SessionMemory:
             "tables_used":    tables_used,
         })
 
-        # Rolling window
         if len(self._entries) > self.MAX_ENTRIES:
             self._entries = self._entries[-self.MAX_ENTRIES :]
 
-    # ── read ─────────────────────────────────────────────────────────────────
-
     def to_prompt_block(self) -> str:
-        """
-        Render a compact context block for the system prompt.
-        Returns an empty string if memory is empty (first turn).
-        """
         if not self._entries:
             return ""
 
@@ -137,7 +125,6 @@ class SessionMemory:
         return "\n".join(lines)
 
     def get_last_tables(self) -> List[str]:
-        """Tables used in the most recent turn (handy for follow-up routing)."""
         return self._entries[-1]["tables_used"] if self._entries else []
 
     def clear(self) -> None:
@@ -151,33 +138,16 @@ class SessionMemory:
 # 2.  CONFIDENCE SCORER
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Fix #18: Compile risky-keyword pattern once with word boundaries so columns
+# like "created_at" or "updated_at" no longer cause false positives.
+_RISKY_PATTERN = re.compile(
+    r"\b(DELETE|DROP|TRUNCATE|UPDATE|INSERT|ALTER|CREATE)\b",
+    re.IGNORECASE,
+)
+
+
 class ConfidenceScorer:
-    """
-    Rule-based confidence score (0–100%) attached to every query result.
-
-    No extra LLM call — runs in microseconds after the agent loop finishes.
-
-    Signals evaluated
-    ─────────────────
-    + schema_verified   → agent called describe_table / get_join_schema first
-    + fk_verified       → agent called get_foreign_keys / get_join_schema before a JOIN
-    - had_error_retry   → the agent fixed a SQL error mid-run (lower confidence)
-    - complexity        → complex SQL (multiple JOINs, subqueries, HAVING …)
-    - high_iterations   → agent needed many rounds to finish
-    - risky_keyword     → destructive SQL keyword detected (near-zero score)
-
-    Return value
-    ────────────
-    (score: float 0.0–1.0,  reasoning: str)
-
-    The reasoning string is human-readable for display in the UI, e.g.
-      "High confidence (92%)"
-      "Medium confidence (68%): JOIN used without FK verification."
-      "Low confidence (41%): agent corrected SQL error; took 9 iterations."
-    """
-
-    _COMPLEX   = {"join", "union", "intersect", "except", "with ", "having", "subquery"}
-    _RISKY     = {"delete", "drop", "truncate", "update", "insert", "alter", "create"}
+    _COMPLEX      = {"join", "union", "intersect", "except", "with ", "having", "subquery"}
     _SCHEMA_TOOLS = {"describe_table", "get_join_schema"}
     _FK_TOOLS     = {"get_foreign_keys", "get_join_schema"}
 
@@ -188,43 +158,29 @@ class ConfidenceScorer:
         iterations: int,
         had_error_retry: bool,
     ) -> Tuple[float, str]:
-        """
-        Compute a confidence score.
-
-        Args:
-            sql             : The SQL that was or will be executed (None for text-only answers).
-            tools_used      : Tool names called during this agent run.
-            iterations      : Number of agent-loop iterations.
-            had_error_retry : True if the agent encountered and corrected a SQL error.
-
-        Returns:
-            (score 0.0–1.0,  reasoning string)
-        """
         if not sql:
             return 0.5, "Text-only answer — no SQL generated."
 
         sql_lower = sql.lower()
 
-        # Hard block for destructive SQL (should never reach here, but be safe)
-        for kw in ConfidenceScorer._RISKY:
-            if kw in sql_lower:
-                return 0.05, f"Destructive keyword '{kw}' detected — do not run."
+        # Fix #18: use word-boundary regex instead of substring 'in' check
+        risky_match = _RISKY_PATTERN.search(sql)
+        if risky_match:
+            kw = risky_match.group(1).upper()
+            return 0.05, f"Destructive keyword '{kw}' detected — do not run."
 
         score     = 1.0
         penalties: List[str] = []
         tools_set = set(tools_used)
 
-        # Schema not verified
         if not tools_set & ConfidenceScorer._SCHEMA_TOOLS:
             score -= 0.20
             penalties.append("column names not verified against schema")
 
-        # SQL error that needed correction
         if had_error_retry:
             score -= 0.20
             penalties.append("agent corrected a SQL error mid-run")
 
-        # Complex query
         complexity_hits = [kw for kw in ConfidenceScorer._COMPLEX if kw in sql_lower]
         if len(complexity_hits) >= 2:
             score -= 0.12
@@ -233,12 +189,10 @@ class ConfidenceScorer:
             score -= 0.05
             penalties.append(f"uses {complexity_hits[0]}")
 
-        # JOIN without FK verification
         if "join" in sql_lower and not (tools_set & ConfidenceScorer._FK_TOOLS):
             score -= 0.10
             penalties.append("JOIN used without FK verification")
 
-        # Many iterations
         if iterations >= 8:
             score -= 0.12
             penalties.append(f"took {iterations} iterations")
@@ -270,17 +224,20 @@ class ConfidenceScorer:
 class QueryResult:
     """Result returned by QueryProcessor.process()."""
     text:                  str
-    visualization:         Optional[Dict[str, Any]] = None
-    tools_used:            List[str]                = field(default_factory=list)
-    iterations:            int                      = 0
-    sql_query:             Optional[str]            = None
-    had_error_retry:       bool                     = False
-    confidence:            Optional[float]          = None
-    confidence_reasoning:  Optional[str]            = None
+    visualization:         Optional[Dict[str, Any]]   = None
+    # Bug #17: tools_used is now List[Tuple[str, dict]] — (tool_name, args)
+    tools_used:            List[Tuple[str, dict]]     = field(default_factory=list)
+    iterations:            int                        = 0
+    sql_query:             Optional[str]              = None
+    # Bug #16: last_result_rows carries the most recent execute_query output
+    last_result_rows:      Optional[List[Dict]]       = None
+    had_error_retry:       bool                       = False
+    confidence:            Optional[float]            = None
+    confidence_reasoning:  Optional[str]              = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4.  VISUALIZATION PARSER  (unchanged logic, cleaned up)
+# 4.  VISUALIZATION PARSER
 # ═════════════════════════════════════════════════════════════════════════════
 
 class VisualizationParser:
@@ -289,12 +246,12 @@ class VisualizationParser:
     @staticmethod
     def parse(text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         if "VISUALIZATION:" in text:
-            parts        = text.split("VISUALIZATION:", 1)
-            clean_text   = parts[0].strip()
-            potential    = parts[1].strip()
+            parts      = text.split("VISUALIZATION:", 1)
+            clean_text = parts[0].strip()
+            potential  = parts[1].strip()
         else:
-            clean_text   = text
-            potential    = text
+            clean_text = text
+            potential  = text
 
         cb = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", potential, re.DOTALL)
         if cb:
@@ -331,15 +288,6 @@ class VisualizationParser:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class QueryProcessor:
-    """
-    Runs the agent tool-calling loop and returns a QueryResult.
-
-    Tracks two new signals for ConfidenceScorer:
-      • last_sql          — the SQL that was most recently passed to execute_query
-      • had_error_retry   — True if a tool call returned an error string and the
-                            agent continued (self-correction)
-    """
-
     def __init__(
         self,
         client:          LLMClient,
@@ -364,9 +312,12 @@ class QueryProcessor:
         max_iterations  = max_iterations or self.config.max_iterations
         iteration_count = 0
         final_text      = ""
-        tools_used:  List[str]       = []
-        last_sql:    Optional[str]   = None
-        had_error_retry              = False
+        # Bug #17: store (name, args) tuples instead of just names
+        tools_used:       List[Tuple[str, dict]] = []
+        last_sql:         Optional[str]          = None
+        # Bug #16: track the most recent execute_query result rows
+        last_result_rows: Optional[List[Dict]]   = None
+        had_error_retry                          = False
 
         logger.info(f"QueryProcessor.process: {query[:100]}")
 
@@ -374,7 +325,6 @@ class QueryProcessor:
             iteration_count += 1
             logger.debug(f"Iteration {iteration_count}/{max_iterations}")
 
-            # ── LLM call (with fallback) ──────────────────────────────────────
             try:
                 response = self.client.chat_completion(
                     model=self.config.model_name,
@@ -411,13 +361,11 @@ class QueryProcessor:
             response_msg = response.choices[0].message
             tool_calls   = response_msg.tool_calls
 
-            # ── No tool calls → final answer ──────────────────────────────────
             if not tool_calls:
                 logger.info(f"Completed in {iteration_count} iterations")
                 final_text = response_msg.content
                 break
 
-            # ── Append assistant turn ─────────────────────────────────────────
             msg_dict: Dict = {"role": response_msg.role, "content": response_msg.content}
             if response_msg.tool_calls:
                 msg_dict["tool_calls"] = [
@@ -433,18 +381,28 @@ class QueryProcessor:
                 ]
             messages.append(msg_dict)
 
-            # ── Execute each tool call ────────────────────────────────────────
             for tc in tool_calls:
-                try:
-                    tool_result = self._execute_tool(tc, verify_only)
+                # Parse args once so we can store them for Bug #17
+                raw = tc.function.arguments
+                if raw is None:
+                    parsed_args: dict = {}
+                elif isinstance(raw, dict):
+                    parsed_args = raw
+                else:
+                    try:
+                        parsed_args = json.loads(raw)
+                    except json.JSONDecodeError:
+                        parsed_args = {}
 
-                    # Track the SQL that was submitted for confidence scoring
+                try:
+                    tool_result = self._execute_tool(tc, verify_only, parsed_args)
+
+                    # Track SQL for confidence scoring
                     if tc.function.name == "execute_query":
-                        try:
-                            args     = json.loads(tc.function.arguments or "{}")
-                            last_sql = args.get("sql")
-                        except Exception:
-                            pass
+                        last_sql = parsed_args.get("sql")
+                        # Bug #16: capture result rows for session memory
+                        if isinstance(tool_result, list):
+                            last_result_rows = tool_result
 
                 except VerificationRequired as vr:
                     if response_msg.content:
@@ -452,12 +410,12 @@ class QueryProcessor:
                     raise
 
                 except Exception as exc:
-                    # Feed errors back → agent self-corrects
                     logger.warning(f"Tool error (caught for self-correction): {exc}")
-                    tool_result    = f"Error executing {tc.function.name}: {exc}"
+                    tool_result     = f"Error executing {tc.function.name}: {exc}"
                     had_error_retry = True
 
-                tools_used.append(tc.function.name)
+                # Bug #17: store (name, args) tuple
+                tools_used.append((tc.function.name, parsed_args))
 
                 content = str(tool_result)
                 if len(content) > 50_000:
@@ -475,48 +433,40 @@ class QueryProcessor:
             logger.warning(f"Max iterations ({max_iterations}) reached")
             raise MaxIterationsError(max_iterations)
 
-        # ── Compute confidence score ──────────────────────────────────────────
+        # ConfidenceScorer expects a flat list of tool names
+        tool_names = [name for name, _ in tools_used]
+
         confidence, confidence_reasoning = ConfidenceScorer.score(
             sql             = last_sql,
-            tools_used      = tools_used,
+            tools_used      = tool_names,
             iterations      = iteration_count,
             had_error_retry = had_error_retry,
         )
 
         return QueryResult(
             text                 = final_text,
-            tools_used           = tools_used,
+            tools_used           = tools_used,          # List[Tuple[str, dict]]
             iterations           = iteration_count,
             sql_query            = last_sql,
+            last_result_rows     = last_result_rows,    # Bug #16
             had_error_retry      = had_error_retry,
             confidence           = confidence,
             confidence_reasoning = confidence_reasoning,
         )
 
-    def _execute_tool(self, tool_call, verify_only: bool = False) -> Any:
-        fn   = tool_call.function.name
-        raw  = tool_call.function.arguments
+    def _execute_tool(self, tool_call, verify_only: bool, parsed_args: dict) -> Any:
+        fn = tool_call.function.name
 
-        if raw is None:
-            args = {}
-        elif isinstance(raw, dict):
-            args = raw
-        else:
-            try:
-                args = json.loads(raw)
-            except json.JSONDecodeError:
-                args = {}
-
-        logger.info(f"Executing tool: {fn}", extra={"args": str(args)[:100]})
+        logger.info(f"Executing tool: {fn}", extra={"args": str(parsed_args)[:100]})
 
         if fn not in self.tool_map:
             raise ToolExecutionError(fn, "Tool not found")
 
         if verify_only and fn == "execute_query":
-            raise VerificationRequired("User verification required", fn, args)
+            raise VerificationRequired("User verification required", fn, parsed_args)
 
         try:
-            result = self.tool_map[fn](**args)
+            result = self.tool_map[fn](**parsed_args)
             logger.debug(f"Tool {fn} succeeded")
             return result
         except Exception as exc:
@@ -528,7 +478,6 @@ class QueryProcessor:
 # 6.  ANALYTICS AGENT
 # ═════════════════════════════════════════════════════════════════════════════
 
-# ── Multi-table JOIN addendum injected after the base system prompt ───────────
 _JOIN_PROMPT_ADDENDUM = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MULTI-TABLE QUERY RULES  (always follow these)
@@ -573,16 +522,7 @@ COMMON JOIN PATTERNS:
 
 
 class AnalyticsAgent:
-    """
-    AI-powered analytics agent for database querying and insights.
-
-    New in this version
-    ───────────────────
-    • session_memory  : SessionMemory instance (one per chat session in api.py)
-    • Confidence scoring on every query result
-    • Multi-table JOIN system-prompt addendum
-    • run_query now returns  confidence  and  confidence_reasoning  in its dict
-    """
+    """AI-powered analytics agent for database querying and insights."""
 
     def __init__(
         self,
@@ -594,14 +534,12 @@ class AnalyticsAgent:
     ) -> None:
         self.config = get_agent_config()
 
-        if hf_token:                           # legacy support
+        if hf_token:
             self.config.hf_token = hf_token
 
-        self.db                    = DatabaseManager(connection_string)
-        self.schema_summary        = schema_summary
+        self.db                     = DatabaseManager(connection_string)
+        self.schema_summary         = schema_summary
         self.system_prompt_override = system_prompt_override
-
-        # Session memory — shared with api.py so it persists across requests
         self.session_memory: SessionMemory = session_memory or SessionMemory()
 
         self.tools_schema, self.tool_map = get_db_tools(self.db)
@@ -632,8 +570,6 @@ class AnalyticsAgent:
         self.query_log: List[Dict[str, Any]] = []
         logger.info("AnalyticsAgent initialised")
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
     def run_query(
         self,
         query:          str,
@@ -643,13 +579,6 @@ class AnalyticsAgent:
         verify_only:    bool                 = False,
         confirmed_sql:  Optional[str]        = None,
     ) -> Dict[str, Any]:
-        """
-        Execute a natural-language query.
-
-        Returns a dict with keys:
-          text, visualization, status, sql_query,
-          confidence (0.0–1.0), confidence_reasoning (str)
-        """
         logger.info(f"run_query: {query[:100]} | tables={tables}")
 
         if tables:
@@ -660,13 +589,9 @@ class AnalyticsAgent:
         try:
             messages = list(history) if history else []
 
-            # ── Build system prompt ───────────────────────────────────────────
-            system_prompt = self.system_prompt_override or self.config.system_prompt
-
-            # Append multi-table JOIN guidance
+            system_prompt  = self.system_prompt_override or self.config.system_prompt
             system_prompt += _JOIN_PROMPT_ADDENDUM
 
-            # Append schema cache (skips redundant list_tables/describe calls)
             if self.schema_summary:
                 system_prompt += (
                     "\n\nDATABASE SCHEMA CACHE:\n"
@@ -675,7 +600,6 @@ class AnalyticsAgent:
                       "for the tables listed above. Use this schema directly."
                 )
 
-            # Inject session memory so the agent can resolve follow-up references
             memory_block = self.session_memory.to_prompt_block()
             if memory_block:
                 system_prompt += "\n\n" + memory_block
@@ -685,7 +609,6 @@ class AnalyticsAgent:
 
             messages.append({"role": "user", "content": query})
 
-            # ── Run the agent ─────────────────────────────────────────────────
             try:
                 if confirmed_sql:
                     result = self._run_confirmed_sql(confirmed_sql, query, messages, max_iterations)
@@ -696,7 +619,6 @@ class AnalyticsAgent:
 
             except VerificationRequired as vr:
                 logger.info(f"Verification required for {vr.tool_name}")
-                # Compute confidence for the pending SQL before showing to user
                 confidence, confidence_reasoning = ConfidenceScorer.score(
                     sql             = vr.tool_args.get("sql"),
                     tools_used      = [],
@@ -725,17 +647,18 @@ class AnalyticsAgent:
                     "confidence_reasoning": "Query did not complete within iteration limit.",
                 }
 
-            # ── Parse visualization ───────────────────────────────────────────
             clean_text, viz_data = VisualizationParser.parse(result.text)
             if viz_data and not clean_text:
                 clean_text = "Here is the visual analysis of the results."
 
-            # ── Update session memory ─────────────────────────────────────────
+            # Bug #17: extract table names from (name, args) tuples
             tables_used = self._extract_tables_from_tools(result.tools_used)
+
+            # Bug #16: pass actual result rows to session memory
             self.session_memory.record(
                 query          = query,
                 sql            = result.sql_query,
-                result_preview = None,   # we don't re-run to get rows here; summary is enough
+                result_preview = result.last_result_rows,
                 summary        = clean_text[:400] if clean_text else "",
                 tables_used    = tables_used,
             )
@@ -770,8 +693,6 @@ class AnalyticsAgent:
                 "confidence_reasoning": "Unexpected error.",
             }
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
     def _run_confirmed_sql(
         self,
         confirmed_sql:  str,
@@ -779,7 +700,6 @@ class AnalyticsAgent:
         messages:       List[Dict],
         max_iterations: Optional[int],
     ) -> QueryResult:
-        """Execute pre-approved SQL directly then ask the LLM to explain the results."""
         exec_fn = self.tool_map.get("execute_query")
         if not exec_fn:
             raise ToolExecutionError("execute_query", "Tool not found")
@@ -800,38 +720,55 @@ class AnalyticsAgent:
         )
 
     @staticmethod
-    def _extract_tables_from_tools(tools_used: List[str]) -> List[str]:
+    def _extract_tables_from_tools(tools_used: List[Tuple[str, dict]]) -> List[str]:
         """
-        Best-effort extraction of table names from the tool call log.
-        Because tool args are not stored here we rely on the fact that
-        describe_table and execute_query calls imply table access — the
-        session memory summary is more valuable than a precise table list.
+        Extract table names from the (tool_name, args) tuples collected during
+        the agent loop.
+
+        Fix #17: Previously received only tool name strings, so it could not
+        extract table names from SQL strings or describe_table arguments.
+        Now correctly parses both describe_table args and FROM/JOIN clauses
+        in execute_query SQL.
         """
-        # Tables will be recorded more precisely if callers pass them explicitly.
-        # For now we return a placeholder.  api.py can enrich this if desired.
-        return []
+        tables: set = set()
+        for name, args in tools_used:
+            if name == "describe_table" and "table_name" in args:
+                tables.add(args["table_name"])
+            elif name == "get_foreign_keys" and "table_name" in args:
+                tables.add(args["table_name"])
+            elif name == "execute_query" and "sql" in args:
+                # Simple regex to extract table names after FROM and JOIN
+                found = re.findall(
+                    r'(?:FROM|JOIN)\s+"?(\w+)"?',
+                    args["sql"],
+                    re.IGNORECASE,
+                )
+                tables.update(found)
+        return list(tables)
 
     def _log_query(self, query: str, result: QueryResult, viz_data) -> None:
+        # tools_used is now List[Tuple[str, dict]]; extract names for logging
+        tool_names = [name for name, _ in result.tools_used]
         self.query_log.append({
-            "query":            query,
-            "response_length":  len(result.text or ""),
-            "tools_used":       result.tools_used,
-            "iterations":       result.iterations,
+            "query":             query,
+            "response_length":   len(result.text or ""),
+            "tools_used":        tool_names,
+            "iterations":        result.iterations,
             "has_visualization": viz_data is not None,
-            "confidence":       result.confidence,
+            "confidence":        result.confidence,
         })
 
     def get_query_stats(self) -> Dict[str, Any]:
         if not self.query_log:
             return {"total_queries": 0}
         return {
-            "total_queries":     len(self.query_log),
-            "avg_iterations":    sum(q["iterations"] for q in self.query_log) / len(self.query_log),
-            "queries_with_viz":  sum(1 for q in self.query_log if q["has_visualization"]),
-            "avg_confidence":    round(
+            "total_queries":    len(self.query_log),
+            "avg_iterations":   sum(q["iterations"] for q in self.query_log) / len(self.query_log),
+            "queries_with_viz": sum(1 for q in self.query_log if q["has_visualization"]),
+            "avg_confidence":   round(
                 sum(q["confidence"] or 0 for q in self.query_log) / len(self.query_log), 2
             ),
-            "most_used_tools":   self._get_most_used_tools(),
+            "most_used_tools":  self._get_most_used_tools(),
         }
 
     def _get_most_used_tools(self) -> List[Tuple[str, int]]:

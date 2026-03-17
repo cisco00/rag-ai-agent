@@ -5,7 +5,7 @@ This module defines SQLAlchemy models for organizations and shared reports,
 along with CRUD operations.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Index, Float, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Index
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from contextlib import contextmanager
@@ -226,75 +226,6 @@ class ChatMessage(Base):
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, role='{self.role}')>"
 
-class ScheduledSync(Base):
-    """
-    Scheduled data sync — pulls JSON from an external URL on a cron schedule
-    and loads it into the org's database.
-    """
-    __tablename__ = 'scheduled_syncs'
-
-    id               = Column(Integer, primary_key=True)
-    org_id           = Column(Integer, nullable=False, index=True)
-    name             = Column(String(255), nullable=False)
-    cron_expr        = Column(String(100), nullable=False)   # 5-field cron: "0 * * * *"
-    url              = Column(Text, nullable=False)
-    method           = Column(String(10), default='GET')
-    headers          = Column(EncryptedString, nullable=True)  # JSON, encrypted
-    params           = Column(Text, nullable=True)             # JSON
-    table_name       = Column(String(255), nullable=False)
-    dedup_column     = Column(String(255), nullable=True)
-    if_exists        = Column(String(20), default='replace')   # replace | append
-    is_active        = Column(Integer, default=1)
-    last_run_at      = Column(DateTime, nullable=True)
-    last_run_status  = Column(String(20), nullable=True)       # success | error
-    last_error       = Column(Text, nullable=True)
-    created_at       = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    def __repr__(self):
-        return f"<ScheduledSync(id={self.id}, name='{self.name}', org_id={self.org_id})>"
-
-    def get_headers(self) -> dict:
-        if not self.headers:
-            return {}
-        try:
-            return json.loads(self.headers)
-        except Exception:
-            return {}
-
-    def get_params(self) -> dict:
-        if not self.params:
-            return {}
-        try:
-            return json.loads(self.params)
-        except Exception:
-            return {}
-
-
-class TableFreshness(Base):
-    """
-    Tracks when each org table was last modified and how many rows it has.
-    Updated by the upload, import, ingest, and sync code paths.
-    """
-    __tablename__ = 'table_freshness'
-
-    id           = Column(Integer, primary_key=True)
-    org_id       = Column(Integer, nullable=False, index=True)
-    table_name   = Column(String(255), nullable=False)
-    last_updated = Column(DateTime, default=datetime.utcnow, nullable=False)
-    row_count    = Column(Integer, nullable=True)
-    source       = Column(String(50), nullable=True)   # upload | api | sync | ingest
-
-    __table_args__ = (
-        Index('ix_table_freshness_org_table', 'org_id', 'table_name', unique=True),
-    )
-
-    def __repr__(self):
-        return (
-            f"<TableFreshness(org_id={self.org_id}, "
-            f"table='{self.table_name}', updated='{self.last_updated}')>"
-        )
-
-
 # Setup admin database
 ADMIN_DB_URL = os.getenv("ADMIN_DB_URL", "sqlite:///./admin.db")
 
@@ -483,6 +414,32 @@ def get_org_by_api_key(api_key: str) -> Optional[Organization]:
     except Exception as e:
         logger.error(f"Failed to get organization: {e}", exc_info=True)
         raise DatabaseError(f"Failed to get organization: {str(e)}") from e
+
+
+def get_org_by_id(org_id: int) -> Optional[Organization]:
+    """
+    Get organization by ID.
+
+    Added to support routers and dependencies that look up orgs by primary key.
+    """
+    try:
+        with get_db() as db:
+            org = db.query(Organization).filter(Organization.id == org_id).first()
+            if org:
+                db.expunge(org)
+            return org
+    except Exception as e:
+        logger.error(f"Failed to get organization by id: {e}", exc_info=True)
+        raise DatabaseError(f"Failed to get organization by id: {str(e)}") from e
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """
+    Thin shim so that any code importing get_user_by_id from models
+    still works. The real implementation lives in auth.py.
+    """
+    from auth import get_user_by_id as _get
+    return _get(user_id)
 
 
 def update_org_db(api_key: str, connection_string: str) -> Organization:
@@ -779,74 +736,3 @@ def get_org_history(org_id: int, limit: int = 50) -> list[QueryHistory]:
     except Exception as e:
         logger.error(f"Failed to get query history: {e}", exc_info=True)
         return []
-
-
-# ─── ScheduledSync CRUD ───────────────────────────────────────────────────────
-
-def get_active_syncs() -> list[ScheduledSync]:
-    """Return all active ScheduledSync rows across all orgs."""
-    try:
-        with get_db() as db:
-            syncs = db.query(ScheduledSync).filter(
-                ScheduledSync.is_active == 1
-            ).all()
-            for s in syncs:
-                db.expunge(s)
-            return syncs
-    except Exception as e:
-        logger.error(f"Failed to fetch active syncs: {e}", exc_info=True)
-        return []
-
-
-def update_sync_run_status(
-    sync_id: int,
-    status: str,                     # "success" | "error"
-    error_message: Optional[str] = None,
-) -> None:
-    """Record the outcome of a sync execution."""
-    try:
-        with get_db() as db:
-            sync = db.query(ScheduledSync).filter(ScheduledSync.id == sync_id).first()
-            if sync:
-                sync.last_run_at     = datetime.utcnow()
-                sync.last_run_status = status
-                sync.last_error      = error_message
-    except Exception as e:
-        logger.error(f"Failed to update sync run status for {sync_id}: {e}", exc_info=True)
-
-
-# ─── TableFreshness CRUD ──────────────────────────────────────────────────────
-
-def touch_table_freshness(
-    org_id: int,
-    table_name: str,
-    source: Optional[str] = None,
-    row_count: Optional[int] = None,
-) -> None:
-    """
-    Upsert a TableFreshness record for (org_id, table_name).
-    Call this after every import, upload, ingest, or sync that writes to a table.
-    Non-fatal — logs and swallows errors so callers are never disrupted.
-    """
-    try:
-        with get_db() as db:
-            record = db.query(TableFreshness).filter(
-                TableFreshness.org_id    == org_id,
-                TableFreshness.table_name == table_name,
-            ).first()
-
-            if record:
-                record.last_updated = datetime.utcnow()
-                if source    is not None: record.source    = source
-                if row_count is not None: record.row_count = row_count
-            else:
-                record = TableFreshness(
-                    org_id=org_id,
-                    table_name=table_name,
-                    last_updated=datetime.utcnow(),
-                    source=source,
-                    row_count=row_count,
-                )
-                db.add(record)
-    except Exception as e:
-        logger.warning(f"touch_table_freshness failed (non-fatal): {e}")

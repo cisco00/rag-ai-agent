@@ -16,11 +16,32 @@ import { Insights } from './components/Insights';
 import { AlertsManager } from './components/AlertsManager';
 import { DashboardsView } from './components/DashboardsView';
 import { DataProfiler } from './components/DataProfiler';
+import { LandingPage } from './components/LandingPage';
+import { AboutPage } from './components/AboutPage';
 import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
+
+/** Decode JWT payload without verifying signature (client-side only) */
+function decodeJwtPayload(token: string): any {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch { return null; }
+}
+
+/** Returns true if the token is expired or expires within 30 seconds */
+function isTokenExpiredOrExpiring(token: string | null): boolean {
+  if (!token) return true;
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) return true;
+  return payload.exp * 1000 < Date.now() + 30_000;
+}
 
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
-  'insights' | 'alerts' | 'boards' | 'profiler';
+  'insights' | 'alerts' | 'boards' | 'profiler' | 'about';
+
+// What unauthenticated visitors see
+type PublicScreen = 'landing' | 'auth' | 'about';
 
 interface Branding {
   org_name: string;
@@ -38,6 +59,9 @@ const DEFAULT_BRANDING: Branding = {
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [initialQuery, setInitialQuery] = useState<string | null>(null);
+  const [publicScreen, setPublicScreen] = useState<PublicScreen>('landing');
+
   const [apiKey, setApiKey] = useState<string | null>(getApiKey());
   const [accessToken, setAccessToken] = useState<string | null>(getAccessToken());
   const [user, setUser] = useState<any>(() => {
@@ -59,49 +83,67 @@ export default function App() {
 
   const isAuthenticated = !!(apiKey && accessToken);
 
+  // Proactively refresh token on startup if it's expired or nearly expired
   useEffect(() => {
-    const checkConfigStatus = async () => {
-      if (isAuthenticated) {
-        try {
-          await api.get('/tables');
-          setIsConfigured(true);
-        } catch (error) {
-          setIsConfigured(false);
+    if (!accessToken || !apiKey) return;
+    if (!isTokenExpiredOrExpiring(accessToken)) return;
+
+    const refreshToken = localStorage.getItem('vantage_refresh_token');
+    if (!refreshToken) return;
+
+    console.log('[App] Access token expired on startup — proactively refreshing...');
+    fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:8000'}/auth/refresh?refresh_token=${encodeURIComponent(refreshToken)}`, {
+      method: 'POST',
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data) => {
+        if (data.access_token) {
+          localStorage.setItem('vantage_access_token', data.access_token);
+          setAccessToken(data.access_token);
+          console.log('[App] Token refreshed proactively at startup.');
         }
-      }
-    };
-    checkConfigStatus();
+      })
+      .catch(() => {
+        console.warn('[App] Startup token refresh failed — logging out.');
+        clearSession();
+        setApiKey(null);
+        setAccessToken(null);
+        setUser(null);
+        setPublicScreen('landing');
+      });
+  }, []); // run once on mount
+
+  // Check if org has a database configured.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    api.get('/tables')
+      .then(() => setIsConfigured(true))
+      .catch(() => setIsConfigured(false));
   }, [isAuthenticated]);
 
   // Fetch branding from API on load
   useEffect(() => {
     if (!isAuthenticated) return;
-    const fetchBranding = async () => {
-      try {
-        const data = await api.get<Branding>('/branding');
+    api.get<Branding>('/branding')
+      .then((data) => {
         setBranding(data);
         localStorage.setItem('vantage_branding', JSON.stringify(data));
-      } catch (err) {
-        // keep whatever was loaded from localStorage
-      }
-    };
-    fetchBranding();
+      })
+      .catch(() => { /* keep localStorage fallback */ });
   }, [isAuthenticated]);
 
-  // Fetch unseen insights count
+  // Poll unseen insights count every 30s
   useEffect(() => {
     if (!isAuthenticated) return;
-    const fetchUnseenCount = async () => {
-      try {
-        const data = await api.get<{ insights: any[] }>('/insights?limit=100');
-        const count = (data.insights || []).filter((i: any) => i.seen === 0).length;
-        setUnseenCount(count);
-      } catch (err) {
-        console.error('Failed to fetch unseen insights', err);
-      }
-    };
-    fetchUnseenCount();
-    const interval = setInterval(fetchUnseenCount, 30000); // 30s
+    const fetchCount = () =>
+      api.get<{ insights: any[] }>('/insights?limit=100')
+        .then((data) => {
+          setUnseenCount((data.insights || []).filter((i: any) => i.seen === 0).length);
+        })
+        .catch(() => { });
+
+    fetchCount();
+    const interval = setInterval(fetchCount, 30_000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -119,23 +161,36 @@ export default function App() {
     try {
       const refresh = localStorage.getItem('vantage_refresh_token');
       if (refresh) {
-        await api.post('/auth/logout', {}, { headers: { 'refresh-token': refresh } });
+        await api.post(`/auth/logout?refresh_token=${encodeURIComponent(refresh)}`);
       }
     } catch (e) {
-      console.error("Logout error", e);
+      console.error('Logout error', e);
     }
     clearSession();
     setApiKey(null);
     setAccessToken(null);
     setUser(null);
-    window.location.reload();
+    setPublicScreen('landing');
   };
 
-  // If not authenticated, show setup/auth screen
+  // ── Unauthenticated routing ──────────────────────────────────────────────
   if (!isAuthenticated) {
-    return <AuthPage onLoginSuccess={handleLoginSuccess} existingKey={apiKey || undefined} />;
+    if (publicScreen === 'about') {
+      return <AboutPage />;
+    }
+    if (publicScreen === 'auth') {
+      return (
+        <AuthPage
+          onLoginSuccess={handleLoginSuccess}
+          existingKey={apiKey || undefined}
+        />
+      );
+    }
+    // Default: landing page
+    return <LandingPage onGetStarted={() => setPublicScreen('auth')} />;
   }
 
+  // ── Authenticated app ────────────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar
@@ -148,7 +203,15 @@ export default function App() {
         onLogout={handleLogout}
       />
       <main className="flex-1 overflow-auto">
-        {currentView === 'dashboard' && <Dashboard onNavigate={(view) => setCurrentView(view as View)} isConfigured={isConfigured} />}
+        {currentView === 'dashboard' && (
+          <Dashboard
+            onNavigate={(view, query) => {
+              setCurrentView(view as View);
+              if (query) setInitialQuery(query);
+            }}
+            isConfigured={isConfigured}
+          />
+        )}
         {currentView === 'database' && (
           <DatabaseConfig
             apiKey={apiKey!}
@@ -156,15 +219,36 @@ export default function App() {
             onNavigate={(view) => setCurrentView(view as View)}
           />
         )}
-        {currentView === 'management' && <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />}
-        {currentView === 'import' && <FileImport apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />}
-        {currentView === 'query' && <QueryInterface apiKey={apiKey!} />}
+        {currentView === 'management' && (
+          <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />
+        )}
+        {currentView === 'import' && (
+          <FileImport
+            apiKey={apiKey!}
+            onConfigured={() => setIsConfigured(true)}
+            onQueryClick={(query) => {
+              setInitialQuery(query);
+              setCurrentView('query');
+            }}
+          />
+        )}
+        {currentView === 'query' && (
+          <QueryInterface
+            apiKey={apiKey!}
+            initialQuery={initialQuery || undefined}
+            onQueryProcessed={() => setInitialQuery(null)}
+          />
+        )}
         {currentView === 'reports' && <Reports apiKey={apiKey!} />}
         {currentView === 'scheduled' && <ScheduledReports apiKey={apiKey!} />}
         {currentView === 'transform' && <DataTransformation apiKey={apiKey!} />}
         {currentView === 'analytics' && <AdvancedAnalytics apiKey={apiKey!} />}
         {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
         {currentView === 'insights' && <Insights />}
+        {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
+        {currentView === 'boards' && <DashboardsView apiKey={apiKey!} />}
+        {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
+        {currentView === 'about' && <AboutPage />}
         {currentView === 'branding' && (
           <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
         )}
@@ -175,9 +259,6 @@ export default function App() {
             isSettingsMode={true}
           />
         )}
-        {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
-        {currentView === 'boards' && <DashboardsView apiKey={apiKey!} />}
-        {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
       </main>
     </div>
   );

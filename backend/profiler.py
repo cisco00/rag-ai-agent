@@ -1,130 +1,298 @@
 """
 profiler.py — Column-level data profiling for Vantage AI
 ────────────────────────────────────────────────────────────────────────────────
-Provides profile_table(), profile_all_tables(), and profile_to_prompt_block()
-for use by api.py endpoints /tables/{table}/profile and /profile.
+For each column in a table, computes:
+  - null_count / null_pct
+  - distinct_count (and is_unique flag)
+  - For numerics:  min, max, mean, median (approx), std_dev, p25, p75
+  - For text:      min_length, max_length, avg_length, top_5_values
+  - For dates:     min_date, max_date, date_range_days
+  - data_type (as reported by the DB)
+  - sample (3 non-null values)
 
-For each column, computes:
-  - dtype, total_count, null_count, null_pct, distinct_count
-  - Numeric: min, max, mean, median, std, p25, p75
-  - Categorical: top_values (up to 10)
-  - sample_values (5 representative values)
+Design goals:
+  - All aggregations run IN the database (no SELECT * loads into memory)
+  - Each column uses one SQL query — no full table scans with pandas
+  - Results are cached per (conn_str_hash, table_name) for 10 minutes
+  - Profile is injected into the agent system prompt for richer context
+  - Also exposed via GET /tables/{table}/profile endpoint
 
-Results are cached per (connection_string, table) for 10 minutes to avoid
-re-running expensive scans on every request.
+Storage: in-process dict cache (no DB persistence — profiles are cheap to recompute).
 """
 
+import hashlib
 import time
-import math
-from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 
 from database import DatabaseManager
 from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# ─── Simple TTL cache ─────────────────────────────────────────────────────────
-_CACHE: dict = {}          # key → (expires_at, profile_dict)
-_CACHE_TTL   = 600         # seconds (10 minutes)
+# ─── Cache ────────────────────────────────────────────────────────────────────
+_PROFILE_CACHE: dict[str, tuple[float, dict]] = {}
+PROFILE_CACHE_TTL = 600  # 10 minutes
 
 
-def _cache_key(conn_str: str, table: str) -> str:
-    return f"{conn_str}::{table}"
+def _cache_key(conn_str: str, table_name: str) -> str:
+    h = hashlib.sha256(conn_str.encode()).hexdigest()[:16]
+    return f"{h}:{table_name}"
 
 
-def _get_cached(conn_str: str, table: str) -> Optional[dict]:
-    key = _cache_key(conn_str, table)
-    entry = _CACHE.get(key)
-    if entry and entry[0] > time.monotonic():
-        return entry[1]
+def _get_cached(conn_str: str, table_name: str) -> Optional[dict]:
+    key = _cache_key(conn_str, table_name)
+    if key in _PROFILE_CACHE:
+        ts, data = _PROFILE_CACHE[key]
+        if time.time() - ts < PROFILE_CACHE_TTL:
+            return data
     return None
 
 
-def _set_cached(conn_str: str, table: str, profile: dict):
-    key = _cache_key(conn_str, table)
-    _CACHE[key] = (time.monotonic() + _CACHE_TTL, profile)
+def _set_cached(conn_str: str, table_name: str, data: dict):
+    _PROFILE_CACHE[_cache_key(conn_str, table_name)] = (time.time(), data)
 
 
-# ─── Core profiling ───────────────────────────────────────────────────────────
+def invalidate_profile_cache(conn_str: str, table_name: str):
+    _PROFILE_CACHE.pop(_cache_key(conn_str, table_name), None)
 
-def _profile_column(series: pd.Series) -> dict:
-    total   = len(series)
-    nulls   = int(series.isna().sum())
-    col_info: dict = {
-        "dtype":          str(series.dtype),
-        "total_count":    total,
-        "null_count":     nulls,
-        "null_pct":       round(nulls / total * 100, 2) if total else 0,
-        "distinct_count": int(series.nunique(dropna=True)),
+
+# ─── Type detection ───────────────────────────────────────────────────────────
+
+_NUMERIC_AFFINITIES = {
+    "int", "integer", "bigint", "smallint", "tinyint", "mediumint",
+    "float", "real", "double", "numeric", "decimal", "number",
+    "serial", "bigserial",
+}
+
+_DATE_AFFINITIES = {
+    "date", "datetime", "timestamp", "timestamptz", "time",
+}
+
+
+def _col_kind(col_type: str) -> str:
+    t = col_type.lower().split("(")[0].strip()
+    if any(a in t for a in _NUMERIC_AFFINITIES):
+        return "numeric"
+    if any(a in t for a in _DATE_AFFINITIES):
+        return "date"
+    return "text"
+
+
+# ─── Per-column SQL profilers ─────────────────────────────────────────────────
+
+def _profile_numeric(conn, table: str, col: str, dialect: str, total_rows: int) -> dict:
+    q = f"""
+        SELECT
+            COUNT(*)                          AS total,
+            COUNT("{col}")                    AS non_null,
+            MIN("{col}")                      AS min_val,
+            MAX("{col}")                      AS max_val,
+            AVG("{col}")                      AS mean_val,
+            COUNT(DISTINCT "{col}")           AS distinct_count
+        FROM "{table}"
+    """
+    row = conn.execute(text(q)).mappings().first()
+    if not row:
+        return {}
+
+    non_null      = row["non_null"]    or 0
+    null_count    = total_rows - non_null
+    distinct_count= row["distinct_count"] or 0
+
+    result = {
+        "null_count":    null_count,
+        "null_pct":      round(null_count / total_rows * 100, 2) if total_rows else 0,
+        "distinct_count":distinct_count,
+        "is_unique":     distinct_count == non_null and non_null > 0,
+        "min":           _safe_float(row["min_val"]),
+        "max":           _safe_float(row["max_val"]),
+        "mean":          _safe_float(row["mean_val"]),
     }
 
-    non_null = series.dropna()
+    # Percentiles — dialect specific
+    try:
+        if dialect == "postgresql":
+            pct_row = conn.execute(text(f"""
+                SELECT
+                    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY "{col}") AS p25,
+                    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY "{col}") AS median,
+                    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY "{col}") AS p75,
+                    STDDEV("{col}") AS std_dev
+                FROM "{table}"
+                WHERE "{col}" IS NOT NULL
+            """)).mappings().first()
+            if pct_row:
+                result["p25"]    = _safe_float(pct_row["p25"])
+                result["median"] = _safe_float(pct_row["median"])
+                result["p75"]    = _safe_float(pct_row["p75"])
+                result["std_dev"]= _safe_float(pct_row["std_dev"])
+        else:
+            # SQLite approximation using row offset
+            if non_null > 0:
+                for label, frac in [("p25", 0.25), ("median", 0.5), ("p75", 0.75)]:
+                    offset = max(0, int(non_null * frac) - 1)
+                    val    = conn.execute(text(f"""
+                        SELECT "{col}" FROM "{table}"
+                        WHERE "{col}" IS NOT NULL
+                        ORDER BY "{col}" LIMIT 1 OFFSET {offset}
+                    """)).scalar()
+                    result[label] = _safe_float(val)
+    except Exception as exc:
+        logger.debug(f"[Profiler] Percentile calc failed for {col}: {exc}")
 
-    # Numeric stats
-    if pd.api.types.is_numeric_dtype(series):
+    # Sample values
+    sample_rows = conn.execute(text(f"""
+        SELECT DISTINCT "{col}" FROM "{table}"
+        WHERE "{col}" IS NOT NULL LIMIT 3
+    """)).fetchall()
+    result["sample"] = [_safe_float(r[0]) for r in sample_rows]
+
+    return result
+
+
+def _profile_text(conn, table: str, col: str, total_rows: int) -> dict:
+    row = conn.execute(text(f"""
+        SELECT
+            COUNT(*)                AS total,
+            COUNT("{col}")          AS non_null,
+            COUNT(DISTINCT "{col}") AS distinct_count
+        FROM "{table}"
+    """)).mappings().first()
+    if not row:
+        return {}
+
+    non_null       = row["non_null"] or 0
+    null_count     = total_rows - non_null
+    distinct_count = row["distinct_count"] or 0
+
+    result = {
+        "null_count":    null_count,
+        "null_pct":      round(null_count / total_rows * 100, 2) if total_rows else 0,
+        "distinct_count":distinct_count,
+        "is_unique":     distinct_count == non_null and non_null > 0,
+    }
+
+    # Top 5 values by frequency
+    try:
+        top = conn.execute(text(f"""
+            SELECT "{col}" AS val, COUNT(*) AS cnt
+            FROM "{table}"
+            WHERE "{col}" IS NOT NULL
+            GROUP BY "{col}"
+            ORDER BY cnt DESC
+            LIMIT 5
+        """)).mappings().all()
+        result["top_values"] = [{"value": r["val"], "count": r["cnt"]} for r in top]
+    except Exception as exc:
+        logger.debug(f"[Profiler] top_values failed for {col}: {exc}")
+
+    # String length stats (where supported)
+    try:
+        len_row = conn.execute(text(f"""
+            SELECT
+                MIN(LENGTH("{col}"))     AS min_len,
+                MAX(LENGTH("{col}"))     AS max_len,
+                AVG(LENGTH("{col}"))     AS avg_len
+            FROM "{table}" WHERE "{col}" IS NOT NULL
+        """)).mappings().first()
+        if len_row:
+            result["min_length"] = len_row["min_len"]
+            result["max_length"] = len_row["max_len"]
+            result["avg_length"] = round(float(len_row["avg_len"]), 1) if len_row["avg_len"] else None
+    except Exception as exc:
+        logger.debug(f"[Profiler] length stats failed for {col}: {exc}")
+
+    # Sample
+    sample_rows = conn.execute(text(f"""
+        SELECT DISTINCT "{col}" FROM "{table}"
+        WHERE "{col}" IS NOT NULL LIMIT 3
+    """)).fetchall()
+    result["sample"] = [r[0] for r in sample_rows]
+
+    return result
+
+
+def _profile_date(conn, table: str, col: str, total_rows: int) -> dict:
+    row = conn.execute(text(f"""
+        SELECT
+            COUNT(*)                AS total,
+            COUNT("{col}")          AS non_null,
+            COUNT(DISTINCT "{col}") AS distinct_count,
+            MIN("{col}")            AS min_date,
+            MAX("{col}")            AS max_date
+        FROM "{table}"
+    """)).mappings().first()
+    if not row:
+        return {}
+
+    non_null   = row["non_null"] or 0
+    null_count = total_rows - non_null
+
+    result = {
+        "null_count":    null_count,
+        "null_pct":      round(null_count / total_rows * 100, 2) if total_rows else 0,
+        "distinct_count":row["distinct_count"] or 0,
+        "min_date":      str(row["min_date"]) if row["min_date"] else None,
+        "max_date":      str(row["max_date"]) if row["max_date"] else None,
+    }
+
+    # Date range days
+    if row["min_date"] and row["max_date"]:
         try:
-            col_info.update({
-                "min":    _safe_float(non_null.min()),
-                "max":    _safe_float(non_null.max()),
-                "mean":   _safe_float(non_null.mean()),
-                "median": _safe_float(non_null.median()),
-                "std":    _safe_float(non_null.std()),
-                "p25":    _safe_float(non_null.quantile(0.25)),
-                "p75":    _safe_float(non_null.quantile(0.75)),
-            })
+            from dateutil.parser import parse as parse_dt
+            diff = parse_dt(str(row["max_date"])) - parse_dt(str(row["min_date"]))
+            result["date_range_days"] = diff.days
         except Exception:
             pass
 
-    # Categorical / text top values
-    else:
-        try:
-            top = non_null.astype(str).value_counts().head(10)
-            col_info["top_values"] = [[str(k), int(v)] for k, v in top.items()]
-        except Exception:
-            col_info["top_values"] = []
+    sample_rows = conn.execute(text(f"""
+        SELECT DISTINCT "{col}" FROM "{table}"
+        WHERE "{col}" IS NOT NULL LIMIT 3
+    """)).fetchall()
+    result["sample"] = [str(r[0]) for r in sample_rows]
 
-    # Sample values (5)
+    return result
+
+
+def _safe_float(val) -> Optional[float]:
+    if val is None:
+        return None
     try:
-        samples = non_null.head(5).tolist()
-        col_info["sample_values"] = [_json_safe(v) for v in samples]
-    except Exception:
-        col_info["sample_values"] = []
-
-    return col_info
-
-
-def _safe_float(v) -> Optional[float]:
-    try:
-        f = float(v)
-        return None if (math.isnan(f) or math.isinf(f)) else round(f, 6)
-    except Exception:
+        return round(float(val), 6)
+    except (TypeError, ValueError):
         return None
 
 
-def _json_safe(v):
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return None
-    try:
-        import numpy as np
-        if isinstance(v, (np.integer,)):
-            return int(v)
-        if isinstance(v, (np.floating,)):
-            return float(v)
-    except ImportError:
-        pass
-    return v
-
-
-# ─── Public API ───────────────────────────────────────────────────────────────
+# ─── Main profiler ────────────────────────────────────────────────────────────
 
 def profile_table(conn_str: str, table_name: str, force: bool = False) -> dict:
     """
-    Profile a single table.  Raises ValueError if the table does not exist.
-    Uses an in-memory cache (10 min TTL) unless force=True.
+    Generate a column-by-column profile for table_name.
+    All work is done in the DB — no full-table pandas reads.
+    Results are cached for PROFILE_CACHE_TTL seconds.
+
+    Returns:
+        {
+          "table": "orders",
+          "total_rows": 142000,
+          "column_count": 12,
+          "profiled_at": "...",
+          "columns": {
+              "revenue": {
+                  "data_type": "DOUBLE PRECISION",
+                  "kind": "numeric",
+                  "null_count": 0, "null_pct": 0,
+                  "distinct_count": 9842, "is_unique": False,
+                  "min": 0.5, "max": 9999.0, "mean": 145.3,
+                  "median": 89.0, "p25": 40.0, "p75": 210.0,
+                  "std_dev": 178.2,
+                  "sample": [45.5, 120.0, 8.99]
+              },
+              ...
+          }
+        }
     """
     if not force:
         cached = _get_cached(conn_str, table_name)
@@ -133,87 +301,118 @@ def profile_table(conn_str: str, table_name: str, force: bool = False) -> dict:
 
     dm = DatabaseManager(connection_string=conn_str)
     try:
-        tables = dm.list_tables()
-        if table_name not in tables:
-            raise ValueError(f"Table '{table_name}' not found in the database.")
+        engine  = dm.get_engine()
+        dialect = engine.dialect.name
 
-        engine = dm.get_engine()
+        # Introspect column types
+        insp    = inspect(engine)
+        columns = insp.get_columns(table_name)
+        if not columns:
+            raise ValueError(f"Table '{table_name}' not found or has no columns.")
 
-        # Row count
         with engine.connect() as conn:
-            row_count = conn.execute(
-                text(f'SELECT COUNT(*) FROM "{table_name}"')
-            ).scalar() or 0
+            total_row = conn.execute(
+                text(f'SELECT COUNT(*) AS n FROM "{table_name}"')
+            ).scalar()
+            total_rows = int(total_row or 0)
 
-        # Load up to 50 000 rows for profiling (avoids OOM on huge tables)
-        df = pd.read_sql(
-            f'SELECT * FROM "{table_name}" LIMIT 50000',
-            engine
-        )
+            col_profiles = {}
+            for col_info in columns:
+                col_name  = col_info["name"]
+                col_type  = str(col_info["type"])
+                kind      = _col_kind(col_type)
 
-        columns_profile = []
-        for col in df.columns:
-            try:
-                cp = _profile_column(df[col])
-                cp["column"] = col
-                columns_profile.append(cp)
-            except Exception as exc:
-                logger.warning(f"[Profiler] Could not profile column '{col}': {exc}")
-                columns_profile.append({"column": col, "error": str(exc)})
+                try:
+                    if kind == "numeric":
+                        stats = _profile_numeric(conn, table_name, col_name, dialect, total_rows)
+                    elif kind == "date":
+                        stats = _profile_date(conn, table_name, col_name, total_rows)
+                    else:
+                        stats = _profile_text(conn, table_name, col_name, total_rows)
 
-        profile = {
+                    col_profiles[col_name] = {
+                        "data_type": col_type,
+                        "kind":      kind,
+                        **stats,
+                    }
+                except Exception as exc:
+                    logger.warning(f"[Profiler] Failed to profile col '{col_name}': {exc}")
+                    col_profiles[col_name] = {
+                        "data_type": col_type,
+                        "kind":      kind,
+                        "error":     str(exc),
+                    }
+
+        result = {
             "table":        table_name,
-            "row_count":    int(row_count),
-            "column_count": len(df.columns),
-            "columns":      columns_profile,
-            "profiled_at":  datetime.utcnow().isoformat(),
-            "sampled":      row_count > 50000,
+            "total_rows":   total_rows,
+            "column_count": len(columns),
+            "profiled_at":  __import__("datetime").datetime.utcnow().isoformat(),
+            "columns":      col_profiles,
         }
 
-        _set_cached(conn_str, table_name, profile)
-        return profile
+        _set_cached(conn_str, table_name, result)
+        return result
 
     finally:
         dm.close()
 
 
-def profile_all_tables(conn_str: str) -> dict:
-    """Profile every table in the database. Returns dict keyed by table name."""
+def profile_to_prompt_block(profile: dict) -> str:
+    """
+    Convert a profile dict into a compact block that can be injected into
+    the agent system prompt for richer column-level awareness.
+    """
+    lines = [
+        f"DATA PROFILE: {profile['table']} ({profile['total_rows']:,} rows)",
+        "",
+    ]
+    for col, stats in profile.get("columns", {}).items():
+        if "error" in stats:
+            continue
+        kind  = stats.get("kind", "text")
+        parts = [f"  {col} [{stats.get('data_type', '')}]"]
+
+        null_pct = stats.get("null_pct", 0)
+        if null_pct > 0:
+            parts.append(f"null={null_pct:.1f}%")
+
+        if kind == "numeric":
+            if stats.get("min") is not None:
+                parts.append(f"range=[{stats['min']}, {stats['max']}]")
+            if stats.get("mean") is not None:
+                parts.append(f"mean={stats['mean']}")
+        elif kind == "date":
+            if stats.get("min_date"):
+                parts.append(f"range=[{stats['min_date']} → {stats['max_date']}]")
+        else:
+            dc = stats.get("distinct_count", 0)
+            if stats.get("is_unique"):
+                parts.append("unique_id")
+            elif dc <= 20:
+                top = [v["value"] for v in stats.get("top_values", [])[:5]]
+                if top:
+                    parts.append(f"values={top}")
+            else:
+                parts.append(f"distinct={dc}")
+
+        lines.append("  ".join(parts))
+
+    return "\n".join(lines)
+
+
+def profile_all_tables(conn_str: str) -> dict[str, dict]:
+    """Profile all tables for an org. Returns {table_name: profile}."""
     dm = DatabaseManager(connection_string=conn_str)
     try:
         tables = dm.list_tables()
     finally:
         dm.close()
 
-    profiles = {}
+    results = {}
     for table in tables:
         try:
-            profiles[table] = profile_table(conn_str, table)
+            results[table] = profile_table(conn_str, table)
         except Exception as exc:
-            logger.error(f"[Profiler] Failed to profile table '{table}': {exc}")
-            profiles[table] = {"table": table, "error": str(exc)}
-    return profiles
-
-
-def profile_to_prompt_block(profile: dict) -> str:
-    """
-    Convert a table profile into a concise text block suitable for injection
-    into an LLM prompt as schema context.
-    """
-    lines = [
-        f"Table: {profile['table']}  ({profile['row_count']:,} rows, {profile['column_count']} columns)",
-    ]
-    for col in profile.get("columns", []):
-        if "error" in col:
-            lines.append(f"  {col['column']}: [error profiling]")
-            continue
-        parts = [f"  {col['column']} ({col['dtype']})"]
-        parts.append(f"nulls={col['null_pct']}%")
-        parts.append(f"distinct={col['distinct_count']}")
-        if "mean" in col:
-            parts.append(f"range=[{col.get('min')}, {col.get('max')}] mean={col.get('mean')}")
-        elif "top_values" in col and col["top_values"]:
-            top_str = ", ".join(str(v[0]) for v in col["top_values"][:3])
-            parts.append(f"top=[{top_str}]")
-        lines.append("  ".join(parts))
-    return "\n".join(lines)
+            logger.warning(f"[Profiler] Skipped table '{table}': {exc}")
+    return results

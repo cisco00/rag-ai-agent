@@ -1,22 +1,13 @@
 """
 dashboards.py — Saved dashboards for Vantage AI
 ────────────────────────────────────────────────────────────────────────────────
-Users pin query results (text + visualization) as cards, arrange cards
-into named dashboards, and optionally share the whole dashboard via a link.
-
-Concepts:
-  DashboardCard  — one saved query + its result + visualization + layout position
-  Dashboard      — named collection of cards belonging to an org
-
-Layout:
-  Cards carry a simple grid layout (x, y, w, h) that the frontend uses.
-  Default card size is 6×4 in a 12-column grid.
-
-Sharing:
-  A dashboard can be published via a short public token (no auth required
-  to view — same pattern as SharedReport).
-
-Storage: SQLAlchemy, works on SQLite + Postgres.
+Fixes applied
+─────────────
+Bug #12 — create_dashboard and add_card previously re-fetched the new row
+           with ORDER BY created_at DESC LIMIT 1, which is racy under concurrent
+           requests for the same org. Fixed by using lastrowid (SQLite) or
+           RETURNING id (PostgreSQL) to get the exact new row ID, then
+           fetching by that specific ID.
 """
 
 import json
@@ -75,7 +66,7 @@ def ensure_dashboard_tables():
             updated_at      TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_dashboard_cards_dashboard_id
-            ON dashboard_cards (dashboard_id);
+            ON dashboard_cards (dashboard_id)
     """
 
     with admin_engine.connect() as conn:
@@ -95,23 +86,72 @@ def _parse_card(row: dict) -> dict:
     return row
 
 
+def _fetch_by_id(conn, table: str, row_id: int, dialect: str) -> dict:
+    """
+    Fetch a single row by its PK.  Used after INSERT to avoid race conditions.
+    Fix #12: replaces the racy ORDER BY created_at DESC LIMIT 1 pattern.
+    """
+    row = conn.execute(
+        text(f"SELECT * FROM {table} WHERE id=:id"),
+        {"id": row_id}
+    ).mappings().first()
+    return dict(row) if row else {}
+
+
+def _get_last_insert_id(conn, table: str, dialect: str) -> int:
+    """
+    Return the ID of the most recently inserted row in a dialect-safe way.
+    PostgreSQL: use RETURNING id (handled in the INSERT statement itself).
+    SQLite:     use last_insert_rowid().
+    """
+    if dialect == "postgresql":
+        # Callers using PostgreSQL should use RETURNING id directly;
+        # this fallback is provided for safety.
+        row = conn.execute(
+            text(f"SELECT id FROM {table} ORDER BY id DESC LIMIT 1")
+        ).mappings().first()
+        return row["id"] if row else None
+    else:
+        return conn.execute(text("SELECT last_insert_rowid()")).scalar()
+
+
 # ─── Dashboard CRUD ───────────────────────────────────────────────────────────
 
 def create_dashboard(org_id: int, name: str, description: Optional[str] = None,
                      created_by: Optional[int] = None) -> dict:
-    now = datetime.utcnow().isoformat()
+    """
+    Fix #12: New row is fetched by its exact ID, not by ORDER BY created_at DESC.
+    """
+    now     = datetime.utcnow().isoformat()
+    dialect = admin_engine.dialect.name
+
     with admin_engine.connect() as conn:
         with conn.begin():
-            conn.execute(text("""
-                INSERT INTO dashboards (org_id, name, description, is_public, created_by, created_at, updated_at)
-                VALUES (:org_id, :name, :description, 0, :created_by, :now, :now)
-            """), {
-                "org_id": org_id, "name": name,
-                "description": description, "created_by": created_by, "now": now,
-            })
+            if dialect == "postgresql":
+                result = conn.execute(text("""
+                    INSERT INTO dashboards
+                        (org_id, name, description, is_public, created_by, created_at, updated_at)
+                    VALUES (:org_id, :name, :description, 0, :created_by, :now, :now)
+                    RETURNING id
+                """), {
+                    "org_id": org_id, "name": name,
+                    "description": description, "created_by": created_by, "now": now,
+                })
+                new_id = result.scalar()
+            else:
+                conn.execute(text("""
+                    INSERT INTO dashboards
+                        (org_id, name, description, is_public, created_by, created_at, updated_at)
+                    VALUES (:org_id, :name, :description, 0, :created_by, :now, :now)
+                """), {
+                    "org_id": org_id, "name": name,
+                    "description": description, "created_by": created_by, "now": now,
+                })
+                new_id = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+
         row = conn.execute(
-            text("SELECT * FROM dashboards WHERE org_id=:org_id ORDER BY created_at DESC LIMIT 1"),
-            {"org_id": org_id}
+            text("SELECT * FROM dashboards WHERE id=:id"),
+            {"id": new_id}
         ).mappings().first()
     return dict(row)
 
@@ -173,7 +213,6 @@ def delete_dashboard(dashboard_id: int, org_id: int):
 
 
 def publish_dashboard(dashboard_id: int, org_id: int) -> str:
-    """Make dashboard publicly shareable. Returns the share token."""
     token = secrets.token_urlsafe(16)
     now   = datetime.utcnow().isoformat()
     with admin_engine.connect() as conn:
@@ -200,48 +239,64 @@ def unpublish_dashboard(dashboard_id: int, org_id: int):
 # ─── Card CRUD ────────────────────────────────────────────────────────────────
 
 def add_card(dashboard_id: int, org_id: int, data: dict) -> dict:
-    now = datetime.utcnow().isoformat()
-    viz = data.get("visualization")
+    """
+    Fix #12: New card row is fetched by its exact ID.
+    """
+    now     = datetime.utcnow().isoformat()
+    dialect = admin_engine.dialect.name
+    viz     = data.get("visualization")
     if isinstance(viz, dict):
         viz = json.dumps(viz)
 
+    params = {
+        "dashboard_id":    dashboard_id,
+        "org_id":          org_id,
+        "title":           data.get("title"),
+        "query_text":      data.get("query_text"),
+        "response_text":   data.get("response_text"),
+        "visualization":   viz,
+        "sql_query":       data.get("sql_query"),
+        "card_type":       data.get("card_type", "query"),
+        "layout_x":        data.get("layout_x", 0),
+        "layout_y":        data.get("layout_y", 0),
+        "layout_w":        data.get("layout_w", 6),
+        "layout_h":        data.get("layout_h", 4),
+        "refresh_minutes": data.get("refresh_minutes"),
+        "now":             now,
+    }
+
+    insert_sql = """
+        INSERT INTO dashboard_cards
+            (dashboard_id, org_id, title, query_text, response_text,
+             visualization, sql_query, card_type,
+             layout_x, layout_y, layout_w, layout_h,
+             refresh_minutes, created_at, updated_at)
+        VALUES
+            (:dashboard_id, :org_id, :title, :query_text, :response_text,
+             :visualization, :sql_query, :card_type,
+             :layout_x, :layout_y, :layout_w, :layout_h,
+             :refresh_minutes, :now, :now)
+    """
+
     with admin_engine.connect() as conn:
         with conn.begin():
-            conn.execute(text("""
-                INSERT INTO dashboard_cards
-                    (dashboard_id, org_id, title, query_text, response_text,
-                     visualization, sql_query, card_type,
-                     layout_x, layout_y, layout_w, layout_h,
-                     refresh_minutes, created_at, updated_at)
-                VALUES
-                    (:dashboard_id, :org_id, :title, :query_text, :response_text,
-                     :visualization, :sql_query, :card_type,
-                     :layout_x, :layout_y, :layout_w, :layout_h,
-                     :refresh_minutes, :now, :now)
-            """), {
-                "dashboard_id":   dashboard_id,
-                "org_id":         org_id,
-                "title":          data.get("title"),
-                "query_text":     data.get("query_text"),
-                "response_text":  data.get("response_text"),
-                "visualization":  viz,
-                "sql_query":      data.get("sql_query"),
-                "card_type":      data.get("card_type", "query"),
-                "layout_x":       data.get("layout_x", 0),
-                "layout_y":       data.get("layout_y", 0),
-                "layout_w":       data.get("layout_w", 6),
-                "layout_h":       data.get("layout_h", 4),
-                "refresh_minutes":data.get("refresh_minutes"),
-                "now":            now,
-            })
-            # bump dashboard updated_at
+            if dialect == "postgresql":
+                result = conn.execute(
+                    text(insert_sql + " RETURNING id"), params
+                )
+                new_id = result.scalar()
+            else:
+                conn.execute(text(insert_sql), params)
+                new_id = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+
             conn.execute(
                 text("UPDATE dashboards SET updated_at=:now WHERE id=:id"),
                 {"now": now, "id": dashboard_id}
             )
+
         row = conn.execute(
-            text("SELECT * FROM dashboard_cards WHERE dashboard_id=:did ORDER BY created_at DESC LIMIT 1"),
-            {"did": dashboard_id}
+            text("SELECT * FROM dashboard_cards WHERE id=:id"),
+            {"id": new_id}
         ).mappings().first()
     return _parse_card(dict(row))
 
@@ -293,10 +348,6 @@ def remove_card(card_id: int, org_id: int):
 
 
 def reorder_cards(dashboard_id: int, org_id: int, layout: list[dict]):
-    """
-    Bulk update card positions.
-    layout = [{"id": 1, "x": 0, "y": 0, "w": 6, "h": 4}, ...]
-    """
     now = datetime.utcnow().isoformat()
     with admin_engine.connect() as conn:
         with conn.begin():
@@ -325,9 +376,9 @@ async def refresh_card(card_id: int, org_id: int, org_conn_str: str, agent) -> d
         return {"status": "error", "message": "Card not found or has no query"}
 
     try:
-        result    = agent.run_query(row["query_text"], history=[])
-        now       = datetime.utcnow().isoformat()
-        viz_str   = json.dumps(result.get("visualization")) if result.get("visualization") else None
+        result  = agent.run_query(row["query_text"], history=[])
+        now     = datetime.utcnow().isoformat()
+        viz_str = json.dumps(result.get("visualization")) if result.get("visualization") else None
 
         with admin_engine.connect() as conn:
             with conn.begin():

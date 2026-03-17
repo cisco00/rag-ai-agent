@@ -28,6 +28,17 @@ interface TableProfile {
     profiled_at: string;
 }
 
+interface ProfileResponse {
+    status: string;
+    profile: {
+        table: string;
+        row_count: number;
+        column_count: number;
+        columns: Record<string, any>;
+        profiled_at: string;
+    };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function DataProfiler({ apiKey: _apiKey }: { apiKey: string }) {
     const [profiles, setProfiles] = useState<Record<string, TableProfile>>({});
@@ -50,9 +61,23 @@ export function DataProfiler({ apiKey: _apiKey }: { apiKey: string }) {
         setSelectedTable(tableName);
         setLoading(true);
         try {
-            const d = await api.get<{ profile: TableProfile }>(`/tables/${tableName}/profile${force ? '?force=true' : ''}`);
-            setProfile(d.profile);
-            setProfiles(prev => ({ ...prev, [tableName]: d.profile }));
+            const d = await api.get<ProfileResponse>(`/tables/${tableName}/profile${force ? '?force=true' : ''}`);
+            const raw = d.profile;
+            
+            // Convert dictionary of columns to array for frontend
+            const formatted: TableProfile = {
+                table: raw.table,
+                row_count: raw.row_count,
+                column_count: raw.column_count,
+                profiled_at: raw.profiled_at,
+                columns: Object.entries(raw.columns).map(([name, stats]) => ({
+                    column: name,
+                    ...stats
+                }))
+            };
+
+            setProfile(formatted);
+            setProfiles(prev => ({ ...prev, [tableName]: formatted }));
         } catch (e: any) { alert(e.message || 'Failed to profile table'); setProfile(null); }
         setLoading(false);
     };

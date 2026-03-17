@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, X, FileSpreadsheet, Search, ChevronRight, Server } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, X, FileSpreadsheet, Search, ChevronRight, Server, Lightbulb, RotateCw, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface FileImportProps {
   apiKey: string;
   onConfigured: () => void;
+  onQueryClick?: (query: string) => void;
 }
 
 interface ImportedFile {
@@ -23,7 +24,7 @@ interface FileAnalysis {
   dataTypes: Record<string, string>;
 }
 
-export function FileImport({ onConfigured }: FileImportProps) {
+export function FileImport({ onConfigured, onQueryClick }: FileImportProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single');
   const [ifExists, setIfExists] = useState('replace');
@@ -33,6 +34,8 @@ export function FileImport({ onConfigured }: FileImportProps) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [analysisFile, setAnalysisFile] = useState<File | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   // Tabs and API Import State
   const [activeTab, setActiveTab] = useState<'file' | 'batch' | 'api'>('file');
@@ -145,6 +148,8 @@ export function FileImport({ onConfigured }: FileImportProps) {
           onConfigured();
         }
       }
+      // Fetch suggested queries after successful import
+      fetchSuggestions();
     } catch (err: any) {
       console.error(err);
       setImportedFiles(prev => [...prev, {
@@ -179,6 +184,7 @@ export function FileImport({ onConfigured }: FileImportProps) {
         message: res.message,
         tableName: apiTargetTable
       }]);
+      onConfigured();
     } catch (err: any) {
       console.error(err);
       setImportedFiles(prev => [...prev, {
@@ -188,6 +194,20 @@ export function FileImport({ onConfigured }: FileImportProps) {
       }]);
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const fetchSuggestions = async (isRefresh = false) => {
+    setIsLoadingSuggestions(true);
+    try {
+      const data = await api.get<{ queries: string[] }>(`/analytics/suggested-queries${isRefresh ? '?refresh=true' : ''}`);
+      if (data && data.queries) {
+        setSuggestedQueries(data.queries);
+      }
+    } catch (err) {
+      console.error('Failed to fetch suggested queries:', err);
+    } finally {
+      setIsLoadingSuggestions(false);
     }
   };
 
@@ -467,13 +487,16 @@ export function FileImport({ onConfigured }: FileImportProps) {
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-bold text-gray-900">Imported Files ({importedFiles.length})</h3>
                 <button
-                  onClick={() => setImportedFiles([])}
+                  onClick={() => {
+                    setImportedFiles([]);
+                    setSuggestedQueries([]);
+                  }}
                   className="text-sm text-gray-600 hover:text-gray-900"
                 >
                   Clear All
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-3 mb-6">
                 {importedFiles.map((file, index) => (
                   <div
                     key={index}
@@ -501,6 +524,43 @@ export function FileImport({ onConfigured }: FileImportProps) {
                   </div>
                 ))}
               </div>
+
+              {/* Suggested Questions */}
+              {suggestedQueries.length > 0 && (
+                <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Lightbulb className="size-5 text-yellow-600" />
+                      <h4 className="font-bold text-gray-900">Recommended Questions</h4>
+                    </div>
+                    <button
+                      onClick={() => fetchSuggestions(true)}
+                      disabled={isLoadingSuggestions}
+                      className="text-xs font-medium text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                    >
+                      <RotateCw className={`size-3 ${isLoadingSuggestions ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {suggestedQueries.map((query, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => onQueryClick?.(query)}
+                        className="text-left p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all group"
+                      >
+                        <p className="text-sm text-gray-700 group-hover:text-blue-700">{query}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {isLoadingSuggestions && (
+                    <div className="flex items-center gap-2 mt-4 text-sm text-gray-500">
+                      <Loader2 className="size-4 animate-spin" />
+                      Generating more suggestions...
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

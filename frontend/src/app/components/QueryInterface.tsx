@@ -7,6 +7,8 @@ import { ExportModal } from './ExportModal';
 
 interface QueryInterfaceProps {
   apiKey: string;
+  initialQuery?: string;
+  onQueryProcessed?: () => void;
 }
 
 interface Message {
@@ -23,7 +25,7 @@ interface Message {
   queryId?: string;
 }
 
-export function QueryInterface({ apiKey }: QueryInterfaceProps) {
+export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: QueryInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -58,10 +60,23 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
     fetchSuggestions();
   }, []);
 
+  useEffect(() => {
+    if (initialQuery && !isLoading) {
+      handleAutoQuery(initialQuery);
+      onQueryProcessed?.();
+    }
+  }, [initialQuery]);
+
+  const handleAutoQuery = async (queryText: string) => {
+    setInput(queryText);
+    // Use a small timeout to ensure the state update is reflected or just pass it directly
+    await executeQuery(queryText);
+  };
+
   const fetchSuggestions = async () => {
     setIsLoadingSuggestions(true);
     try {
-      const data = await api.get<{ queries: string[] }>('/suggested-queries');
+      const data = await api.get<{ queries: string[] }>('/analytics/suggested-queries');
       if (data && data.queries && data.queries.length > 0) {
         setExampleQueries(data.queries);
       }
@@ -156,33 +171,30 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  const executeQuery = async (queryText: string) => {
+    if (!queryText.trim() || isLoading) return;
 
     const userMessage: Message = {
       role: 'user',
-      content: input,
+      content: queryText,
       timestamp: new Date(),
     };
 
-    setMessages([...messages, userMessage]);
-    const currentInput = input;
-    setInput('');
+    setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
       let activeSessionId = currentSessionId;
       if (!activeSessionId) {
         // Auto-create a session if we don't have one active
-        const session = await api.post<any>('/chat/sessions', { title: currentInput.substring(0, 30) });
+        const session = await api.post<any>('/chat/sessions', { title: queryText.substring(0, 30) });
         activeSessionId = session.id;
         setCurrentSessionId(session.id);
         fetchSessions(); // refresh the sidebar
       }
 
       const response = await api.post<any>('/query', {
-        query: currentInput,
+        query: queryText,
         session_id: activeSessionId
       });
 
@@ -207,6 +219,13 @@ export function QueryInterface({ apiKey }: QueryInterfaceProps) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const currentInput = input;
+    setInput('');
+    await executeQuery(currentInput);
   };
 
   const handleVoiceInput = () => {

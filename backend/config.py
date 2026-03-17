@@ -19,12 +19,50 @@ import secrets
 load_dotenv()
 
 
+def _build_postgres_url() -> str:
+    """
+    Build a PostgreSQL connection URL from individual env vars, or fall back to
+    DATABASE_URL if that is set directly.
+
+    Priority
+    --------
+    1. DATABASE_URL          (full URL — Railway/Heroku set this automatically)
+    2. Individual PG* vars   (POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB,
+                              POSTGRES_USER, POSTGRES_PASSWORD)
+    3. Local SQLite fallback (only when no Postgres env vars are present at all,
+                              so local dev still works without a running Postgres)
+
+    Railway injects DATABASE_URL automatically when you provision a Postgres
+    plugin, so production just works with zero extra config.
+    """
+    # Full URL takes precedence (Railway, Heroku, Render, etc.)
+    if url := os.getenv("DATABASE_URL"):
+        # SQLAlchemy 1.4+ rejects the legacy postgres:// scheme
+        return url.replace("postgres://", "postgresql://", 1)
+
+    host     = os.getenv("POSTGRES_HOST",     "")
+    port     = os.getenv("POSTGRES_PORT",     "5432")
+    db       = os.getenv("POSTGRES_DB",       os.getenv("POSTGRES_DATABASE", "vantage"))
+    user     = os.getenv("POSTGRES_USER",     "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+
+    # Only build a Postgres URL if a host was supplied
+    if host:
+        if password:
+            return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+        return f"postgresql://{user}@{host}:{port}/{db}"
+
+    # Nothing configured — fall back to SQLite for local dev
+    return "sqlite:///identifier.sqlite.db"
+
+
 @dataclass
 class DatabaseConfig:
     """Database configuration settings."""
-    
-    # Default connection string
-    default_connection_string: str = "sqlite:///identifier.sqlite.db"
+
+    # Default connection string — reads from DATABASE_URL / POSTGRES_* env vars.
+    # Falls back to SQLite only when no Postgres env vars are present (local dev).
+    default_connection_string: str = field(default_factory=_build_postgres_url)
     
     # Connection pool settings
     pool_size: int = 5

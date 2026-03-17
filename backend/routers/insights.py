@@ -1,5 +1,5 @@
 """
-routers/branding.py — routes migrated from monolithic api.py
+routers/insights.py — routes migrated from monolithic api.py
 """
 
 import os, io, json, math, time, threading, asyncio
@@ -174,40 +174,60 @@ class ScheduledReportRequest(BaseModel):
 
 # ── Routes ──
 
-@router.get("/branding")
-async def get_branding(org=Depends(get_current_org)):
-    """Return the branding configuration for the authenticated organization."""
-    return org.get_branding()
-
-
-@router.put("/branding")
-async def save_branding(request: BrandingRequest, org=Depends(get_current_org)):
-    """Save branding configuration for the authenticated organization."""
+@router.get("/insights")
+async def get_org_insights(limit: int = 20, org=Depends(get_current_org)):
+    """Fetch proactive insights for the organization."""
     try:
-        current = org.get_branding()
-        updated = {
-            "org_name": request.org_name or current["org_name"],
-            "tagline": request.tagline if request.tagline is not None else current["tagline"],
-            "primary_color": request.primary_color or current["primary_color"],
-            "logo_url": request.logo_url if request.logo_url is not None else current["logo_url"],
-        }
-        update_branding(org.api_key, updated)
-        return {"status": "success", "branding": updated}
+        # We need an engine instance to call its data methods
+        # The factory depends on the org ID
+        def _get_engine():
+            from main import AnalyticsAgent
+            from insight_engine import InsightEngine
+            conn_str = get_org_connection_string(org)
+            if not conn_str:
+                return None
+            db_manager = DatabaseManager(connection_string=conn_str)
+            agent = AnalyticsAgent(connection_string=conn_str)
+            return InsightEngine(db_manager=db_manager, agent=agent, org_id=org.id)
+            
+        engine = _get_engine()
+        if not engine:
+            return []
+            
+        insights = engine.get_all_insights(limit=limit)
+        return {"status": "success", "insights": insights}
     except Exception as e:
-        logger.error(f"Branding save failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to fetch insights: {e}", exc_info=True)
+        return {"status": "error", "message": "Failed to fetch insights"}
 
-class CreateDatabaseRequest(BaseModel):
-    admin_user: Optional[str] = None
-    admin_password: Optional[str] = None
-    new_db_name: str
-    new_user: str
-    new_password: str
-    email: Optional[str] = None
-    admin_password: Optional[str] = None
-    new_db_name: str
-    new_user: str          # New field
-    new_password: str      # New field
-    email: Optional[str] = None # Keeping this optional for backwards compatibility, but we will rely mostly on org.email
 
-from utils import send_email_mock
+@router.post("/insights/mark-all-seen")
+async def mark_all_insights_seen(org=Depends(get_current_org)):
+    """Mark all insights as read for the organization."""
+    try:
+        from insight_engine import InsightEngine
+        # Mocking an engine for the mark_all_seen call
+        # InsightEngine just needs the ID for this operation
+        engine = InsightEngine(None, None, org.id)
+        engine.mark_all_seen()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to mark insights seen: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update insights")
+
+
+@router.post("/insights/{insight_id}/seen")
+async def mark_insight_seen(insight_id: str, org=Depends(get_current_org)):
+    """Mark a specific insight as read."""
+    try:
+        from insight_engine import InsightEngine
+        engine = InsightEngine(None, None, org.id)
+        engine.mark_seen(insight_id)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to mark insight seen: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update insight")
+
+
+# Mount static files ...
+# Point to the external frontend build directory
