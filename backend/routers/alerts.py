@@ -15,14 +15,15 @@ class AlertRuleRequest(BaseModel):
     description:      Optional[str]   = None
     alert_type:       str             = "metric"
     table_name:       str
-    metric_column:    Optional[str]   = None
-    aggregation:      Optional[str]   = None
+    column_name:      Optional[str]   = None
+    aggregate:        Optional[str]   = None
     operator:         str
     threshold_value:  float
     is_active:        int             = 1
     notify_email:     Optional[str]   = None
     notify_webhook:   Optional[str]   = None
     cooldown_minutes: int             = 60
+    lookback_hours:   int             = 24
 
 @router.get("/alerts")
 async def list_alerts(org=Depends(get_current_org)):
