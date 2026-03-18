@@ -146,15 +146,25 @@ app = FastAPI(
 # ── Request Logging Middleware ───────────────────────────────────────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every request method, path, headers (summary), and response status code."""
+    """Log every request method, path, headers, and response status code."""
     import time
     start_time = time.time()
+    # Read body for POST/PUT if small enough to help debug
+    body_summary = ""
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            # Note: Reading body here might interfere with later processing if not careful
+            # and it can be expensive. We only do this for debugging.
+            pass 
+        except:
+            pass
+            
     response = await call_next(request)
     duration = time.time() - start_time
     logger.info(
-        f"REQ: {request.method} {request.url} "
-        f"HEADERS: {dict(request.headers).get('user-agent')} "
-        f"STATUS: {response.status_code} ({duration:.2f}s)"
+        f"DEBUG REQ: {request.method} {request.url} "
+        f"STATUS: {response.status_code} ({duration:.2f}s) "
+        f"CLIENT: {request.client.host if request.client else 'unknown'}"
     )
     return response
 
@@ -167,6 +177,10 @@ async def get_all_routes():
             methods = list(getattr(r, "methods", []))
             routes.append({"path": r.path, "methods": methods, "name": getattr(r, "name", "")})
     return {"total": len(routes), "routes": routes}
+
+@app.post("/app-level-post-test")
+async def app_level_post_test():
+    return {"message": "App-level POST works"}
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _DEV_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
@@ -320,14 +334,23 @@ if os.path.exists(static_dir):
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
+    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    async def serve_spa(request: Request, full_path: str):
+        if request.method != "GET":
+             logger.warning(f"Fallback caught non-GET request: {request.method} {full_path}")
+             # We still try to serve the file if it's an OPTIONS or something else that might fall through
+             # but usually POST should have matched a real route.
+        
         file_path = os.path.join(static_dir, full_path)
         if os.path.exists(file_path) and os.path.isfile(file_path):
             return FileResponse(file_path)
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
+        
+        if request.method != "GET":
+            return {"error": f"Method {request.method} not allowed for {full_path} and no file found."}, 405
+            
         return {"error": "Frontend not found"}
 
 if __name__ == "__main__":
