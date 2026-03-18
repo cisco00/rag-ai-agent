@@ -28,7 +28,8 @@ router = APIRouter()
 # Note: These paths are relative to the router prefix "/auth"
 
 def get_static_dir():
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # auth.py is in backend/routers/, so project_root is 3 levels up
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     # Try multiple standard locations
     dirs = [
         os.path.join(project_root, "frontend", "dist"),

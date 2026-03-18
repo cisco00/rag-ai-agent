@@ -146,16 +146,27 @@ app = FastAPI(
 # ── Request Logging Middleware ───────────────────────────────────────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every request method, path, and response status code."""
+    """Log every request method, path, headers (summary), and response status code."""
     import time
     start_time = time.time()
     response = await call_next(request)
     duration = time.time() - start_time
     logger.info(
-        f"REQ: {request.method} {request.url.path} "
+        f"REQ: {request.method} {request.url} "
+        f"HEADERS: {dict(request.headers).get('user-agent')} "
         f"STATUS: {response.status_code} ({duration:.2f}s)"
     )
     return response
+
+@app.get("/debug/routes")
+async def get_all_routes():
+    """Return a list of all registered routes and their methods."""
+    routes = []
+    for r in app.routes:
+        if hasattr(r, "path"):
+            methods = list(getattr(r, "methods", []))
+            routes.append({"path": r.path, "methods": methods, "name": getattr(r, "name", "")})
+    return {"total": len(routes), "routes": routes}
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _DEV_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
@@ -219,6 +230,7 @@ app.add_middleware(
 
 # SPA Fallback Path Logic (moved to auth router for better matching)
 def get_static_dir():
+    # Fix: api.py is in backend/, so project_root is parent of backend/
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # Try multiple standard locations
     dirs = [
@@ -234,6 +246,7 @@ def get_static_dir():
     return dirs[0] # Fallback to first
 
 static_dir = get_static_dir()
+logger.info(f"Using static directory: {static_dir} (exists: {os.path.exists(static_dir)})")
 
 app.include_router(auth.router,            prefix="/auth",           tags=["Authentication"])
 app.include_router(data.router,                                      tags=["Data Management"])
