@@ -19,7 +19,7 @@ from typing import Optional
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,6 +143,20 @@ app = FastAPI(
     redirect_slashes=True
 )
 
+# ── Request Logging Middleware ───────────────────────────────────────────────
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every request method, path, and response status code."""
+    import time
+    start_time = time.time()
+    response = await call_next(request)
+    duration = time.time() - start_time
+    logger.info(
+        f"REQ: {request.method} {request.url.path} "
+        f"STATUS: {response.status_code} ({duration:.2f}s)"
+    )
+    return response
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _DEV_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
 _ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
@@ -203,25 +217,23 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-# ── Router registrations ──────────────────────────────────────────────────────
-# SPA Fallbacks for Auth (moved BEFORE router inclusion to prevent 405)
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Try standard locations for static files
-static_dirs = [
-    os.path.join(project_root, "frontend", "dist"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"),
-    "/app/static"
-]
-static_dir = next((d for d in static_dirs if os.path.exists(d)), static_dirs[0])
+# SPA Fallback Path Logic (moved to auth router for better matching)
+def get_static_dir():
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Try multiple standard locations
+    dirs = [
+        os.path.join(project_root, "frontend", "dist"),
+        os.path.join(project_root, "front-end", "dist"),
+        os.path.join(os.path.dirname(project_root), "frontend", "dist"),
+        "/app/static",
+        "/app/frontend/dist"
+    ]
+    for d in dirs:
+        if os.path.exists(d):
+            return d
+    return dirs[0] # Fallback to first
 
-@app.get("/auth/login")
-@app.get("/auth/register")
-async def auth_spa_fallback():
-    """Ensure auth routes serve index.html for deep-linking/GET requests."""
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"error": "Frontend not found"}
+static_dir = get_static_dir()
 
 app.include_router(auth.router,            prefix="/auth",           tags=["Authentication"])
 app.include_router(data.router,                                      tags=["Data Management"])

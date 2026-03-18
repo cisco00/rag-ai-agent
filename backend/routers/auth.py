@@ -3,12 +3,8 @@ routers/auth.py — Authentication and Organization registration routes.
 """
 
 import os
-import logging
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Header, Response
-from fastapi.concurrency import run_in_threadpool
-
 import auth as auth_module
+from fastapi.responses import FileResponse
 from models import (
     get_org_by_api_key, create_org, update_org_db
 )
@@ -22,6 +18,34 @@ from schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── SPA Fallbacks (added to router to prevent 405) ──
+# Note: These paths are relative to the router prefix "/auth"
+
+def get_static_dir():
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Try multiple standard locations
+    dirs = [
+        os.path.join(project_root, "frontend", "dist"),
+        os.path.join(project_root, "front-end", "dist"),
+        os.path.join(os.path.dirname(project_root), "frontend", "dist"),
+        "/app/static",
+        "/app/frontend/dist"
+    ]
+    for d in dirs:
+        if os.path.exists(d):
+            return d
+    return dirs[0] # Fallback to first
+
+@router.get("/login")
+@router.get("/register")
+async def auth_spa_fallback_get():
+    """Serve index.html for GET requests to auth paths."""
+    static_dir = get_static_dir()
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"error": f"Frontend not found at {static_dir}"}
 
 # ── Helpers ──
 
