@@ -139,7 +139,8 @@ app = FastAPI(
     title="Vantage AI",
     description="A multi-tenant RAG-powered analytics tool for organizations.",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    redirect_slashes=True
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -277,6 +278,15 @@ if os.path.exists(static_dir):
     assets_dir = os.path.join(static_dir, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/auth/login")
+    @app.get("/auth/register")
+    async def auth_spa_fallback():
+        """Ensure auth routes serve index.html for deep-linking/GET requests."""
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return {"error": "Frontend not found"}
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
