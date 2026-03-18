@@ -43,8 +43,42 @@ def get_static_dir():
             return d
     return dirs[0] # Fallback to first
 
-@router.get("/login")
-@router.get("/register")
+@router.post("/register", name="auth_register_post")
+async def register(request: RegisterRequest):
+    """Register a new organization and optionally provision a DB."""
+    try:
+        org = create_org(request.name, request.email)
+        try:
+             db_conn_str = await provision_org_database(org.name, org.api_key)
+             if db_conn_str:
+                 update_org_db(org.api_key, db_conn_str)
+                 org.db_connection_string = db_conn_str
+                 logger.info(f"Auto-provisioned database for org: {org.name}")
+                 
+                 email_subject = "Your Vantage AI Database Details"
+                 email_body = (
+                     f"Hello,\n\nYour new organization '{org.name}' has been created successfully!\n\n"
+                     f"Database Connection String:\n{db_conn_str}\n\n"
+                     f"Your API Key is:\n{org.api_key}\n\n"
+                     "Please save this API key securely. Welcome to Vantage AI!"
+                 )
+                 send_email_mock(request.email, email_subject, email_body)
+
+        except Exception as e:
+            logger.error(f"Failed to auto-provision database: {e}")
+            
+        return {
+            "message": "Organization created successfully",
+            "name": org.name,
+            "api_key": org.api_key,
+            "db_configured": bool(org.db_connection_string)
+        }
+    except Exception as e:
+        logger.error(f"Registration error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
+
+@router.get("/login", name="auth_login_spa_get")
+@router.get("/register", name="auth_register_spa_get")
 async def auth_spa_fallback_get():
     """Serve index.html for GET requests to auth paths."""
     static_dir = get_static_dir()
@@ -125,41 +159,7 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
 
 # ── Routes ──
 
-@router.post("/register")
-async def register(request: RegisterRequest):
-    """Register a new organization and optionally provision a DB."""
-    try:
-        org = create_org(request.name, request.email)
-        try:
-             db_conn_str = await provision_org_database(org.name, org.api_key)
-             if db_conn_str:
-                 update_org_db(org.api_key, db_conn_str)
-                 org.db_connection_string = db_conn_str
-                 logger.info(f"Auto-provisioned database for org: {org.name}")
-                 
-                 email_subject = "Your Vantage AI Database Details"
-                 email_body = (
-                     f"Hello,\n\nYour new organization '{org.name}' has been created successfully!\n\n"
-                     f"Database Connection String:\n{db_conn_str}\n\n"
-                     f"Your API Key is:\n{org.api_key}\n\n"
-                     "Please save this API key securely. Welcome to Vantage AI!"
-                 )
-                 send_email_mock(request.email, email_subject, email_body)
-
-        except Exception as e:
-            logger.error(f"Failed to auto-provision database: {e}")
-            
-        return {
-            "message": "Organization created successfully",
-            "name": org.name,
-            "api_key": org.api_key,
-            "db_configured": bool(org.db_connection_string)
-        }
-    except Exception as e:
-        logger.error(f"Registration error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
-
-@router.post("/register-first-user")
+@router.post("/register-first-user", name="auth_register_first_user")
 async def register_first_user_route(request: RegisterUserRequest, 
                                     response: Response, 
                                     x_api_key: str = Header(...)):

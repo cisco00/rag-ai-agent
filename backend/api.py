@@ -140,7 +140,7 @@ app = FastAPI(
     description="A multi-tenant RAG-powered analytics tool for organizations.",
     version="2.0.0",
     lifespan=lifespan,
-    redirect_slashes=True
+    redirect_slashes=False
 )
 
 # ── Request Logging Middleware ───────────────────────────────────────────────
