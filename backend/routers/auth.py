@@ -1,5 +1,17 @@
 """
 routers/auth.py — Authentication and Organization registration routes.
+
+Fixes applied
+─────────────
+Bug #15 — Removed @router.get("/register") and @router.get("/login") SPA
+           fallback handlers. Stacking a GET and POST decorator on the same
+           path (or sharing a path across two named routes) caused FastAPI to
+           mis-resolve POST /auth/register as the GET handler, returning 405.
+           GET requests to /auth/register and /auth/login are now handled by
+           the top-level SPA catch-all in api.py (@app.get("/{full_path:path}"))
+           which was already fixed to GET-only in Bug #14. The get_static_dir
+           helper and FileResponse import are no longer needed here and have
+           been removed.
 """
 
 import os
@@ -9,7 +21,6 @@ from fastapi import APIRouter, HTTPException, Depends, Header, Response
 from fastapi.concurrency import run_in_threadpool
 
 import auth as auth_module
-from fastapi.responses import FileResponse
 from models import (
     get_org_by_api_key, create_org, update_org_db
 )
@@ -24,49 +35,32 @@ from schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── SPA Fallbacks (added to router to prevent 405) ──
-# Note: These paths are relative to the router prefix "/auth"
 
-def get_static_dir():
-    # auth.py is in backend/routers/, so project_root is 3 levels up
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    # Try multiple standard locations
-    dirs = [
-        os.path.join(project_root, "frontend", "dist"),
-        os.path.join(project_root, "front-end", "dist"),
-        os.path.join(os.path.dirname(project_root), "frontend", "dist"),
-        "/app/static",
-        "/app/frontend/dist"
-    ]
-    for d in dirs:
-        if os.path.exists(d):
-            return d
-    return dirs[0] # Fallback to first
+# ── Organization Registration ────────────────────────────────────────────────
 
-@router.post("/register", name="auth_register_post")
+@router.post("/register")
 async def register(request: RegisterRequest):
     """Register a new organization and optionally provision a DB."""
     try:
         org = create_org(request.name, request.email)
         try:
-             db_conn_str = await provision_org_database(org.name, org.api_key)
-             if db_conn_str:
-                 update_org_db(org.api_key, db_conn_str)
-                 org.db_connection_string = db_conn_str
-                 logger.info(f"Auto-provisioned database for org: {org.name}")
-                 
-                 email_subject = "Your Vantage AI Database Details"
-                 email_body = (
-                     f"Hello,\n\nYour new organization '{org.name}' has been created successfully!\n\n"
-                     f"Database Connection String:\n{db_conn_str}\n\n"
-                     f"Your API Key is:\n{org.api_key}\n\n"
-                     "Please save this API key securely. Welcome to Vantage AI!"
-                 )
-                 send_email_mock(request.email, email_subject, email_body)
+            db_conn_str = await provision_org_database(org.name, org.api_key)
+            if db_conn_str:
+                update_org_db(org.api_key, db_conn_str)
+                org.db_connection_string = db_conn_str
+                logger.info(f"Auto-provisioned database for org: {org.name}")
 
+                email_subject = "Your Vantage AI Database Details"
+                email_body = (
+                    f"Hello,\n\nYour new organization '{org.name}' has been created successfully!\n\n"
+                    f"Database Connection String:\n{db_conn_str}\n\n"
+                    f"Your API Key is:\n{org.api_key}\n\n"
+                    "Please save this API key securely. Welcome to Vantage AI!"
+                )
+                send_email_mock(request.email, email_subject, email_body)
         except Exception as e:
             logger.error(f"Failed to auto-provision database: {e}")
-            
+
         return {
             "message": "Organization created successfully",
             "name": org.name,
@@ -77,17 +71,8 @@ async def register(request: RegisterRequest):
         logger.error(f"Registration error: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
 
-@router.get("/login", name="auth_login_spa_get")
-@router.get("/register", name="auth_register_spa_get")
-async def auth_spa_fallback_get():
-    """Serve index.html for GET requests to auth paths."""
-    static_dir = get_static_dir()
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"error": f"Frontend not found at {static_dir}"}
 
-# ── Helpers ──
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
     """
@@ -98,7 +83,7 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
     sys_pass = os.getenv("POSTGRES_SYS_ADMIN_PASSWORD")
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
-    
+
     if not (sys_user and sys_pass):
         logger.info("Postgres system credentials not set. Skipping auto-provisioning.")
         return None
@@ -113,9 +98,9 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
     unique_suffix = api_key[:8]
     new_db_name = f"vantage_{safe_name}_{unique_suffix}"
     new_user = f"user_{safe_name}_{unique_suffix}"
-    
+
     alphabet = string.ascii_letters + string.digits
-    new_password = ''.join(secrets.choice(alphabet) for i in range(16))
+    new_password = ''.join(secrets.choice(alphabet) for _ in range(16))
 
     logger.info(f"Provisioning database {new_db_name} for user {new_user}")
 
@@ -124,16 +109,16 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
             conn = psycopg2.connect(user=sys_user, password=sys_pass, host=host, port=port, dbname='postgres')
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
-            
+
             # Create Role
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (new_user,))
             if not cur.fetchone():
                 cur.execute(sql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD {}").format(
                     sql.Identifier(new_user), sql.Literal(new_password)
                 ))
-            
+
             # Create Database
-            cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{new_db_name}'")
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (new_db_name,))
             if not cur.fetchone():
                 cur.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
                     sql.Identifier(new_db_name), sql.Identifier(new_user)
@@ -149,7 +134,7 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
                 conn_new.close()
             except Exception as e:
                 logger.error(f"Failed to grant permissions: {e}")
-            
+
             return f"postgresql://{new_user}:{new_password}@{host}:{port}/{new_db_name}"
 
         return await run_in_threadpool(_provision)
@@ -157,21 +142,22 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
         logger.error(f"Provisioning failed: {e}", exc_info=True)
         raise
 
-# ── Routes ──
 
-@router.post("/register-first-user", name="auth_register_first_user")
-async def register_first_user_route(request: RegisterUserRequest, 
-                                    response: Response, 
+# ── Routes ───────────────────────────────────────────────────────────────────
+
+@router.post("/register-first-user")
+async def register_first_user_route(request: RegisterUserRequest,
+                                    response: Response,
                                     x_api_key: str = Header(...)):
     """Create the first owner user for an organization."""
     try:
         org = get_org_by_api_key(x_api_key)
         if not org:
             raise HTTPException(status_code=401, detail="Invalid API key")
-            
+
         res = auth_module.register_first_user(
-            email=request.email, 
-            password=request.password, 
+            email=request.email,
+            password=request.password,
             display_name=request.display_name,
             org_id=org.id
         )
@@ -180,6 +166,7 @@ async def register_first_user_route(request: RegisterUserRequest,
     except Exception as e:
         logger.error(f"Register first user failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/login")
 async def login_route(request: LoginRequest, response: Response):
@@ -192,11 +179,13 @@ async def login_route(request: LoginRequest, response: Response):
         logger.error(f"Login failed: {e}")
         raise HTTPException(status_code=401, detail=str(e))
 
+
 @router.post("/logout")
 async def logout_route(response: Response):
     """Log out a user by clearing cookies."""
     auth_module._clear_auth_cookies(response)
     return {"message": "Logged out successfully"}
+
 
 @router.post("/refresh")
 async def refresh_route(refresh_token: str):
@@ -205,6 +194,7 @@ async def refresh_route(refresh_token: str):
         return auth_module.refresh_access_token(refresh_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
 
 @router.post("/accept-invite")
 async def accept_invite_route(request: AcceptInviteRequest, response: Response):
@@ -221,10 +211,12 @@ async def accept_invite_route(request: AcceptInviteRequest, response: Response):
         logger.error(f"Accept invite failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.get("/me")
 async def get_me(user: dict = Depends(auth_module.get_current_user)):
     """Return the current authenticated user's profile."""
     return user
+
 
 @router.get("/config")
 async def get_config(org=Depends(get_current_org)):
@@ -234,19 +226,20 @@ async def get_config(org=Depends(get_current_org)):
         "connection_string": org.db_connection_string
     }
 
+
 @router.post("/config")
 async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
     """Update the DB connection string for the current organization."""
     try:
         db_manager = DatabaseManager(connection_string=request.connection_string)
-        db_manager.list_tables() # Validate connection
+        db_manager.list_tables()  # Validate connection
         db_manager.close()
-        
+
         update_org_db(org.api_key, request.connection_string)
-        
+
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)
-            
+
         return {"status": "success", "message": "Database connection string updated."}
     except Exception as e:
         logger.error(f"DB CONFIG ERROR: {e}")
