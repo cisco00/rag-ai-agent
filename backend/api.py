@@ -9,6 +9,9 @@ Bug #9  — InsightScheduler now uses a real make_insight_engine factory instead
 Bug #13 — The routers/ package must exist (see routers/__init__.py and
            routers/stub.py). This file is the entry point; the actual route
            handlers live in the router modules.
+Bug #14 — SPA catch-all route was registered with POST/PUT/DELETE/OPTIONS methods,
+           causing it to intercept API requests (e.g. /auth/register returning 405)
+           before they could reach the real router handlers. Fixed to GET-only.
 """
 
 import os
@@ -149,16 +152,6 @@ async def log_requests(request: Request, call_next):
     """Log every request method, path, headers, and response status code."""
     import time
     start_time = time.time()
-    # Read body for POST/PUT if small enough to help debug
-    body_summary = ""
-    if request.method in ["POST", "PUT", "PATCH"]:
-        try:
-            # Note: Reading body here might interfere with later processing if not careful
-            # and it can be expensive. We only do this for debugging.
-            pass 
-        except:
-            pass
-            
     response = await call_next(request)
     duration = time.time() - start_time
     logger.info(
@@ -242,7 +235,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-# SPA Fallback Path Logic (moved to auth router for better matching)
+# SPA Fallback Path Logic
 def get_static_dir():
     # Fix: api.py is in backend/, so project_root is parent of backend/
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -257,7 +250,7 @@ def get_static_dir():
     for d in dirs:
         if os.path.exists(d):
             return d
-    return dirs[0] # Fallback to first
+    return dirs[0]  # Fallback to first
 
 static_dir = get_static_dir()
 logger.info(f"Using static directory: {static_dir} (exists: {os.path.exists(static_dir)})")
@@ -304,8 +297,8 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
     try:
         db = DatabaseManager(connection_string=conn_str)
         try:
-            dialect    = db.engine.dialect.name
-            id_col     = "ctid" if dialect == "postgresql" else "rowid"
+            dialect      = db.engine.dialect.name
+            id_col       = "ctid" if dialect == "postgresql" else "rowid"
             last_sent_id = None
             while True:
                 query   = f"SELECT *, {id_col} as _stream_id FROM {table_name} ORDER BY {id_col} DESC LIMIT 1"
@@ -329,28 +322,22 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
         await websocket.close()
 
 # ── SPA Static Files ──────────────────────────────────────────────────────────
+# Fix #14: The catch-all is GET-only. Registering it with POST/PUT/DELETE/OPTIONS
+# caused FastAPI to match API requests (e.g. POST /auth/register) against this
+# handler instead of the real router endpoints, producing spurious 405 errors.
 if os.path.exists(static_dir):
     assets_dir = os.path.join(static_dir, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
-        if request.method != "GET":
-             logger.warning(f"Fallback caught non-GET request: {request.method} {full_path}")
-             # We still try to serve the file if it's an OPTIONS or something else that might fall through
-             # but usually POST should have matched a real route.
-        
         file_path = os.path.join(static_dir, full_path)
         if os.path.exists(file_path) and os.path.isfile(file_path):
             return FileResponse(file_path)
         index_path = os.path.join(static_dir, "index.html")
         if os.path.exists(index_path):
             return FileResponse(index_path)
-        
-        if request.method != "GET":
-            return {"error": f"Method {request.method} not allowed for {full_path} and no file found."}, 405
-            
         return {"error": "Frontend not found"}
 
 if __name__ == "__main__":
