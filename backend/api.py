@@ -204,6 +204,25 @@ app.add_middleware(
 )
 
 # ── Router registrations ──────────────────────────────────────────────────────
+# SPA Fallbacks for Auth (moved BEFORE router inclusion to prevent 405)
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Try standard locations for static files
+static_dirs = [
+    os.path.join(project_root, "frontend", "dist"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "static"),
+    "/app/static"
+]
+static_dir = next((d for d in static_dirs if os.path.exists(d)), static_dirs[0])
+
+@app.get("/auth/login")
+@app.get("/auth/register")
+async def auth_spa_fallback():
+    """Ensure auth routes serve index.html for deep-linking/GET requests."""
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"error": "Frontend not found"}
+
 app.include_router(auth.router,            prefix="/auth",           tags=["Authentication"])
 app.include_router(data.router,                                      tags=["Data Management"])
 app.include_router(analytics.router,                                 tags=["Analytics"])
@@ -271,22 +290,10 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
         await websocket.close()
 
 # ── SPA Static Files ──────────────────────────────────────────────────────────
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-static_dir   = os.path.join(project_root, "frontend", "dist")
-
 if os.path.exists(static_dir):
     assets_dir = os.path.join(static_dir, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
-
-    @app.get("/auth/login")
-    @app.get("/auth/register")
-    async def auth_spa_fallback():
-        """Ensure auth routes serve index.html for deep-linking/GET requests."""
-        index_path = os.path.join(static_dir, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        return {"error": "Frontend not found"}
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
