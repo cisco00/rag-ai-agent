@@ -3,6 +3,11 @@ routers/auth.py — Authentication and Organization registration routes.
 """
 
 import os
+import logging
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Header, Response
+from fastapi.concurrency import run_in_threadpool
+
 import auth as auth_module
 from fastapi.responses import FileResponse
 from models import (
