@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Send, Loader2, FileDown, Share2, BarChart3, Mic, MicOff, ThumbsUp, ThumbsDown, MessageSquare, Plus, Trash2, Menu, X, Pin, Check } from 'lucide-react';
+import { Send, Loader2, FileDown, Share2, BarChart3, Mic, MicOff, ThumbsUp, ThumbsDown, MessageSquare, Plus, Trash2, X, Pin, Check } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
@@ -325,12 +325,13 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
 
   return (
     <div className="h-full flex flex-col md:flex-row bg-gray-50 overflow-hidden relative">
-      {/* Mobile Sidebar Toggle */}
+      {/* Mobile Chat History Toggle (positioned relative to main content) */}
       <button
         onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-        className="md:hidden absolute top-4 left-4 z-50 p-2 bg-white rounded-md shadow-sm border border-gray-200"
+        className="md:hidden absolute top-3 right-4 z-30 p-2 bg-white/80 backdrop-blur rounded-lg shadow-sm border border-gray-200 text-gray-600"
+        title="Chat History"
       >
-        <Menu className="size-5 text-gray-600" />
+        <MessageSquare className="size-5" />
       </button>
 
       {/* Sidebar for Chat Sessions */}
@@ -339,7 +340,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
         md:translate-x-0 absolute md:relative z-40 h-full w-64 bg-white border-r border-gray-200 flex flex-col transition-transform duration-200 ease-in-out shrink-0
       `}>
         <div className="p-4 border-b border-gray-200 flex justify-between items-center md:pt-6">
-          <h2 className="font-semibold text-gray-700 ml-10 md:ml-0">Chat History</h2>
+          <h2 className="font-semibold text-gray-700">Chat History</h2>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-500 hover:text-gray-700 p-1">
             <X className="size-5" />
           </button>
@@ -385,13 +386,13 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 h-full">
         {/* Header */}
-        <div className="bg-white border-b border-gray-200 p-6 pl-16 md:pl-6">
+        <div className="bg-white border-b border-gray-200 p-4 md:p-6">
           <div className="max-w-5xl mx-auto">
             <div className="flex items-center gap-3">
-              <BarChart3 className="size-8 text-blue-600" />
+              <BarChart3 className="size-6 md:size-8 text-blue-600 shrink-0" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Natural Language Query</h1>
-                <p className="text-sm text-gray-600">Ask questions about your data in plain English or use voice input</p>
+                <h1 className="text-xl md:text-2xl font-bold text-gray-900 leading-tight">AI Query</h1>
+                <p className="text-xs md:text-sm text-gray-600 line-clamp-1">Ask anything about your data in plain English</p>
               </div>
             </div>
           </div>
@@ -406,58 +407,58 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-3xl ${message.role === 'user'
+                  className={`max-w-[85%] md:max-w-3xl ${message.role === 'user'
                     ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm'
                     : 'bg-white border border-gray-200 rounded-2xl rounded-tl-sm'
-                    } p-6 shadow-sm`}
+                    } p-4 md:p-6 shadow-sm`}
                 >
                   {message.role === 'assistant' && (
-                    <div className="flex items-center gap-2 mb-3">
-                      <BarChart3 className="size-5 text-blue-600" />
-                      <span className="font-bold text-gray-900">Vantage AI</span>
+                    <div className="flex items-center gap-2 mb-2 md:mb-3">
+                      <BarChart3 className="size-4 md:size-5 text-blue-600" />
+                      <span className="font-bold text-sm md:text-base text-gray-900">Vantage AI</span>
                     </div>
                   )}
 
-                  <p className={message.role === 'user' ? 'text-white' : 'text-gray-900'}>
+                  <p className={`text-sm md:text-base ${message.role === 'user' ? 'text-white' : 'text-gray-900'}`}>
                     {message.content}
                   </p>
 
                   {message.visualization && (
-                    <div className="mt-4">
+                    <div className="mt-4 overflow-x-auto">
                       <ChartDisplay visualization={message.visualization} />
                     </div>
                   )}
 
                   {message.role === 'assistant' && (
-                    <div className="flex items-center gap-2 mt-4 pt-4 border-t border-gray-200">
+                    <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-gray-200">
                       {message.visualization && (
                         <>
                           <button
                             onClick={() => handleShare(message)}
-                            className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
                           >
-                            <Share2 className="size-4" />
+                            <Share2 className="size-3 md:size-4" />
                             Share
                           </button>
                           <button
                             onClick={() => handleExport(message)}
-                            className="flex items-center gap-2 px-4 py-2 text-sm bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors"
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors"
                           >
-                            <FileDown className="size-4" />
+                            <FileDown className="size-3 md:size-4" />
                             Export
                           </button>
                         </>
                       )}
                       <button
                         onClick={() => handleOpenPin(message, index)}
-                        className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
+                        className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
                       >
-                        <Pin className="size-4" />
-                        Pin to Dashboard
+                        <Pin className="size-3 md:size-4" />
+                        Pin
                       </button>
 
                       {/* Feedback buttons */}
-                      <div className="ml-auto flex items-center gap-2">
+                      <div className="ml-auto flex items-center gap-1 md:gap-2">
                         <button
                           onClick={() => handleFeedback(index, 'up')}
                           className={`p-2 rounded-lg transition-colors ${message.feedback === 'up'
@@ -529,39 +530,39 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
         )}
 
         {/* Input */}
-        <div className="bg-white border-t border-gray-200 p-6">
+        <div className="bg-white border-t border-gray-200 p-4 md:p-6">
           <form onSubmit={handleSubmit} className="max-w-5xl mx-auto">
-            <div className="flex gap-3">
+            <div className="flex gap-2 md:gap-3">
               <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask a question about your data..."
+                placeholder="Ask a question..."
                 disabled={isLoading}
-                className="flex-1 px-6 py-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
+                className="flex-1 px-4 md:px-6 py-3 md:py-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 text-sm md:text-base"
               />
               <button
                 type="button"
                 onClick={handleVoiceInput}
                 disabled={isLoading || isListening}
-                className={`px-6 py-4 rounded-xl transition-colors font-medium flex items-center gap-2 ${isListening
+                className={`px-3 md:px-6 py-3 md:py-4 rounded-xl transition-colors font-medium flex items-center gap-2 ${isListening
                   ? 'bg-red-600 text-white animate-pulse'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
               >
-                {isListening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
+                {isListening ? <MicOff className="size-4 md:size-5" /> : <Mic className="size-4 md:size-5" />}
               </button>
               <button
                 type="submit"
                 disabled={isLoading || !input.trim()}
-                className="px-8 py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
+                className="px-4 md:px-8 py-3 md:py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
               >
                 {isLoading ? (
-                  <Loader2 className="size-5 animate-spin" />
+                  <Loader2 className="size-4 md:size-5 animate-spin" />
                 ) : (
-                  <Send className="size-5" />
+                  <Send className="size-4 md:size-5" />
                 )}
-                Send
+                <span className="hidden sm:inline">Send</span>
               </button>
             </div>
           </form>

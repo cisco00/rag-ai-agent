@@ -194,7 +194,7 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
                     placeholder="name@company.com"
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <InputField
                         id="reg-nickname"
                         icon={User}
@@ -397,8 +397,8 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                     </div>
                 </div>
 
-                <div className="bg-white/70 backdrop-blur-md rounded-[2rem] p-8 border border-slate-200/50 shadow-xl shadow-slate-200/20 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-white/70 backdrop-blur-md rounded-[1.5rem] md:rounded-[2rem] p-5 md:p-8 border border-slate-200/50 shadow-xl shadow-slate-200/20 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                         <InputField
                             icon={Mail}
                             label="Email Address"
@@ -492,13 +492,13 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                 <div className="bg-white/80 backdrop-blur-xl rounded-[2.5rem] shadow-2xl shadow-blue-500/5 border border-white p-2">
                     {/* Glass Tabs */}
                     {!newApiKey && (
-                        <div className="flex gap-1 p-1.5 bg-slate-100/50 rounded-[2rem] mb-2">
+                        <div className="flex flex-wrap sm:flex-nowrap gap-1 p-1.5 bg-slate-100/50 rounded-2xl md:rounded-[2rem] mb-2">
                             {(['register', 'login', 'invite'] as const).map((tab) => (
                                 <button
                                     key={tab}
                                     onClick={() => { setActiveTab(tab); setError(null); }}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-[1.5rem] text-sm font-bold transition-all duration-300 ${activeTab === tab
-                                            ? 'bg-white shadow-xl shadow-slate-200/50 text-blue-600'
+                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 md:py-3 px-2 rounded-xl md:rounded-[1.5rem] text-xs md:text-sm font-bold transition-all duration-300 ${activeTab === tab
+                                            ? 'bg-white shadow-lg text-blue-600'
                                             : 'text-slate-400 hover:text-slate-600'
                                         }`}
                                 >
@@ -531,14 +531,14 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                                     </div>
                                 </div>
 
-                                <div className="space-y-3 bg-slate-50/50 p-6 rounded-3xl border border-slate-100">
+                                <div className="space-y-3 bg-slate-50/50 p-4 md:p-6 rounded-2xl md:rounded-3xl border border-slate-100">
                                     <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1">Secure API Key</label>
                                     <div className="relative group">
                                         <input
                                             type="text"
                                             value={newApiKey}
                                             readOnly
-                                            className="w-full pl-4 pr-12 py-4 bg-white border border-slate-200 rounded-2xl font-mono text-xs text-slate-600 shadow-sm"
+                                            className="w-full pl-4 pr-12 py-3 md:py-4 bg-white border border-slate-200 rounded-xl md:rounded-2xl font-mono text-[10px] md:text-xs text-slate-600 shadow-sm"
                                         />
                                         <button
                                             onClick={() => {

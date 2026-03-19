@@ -161,13 +161,13 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
 
   if (status === 'success' && configMode === 'configured') {
     return (
-      <div className="p-8 max-w-6xl mx-auto">
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center max-w-2xl mx-auto flex flex-col items-center">
+      <div className="p-4 md:p-8 max-w-6xl mx-auto">
+        <div className="bg-white rounded-xl border border-gray-200 p-6 md:p-12 text-center max-w-2xl mx-auto flex flex-col items-center">
           <div className="flex items-center justify-center size-20 bg-blue-100 rounded-full mb-6 text-blue-600">
             <Database className="size-10" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-900 mb-3">Database Connected</h2>
-          <p className="text-gray-600 mb-8 max-w-md">
+          <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2 md:mb-3">Database Connected</h2>
+          <p className="text-sm md:text-base text-gray-600 mb-6 md:mb-8 max-w-md">
             Your organization is currently connected to the following database. You're ready to start analyzing data.
           </p>
           
@@ -215,13 +215,13 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
 
   if (status === 'success') {
     return (
-      <div className="p-8 max-w-6xl mx-auto">
-        <div className="bg-white rounded-xl border border-gray-200 p-12 mt-12 text-center max-w-2xl mx-auto flex flex-col items-center">
-          <div className="flex items-center justify-center size-20 bg-green-100 rounded-full mb-6 text-green-600">
-            <CheckCircle className="size-10" />
+      <div className="p-4 md:p-8 max-w-6xl mx-auto">
+        <div className="bg-white rounded-xl border border-gray-200 p-6 md:p-12 mt-4 md:mt-12 text-center max-w-2xl mx-auto flex flex-col items-center">
+          <div className="flex items-center justify-center size-16 md:size-20 bg-green-100 rounded-full mb-4 md:mb-6 text-green-600">
+            <CheckCircle className="size-8 md:size-10" />
           </div>
-          <h2 className="text-3xl font-bold text-gray-900 mb-3">Database Ready!</h2>
-          <p className="text-gray-600 mb-8 max-w-md">
+          <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2 md:mb-3">Database Ready!</h2>
+          <p className="text-sm md:text-base text-gray-600 mb-6 md:mb-8 max-w-md">
             Your database connection has been successfully configured. You're all set to start querying and analyzing your data.
           </p>
           
@@ -255,39 +255,39 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
   }
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-4 md:p-8 max-w-6xl mx-auto">
       <div className="w-full">
           {/* Header */}
-          <div className="mb-8">
-            <div className="flex items-center gap-3 mb-3">
-              <Database className="size-8 text-blue-600" />
-              <h1 className="text-3xl font-bold text-gray-900">Database Configuration</h1>
+          <div className="mb-6 md:mb-8">
+            <div className="flex items-center gap-3 mb-2 md:mb-3">
+              <Database className="size-6 md:size-8 text-blue-600" />
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Config</h1>
             </div>
-            <p className="text-gray-600">
-              Connect your database or create a new PostgreSQL database to enable natural language queries.
+            <p className="text-sm md:text-base text-gray-600">
+              Connect your database or create a new PostgreSQL database.
             </p>
           </div>
 
           {/* Mode Toggle */}
-          <div className="bg-white rounded-xl border border-gray-200 p-2 mb-6 inline-flex">
+          <div className="bg-white rounded-xl border border-gray-200 p-1.5 mb-6 inline-flex flex-col sm:flex-row w-full sm:w-auto">
             <button
               onClick={() => { setConfigMode('existing'); setStatus('idle'); }}
-              className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'existing'
-                ? 'bg-blue-600 text-white'
+              className={`px-4 md:px-6 py-2 rounded-lg transition-colors text-sm md:text-base ${configMode === 'existing'
+                ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100'
                 }`}
             >
-              Connect Existing Database
+              Existing DB
             </button>
             <button
               onClick={() => { setConfigMode('create'); setStatus('idle'); }}
-              className={`px-6 py-2 rounded-lg transition-colors ${configMode === 'create'
-                ? 'bg-blue-600 text-white'
+              className={`px-4 md:px-6 py-2 rounded-lg transition-colors text-sm md:text-base ${configMode === 'create'
+                ? 'bg-blue-600 text-white shadow-sm'
             : 'text-gray-600 hover:bg-gray-100'
             }`}
         >
-          <Plus className="size-4 inline mr-2" />
-          Create New Database
+          <Plus className="size-4 inline mr-1 md:mr-2" />
+          Create New
         </button>
       </div>
 
@@ -298,7 +298,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
             <label className="block text-sm font-medium text-gray-700 mb-3">
               Database Type
             </label>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
               {dbTypes.map((type) => (
                 <button
                   key={type.value}
@@ -307,13 +307,13 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
                     setConnectionString(type.example);
                     setStatus('idle');
                   }}
-                  className={`p-4 rounded-lg border-2 transition-all ${dbType === type.value
+                  className={`p-3 md:p-4 rounded-xl border-2 transition-all ${dbType === type.value
                     ? 'border-blue-500 bg-blue-50'
                     : 'border-gray-200 hover:border-gray-300'
                     }`}
                 >
-                  <Database className="size-6 mx-auto mb-2 text-gray-600" />
-                  <p className="text-sm font-medium text-gray-900">{type.label}</p>
+                  <Database className="size-5 md:size-6 mx-auto mb-1 md:mb-2 text-gray-600" />
+                  <p className="text-xs md:text-sm font-medium text-gray-900">{type.label}</p>
                 </button>
               ))}
             </div>
@@ -493,17 +493,17 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
           </div>
           <p className="text-sm text-gray-500 mb-6">Create a dedicated user for an existing database or provision a brand new database.</p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Enter New Database Name *
+                Database Name *
               </label>
               <input
                 type="text"
                 value={createForm.newDbName}
                 onChange={(e) => setCreateForm({ ...createForm, newDbName: e.target.value })}
                 placeholder="my_analytics_db"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base"
                 required
               />
             </div>
@@ -517,7 +517,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
                 value={createForm.newUser}
                 onChange={(e) => setCreateForm({ ...createForm, newUser: e.target.value })}
                 placeholder="analytics_user"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base"
                 required
               />
             </div>
@@ -530,7 +530,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
                 type="password"
                 value={createForm.newPassword}
                 onChange={(e) => setCreateForm({ ...createForm, newPassword: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base"
                 required
               />
             </div>

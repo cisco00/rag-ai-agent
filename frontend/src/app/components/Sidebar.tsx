@@ -16,7 +16,8 @@ import {
   BarChart2,
   LogOut,
   User as UserIcon,
-  UserPlus
+  UserPlus,
+  X
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -36,6 +37,7 @@ interface SidebarProps {
     email: string;
   };
   onLogout?: () => void;
+  onClose?: () => void;
 }
 
 export function Sidebar({
@@ -45,7 +47,8 @@ export function Sidebar({
   branding,
   unseenInsights = 0,
   user,
-  onLogout
+  onLogout,
+  onClose
 }: SidebarProps) {
   const primaryColor = branding.primary_color || '#2563eb';
 
@@ -75,9 +78,9 @@ export function Sidebar({
   ];
 
   return (
-    <aside className="w-64 h-full bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800">
+    <aside className="w-64 h-full bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 shadow-2xl lg:shadow-none">
       {/* Brand Header */}
-      <div className="p-6 border-b border-slate-800">
+      <div className="p-6 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3 mb-1">
           <div
             className="size-10 rounded-xl flex items-center justify-center text-white shadow-lg overflow-hidden shrink-0"
@@ -98,6 +101,14 @@ export function Sidebar({
             </p>
           </div>
         </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="lg:hidden p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+          >
+            <X size={20} />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}

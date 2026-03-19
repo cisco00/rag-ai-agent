@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Menu, X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { DatabaseConfig } from './components/DatabaseConfig';
@@ -61,6 +62,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [initialQuery, setInitialQuery] = useState<string | null>(null);
   const [publicScreen, setPublicScreen] = useState<PublicScreen>('landing');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const [apiKey, setApiKey] = useState<string | null>(getApiKey());
   const [accessToken, setAccessToken] = useState<string | null>(getAccessToken());
@@ -186,80 +188,129 @@ export default function App() {
         />
       );
     }
-    // Default: landing page
     return <LandingPage onGetStarted={() => setPublicScreen('auth')} />;
   }
 
   // ── Authenticated app ────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar
-        currentView={currentView}
-        onNavigate={(view) => setCurrentView(view as View)}
-        isConfigured={isConfigured}
-        branding={branding}
-        unseenInsights={unseenCount}
-        user={user}
-        onLogout={handleLogout}
-      />
-      <main className="flex-1 overflow-auto">
-        {currentView === 'dashboard' && (
-          <Dashboard
-            onNavigate={(view, query) => {
-              setCurrentView(view as View);
-              if (query) setInitialQuery(query);
-            }}
-            isConfigured={isConfigured}
-          />
-        )}
-        {currentView === 'database' && (
-          <DatabaseConfig
-            apiKey={apiKey!}
-            onConfigured={() => setIsConfigured(true)}
-            onNavigate={(view) => setCurrentView(view as View)}
-          />
-        )}
-        {currentView === 'management' && (
-          <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />
-        )}
-        {currentView === 'import' && (
-          <FileImport
-            apiKey={apiKey!}
-            onConfigured={() => setIsConfigured(true)}
-            onQueryClick={(query) => {
-              setInitialQuery(query);
-              setCurrentView('query');
-            }}
-          />
-        )}
-        {currentView === 'query' && (
-          <QueryInterface
-            apiKey={apiKey!}
-            initialQuery={initialQuery || undefined}
-            onQueryProcessed={() => setInitialQuery(null)}
-          />
-        )}
-        {currentView === 'reports' && <Reports apiKey={apiKey!} />}
-        {currentView === 'scheduled' && <ScheduledReports apiKey={apiKey!} />}
-        {currentView === 'transform' && <DataTransformation apiKey={apiKey!} />}
-        {currentView === 'analytics' && <AdvancedAnalytics apiKey={apiKey!} />}
-        {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
-        {currentView === 'insights' && <Insights />}
-        {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
-        {currentView === 'boards' && <DashboardsView apiKey={apiKey!} />}
-        {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
-        {currentView === 'about' && <AboutPage />}
-        {currentView === 'branding' && (
-          <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
-        )}
-        {currentView === 'settings' && (
-          <AuthPage
-            onLoginSuccess={() => { }}
-            existingKey={apiKey}
-            isSettingsMode={true}
-          />
-        )}
-      </main>
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* Sidebar Overlay for Mobile */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar - Drawer on Mobile, Fixed on Desktop */}
+      <div className={`
+        fixed inset-y-0 left-0 z-50 transform lg:relative lg:translate-x-0 transition-transform duration-300 ease-in-out
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+      `}>
+        <Sidebar
+          currentView={currentView}
+          onNavigate={(view) => {
+            setCurrentView(view as View);
+            setIsSidebarOpen(false); // Close sidebar on navigation on mobile
+          }}
+          isConfigured={isConfigured}
+          branding={branding}
+          unseenInsights={unseenCount}
+          user={user}
+          onLogout={handleLogout}
+          onClose={() => setIsSidebarOpen(false)}
+        />
+      </div>
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Mobile Header */}
+        <header className="lg:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Menu size={24} />
+            </button>
+            <div className="flex items-center gap-2">
+              <div
+                className="size-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                style={{ backgroundColor: branding.primary_color }}
+              >
+                {branding.org_name.charAt(0)}
+              </div>
+              <span className="font-bold text-gray-900 truncate max-w-[150px]">{branding.org_name}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {unseenCount > 0 && (
+              <div className="size-2 bg-blue-600 rounded-full animate-pulse" />
+            )}
+            <div className="size-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 border border-gray-200">
+              {user?.display_name?.charAt(0) || <Menu size={16} />}
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 overflow-auto">
+          {currentView === 'dashboard' && (
+            <Dashboard
+              onNavigate={(view, query) => {
+                setCurrentView(view as View);
+                if (query) setInitialQuery(query);
+              }}
+              isConfigured={isConfigured}
+            />
+          )}
+          {currentView === 'database' && (
+            <DatabaseConfig
+              apiKey={apiKey!}
+              onConfigured={() => setIsConfigured(true)}
+              onNavigate={(view) => setCurrentView(view as View)}
+            />
+          )}
+          {currentView === 'management' && (
+            <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />
+          )}
+          {currentView === 'import' && (
+            <FileImport
+              apiKey={apiKey!}
+              onConfigured={() => setIsConfigured(true)}
+              onQueryClick={(query) => {
+                setInitialQuery(query);
+                setCurrentView('query');
+              }}
+            />
+          )}
+          {currentView === 'query' && (
+            <QueryInterface
+              apiKey={apiKey!}
+              initialQuery={initialQuery || undefined}
+              onQueryProcessed={() => setInitialQuery(null)}
+            />
+          )}
+          {currentView === 'reports' && <Reports apiKey={apiKey!} />}
+          {currentView === 'scheduled' && <ScheduledReports apiKey={apiKey!} />}
+          {currentView === 'transform' && <DataTransformation apiKey={apiKey!} />}
+          {currentView === 'analytics' && <AdvancedAnalytics apiKey={apiKey!} />}
+          {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
+          {currentView === 'insights' && <Insights />}
+          {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
+          {currentView === 'boards' && <DashboardsView apiKey={apiKey!} />}
+          {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
+          {currentView === 'about' && <AboutPage />}
+          {currentView === 'branding' && (
+            <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
+          )}
+          {currentView === 'settings' && (
+            <AuthPage
+              onLoginSuccess={() => { }}
+              existingKey={apiKey}
+              isSettingsMode={true}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }

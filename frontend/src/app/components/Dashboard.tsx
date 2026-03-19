@@ -85,11 +85,11 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Overview</h1>
-        <p className="text-gray-600 mt-2">Welcome back! Here's an overview of your analytics activity.</p>
+      <div className="mb-6 md:mb-8">
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Overview</h1>
+        <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Welcome back! Here's an overview of your analytics activity.</p>
       </div>
 
       {/* Stats Grid */}
@@ -121,24 +121,24 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Discovery Card */}
         {isConfigured && (
-          <div className="lg:col-span-3 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-8 text-white shadow-lg overflow-hidden relative group">
+          <div className="lg:col-span-3 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-5 md:p-8 text-white shadow-lg overflow-hidden relative group">
             <div className="relative z-10">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                 <div className="flex items-center gap-3">
-                  <Lightbulb className="size-8 text-blue-200" />
-                  <h2 className="text-2xl font-bold">Discover Your Data</h2>
+                  <Lightbulb className="size-6 md:size-8 text-blue-200" />
+                  <h2 className="text-xl md:text-2xl font-bold">Discover Your Data</h2>
                 </div>
                 <button
                   onClick={handleRefreshSuggestions}
                   disabled={isLoadingSuggestions}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors flex items-center gap-2 text-sm"
+                  className="w-fit p-2 hover:bg-white/10 rounded-lg transition-colors flex items-center gap-2 text-xs md:text-sm border border-white/10 md:border-none"
                   title="Generate new analytical questions"
                 >
                   <RotateCw className={`size-4 ${isLoadingSuggestions ? 'animate-spin' : ''}`} />
                   Refresh Insights
                 </button>
               </div>
-              <p className="text-blue-100 mb-8 max-w-2xl text-lg">
+              <p className="text-blue-100 mb-6 md:mb-8 max-w-2xl text-base md:text-lg">
                 Our AI has analyzed your database schema and is ready to answer your questions.
                 Try one of these suggested analyses or start a new query.
               </p>
@@ -276,12 +276,12 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
       </div>
 
       {/* Feature Highlights */}
-      <div className="mt-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-8 text-white">
+      <div className="mt-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 md:p-8 text-white">
         <div className="flex items-center gap-3 mb-4">
-          <TrendingUp className="size-8" />
-          <h2 className="text-2xl font-bold">Get Started with Natural Language Analytics</h2>
+          <TrendingUp className="size-6 md:size-8" />
+          <h2 className="text-xl md:text-2xl font-bold">Get Started with NL Analytics</h2>
         </div>
-        <p className="text-blue-100 mb-6">
+        <p className="text-blue-100 mb-6 text-sm md:text-base">
           Ask questions about your data in plain English and get instant insights with automated visualizations.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
