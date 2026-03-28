@@ -143,4 +143,11 @@ export const api = {
     const separator = path.includes('?') ? '&' : '?';
     return `${wsBase}${path}${apiKey ? `${separator}api_key=${apiKey}` : ''}`;
   },
+
+  resolveUrl: (path: string | null | undefined) => {
+    if (!path) return '';
+    if (path.startsWith('http')) return path;
+    if (path.startsWith('/')) return `${BASE_URL}${path}`;
+    return path;
+  }
 };

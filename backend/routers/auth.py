@@ -29,7 +29,7 @@ from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, req
 from email_service import send_welcome_email
 from schemas import (
     RegisterRequest, ConfigRequest, LoginRequest, RegisterUserRequest,
-    AcceptInviteRequest, InviteRequest
+    AcceptInviteRequest, InviteRequest, ForgotPasswordRequest, ResetPasswordRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,42 @@ async def refresh_route(refresh_token: str):
         return auth_module.refresh_access_token(refresh_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+
+@router.post("/forgot-password")
+async def forgot_password_route(request: ForgotPasswordRequest):
+    """Generate a password reset token and send an email."""
+    try:
+        token = auth_module.create_password_reset_token(request.email)
+        if token:
+            # We found a user, send the email
+            # Build the reset URL (frontend should handle this route)
+            reset_url = f"{auth_module.APP_URL}/auth?reset_token={token}"
+            # Need to import send_password_reset_email or similar
+            from email_service import send_password_reset_email
+            send_password_reset_email(request.email, reset_url)
+        
+        # Always return success to prevent email enumeration
+        return {"message": "If an account exists for that email, a reset link has been sent."}
+    except Exception as e:
+        logger.error(f"Forgot password failed: {e}")
+        # Still return success to prevent enumeration
+        return {"message": "If an account exists for that email, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password_route(request: ResetPasswordRequest):
+    """Reset a user's password using a valid token."""
+    try:
+        success = auth_module.reset_password_with_token(request.token, request.password)
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        return {"message": "Password reset successfully. You can now login with your new password."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Reset password failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/invite")

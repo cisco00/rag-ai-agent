@@ -8,9 +8,12 @@ import { api } from '../../lib/api';
 
 // --- Shared Types ---
 
+type AuthTab = 'login' | 'register' | 'invite' | 'forgot' | 'reset';
+
 interface LoginFormProps {
     onLoginSuccess: (apiKey: string, accessToken: string, refreshToken: string, user: any) => void;
     setError: (err: string | null) => void;
+    setActiveTab: (val: AuthTab) => void;
     isLoading: boolean;
     setIsLoading: (val: boolean) => void;
 }
@@ -26,7 +29,7 @@ interface RegisterFormProps {
 interface InviteAcceptFormProps {
     inviteToken: string;
     setInviteToken: (val: string) => void;
-    setActiveTab: (val: 'login' | 'register' | 'invite') => void;
+    setActiveTab: (val: AuthTab) => void;
     setError: (err: string | null) => void;
     setSuccess: (msg: string | null) => void;
     isLoading: boolean;
@@ -53,7 +56,7 @@ const InputField = ({ icon: Icon, label, id, ...props }: any) => (
     </div>
 );
 
-function LoginForm({ onLoginSuccess, setError, isLoading, setIsLoading }: LoginFormProps) {
+function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoading }: LoginFormProps) {
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
 
@@ -112,6 +115,16 @@ function LoginForm({ onLoginSuccess, setError, isLoading, setIsLoading }: LoginF
                     onChange={(e: any) => setLoginPassword(e.target.value)}
                     placeholder="••••••••"
                 />
+            </div>
+
+            <div className="flex justify-end -mt-6">
+                <button
+                    type="button"
+                    onClick={() => { setActiveTab('forgot'); setError(null); }}
+                    className="text-[11px] font-bold text-slate-400 hover:text-blue-600 transition-colors uppercase tracking-widest"
+                >
+                    Forgot Password?
+                </button>
             </div>
 
             <button
@@ -314,6 +327,129 @@ function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError,
     );
 }
 
+function ForgotPasswordForm({ setActiveTab, setError, setSuccess, isLoading, setIsLoading }: any) {
+    const [email, setEmail] = useState('');
+
+    const handleForgot = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email.trim()) {
+            setError('Email is required.');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+        setSuccess(null);
+
+        try {
+            await api.post<any>('/auth/forgot-password', { email });
+            setSuccess("If an account exists, a reset link has been sent to your email.");
+            setEmail('');
+        } catch (err: any) {
+            setError(err.message || 'Request failed');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleForgot} className="space-y-8">
+            <div className="space-y-5">
+                <InputField
+                    id="forgot-email"
+                    icon={Mail}
+                    label="Work Email"
+                    type="email"
+                    value={email}
+                    onChange={(e: any) => setEmail(e.target.value)}
+                    placeholder="name@company.com"
+                />
+            </div>
+
+            <button
+                type="submit"
+                disabled={isLoading || !email.trim()}
+                className="w-full py-4.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98]"
+            >
+                {isLoading ? 'SENDING...' : 'SEND RESET LINK'}
+            </button>
+
+            <div className="text-center">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('login')}
+                    className="text-xs font-bold text-slate-400 hover:text-blue-600 transition-colors uppercase tracking-widest"
+                >
+                    Back to Login
+                </button>
+            </div>
+        </form>
+    );
+}
+
+function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoading, setIsLoading }: any) {
+    const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
+    const handleReset = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!password.trim()) {
+            setError('Password is required.');
+            return;
+        }
+        if (password !== confirmPassword) {
+            setError('Passwords do not match.');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            await api.post<any>('/auth/reset-password', { token, password });
+            setSuccess("Password reset successfully! Please login with your new password.");
+            setActiveTab('login');
+        } catch (err: any) {
+            setError(err.message || 'Reset failed');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleReset} className="space-y-6">
+            <div className="space-y-4">
+                <InputField
+                    id="reset-password"
+                    icon={Lock}
+                    label="New Password"
+                    type="password"
+                    value={password}
+                    onChange={(e: any) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                />
+                <InputField
+                    id="confirm-password"
+                    icon={Lock}
+                    label="Confirm New Password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e: any) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                />
+            </div>
+
+            <button
+                type="submit"
+                disabled={isLoading || !password.trim() || password !== confirmPassword}
+                className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98]"
+            >
+                {isLoading ? 'RESETTING...' : 'RESET PASSWORD'}
+            </button>
+        </form>
+    );
+}
+
 // --- Main Page Component ---
 
 interface AuthPageProps {
@@ -325,7 +461,7 @@ interface AuthPageProps {
 export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existingKey }: AuthPageProps) {
     const hasManageUsers = (Array.isArray(user?.permissions) && user.permissions.includes('MANAGE_USERS')) || 
                            (user?.role === 'owner' || user?.role === 'admin');
-    const [activeTab, setActiveTab] = useState<'login' | 'register' | 'invite'>(
+    const [activeTab, setActiveTab] = useState<AuthTab>(
         isSettingsMode ? 'invite' : 'register'
     );
     const [step, setStep] = useState(1); // For registration wizard
@@ -343,6 +479,7 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
     const [inviteToken, setInviteToken] = useState('');
+    const [resetToken, setResetToken] = useState('');
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -350,6 +487,12 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
         if (token) {
             setInviteToken(token);
             setActiveTab('invite');
+        }
+
+        const rToken = params.get('reset_token');
+        if (rToken) {
+            setResetToken(rToken);
+            setActiveTab('reset');
         }
     }, []);
 
@@ -776,6 +919,28 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
                                 <LoginForm
                                     onLoginSuccess={onLoginSuccess}
                                     setError={setError}
+                                    setActiveTab={setActiveTab}
+                                    isLoading={isLoading}
+                                    setIsLoading={setIsLoading}
+                                />
+                            </div>
+                        ) : activeTab === 'forgot' ? (
+                            <div key="forgot" className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                                <ForgotPasswordForm
+                                    setActiveTab={setActiveTab}
+                                    setError={setError}
+                                    setSuccess={setSuccess}
+                                    isLoading={isLoading}
+                                    setIsLoading={setIsLoading}
+                                />
+                            </div>
+                        ) : activeTab === 'reset' ? (
+                            <div key="reset" className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                                <ResetPasswordForm
+                                    token={resetToken}
+                                    setActiveTab={setActiveTab}
+                                    setError={setError}
+                                    setSuccess={setSuccess}
                                     isLoading={isLoading}
                                     setIsLoading={setIsLoading}
                                 />

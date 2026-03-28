@@ -42,6 +42,13 @@ class AcceptInviteRequest(BaseModel):
     password: str
     display_name: Optional[str] = None
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
 # ── Analytics & Querying ──
 
 class QueryRequest(BaseModel):

@@ -117,6 +117,15 @@ def ensure_auth_tables():
                 used       INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id         SERIAL PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
         """
     else:
         ddl = """
@@ -148,6 +157,15 @@ def ensure_auth_tables():
                 role       TEXT NOT NULL DEFAULT 'analyst',
                 token_hash TEXT NOT NULL UNIQUE,
                 invited_by INTEGER,
+                expires_at TEXT NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
                 expires_at TEXT NOT NULL,
                 used       INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
@@ -683,6 +701,66 @@ def change_user_role(org_id: int, target_email: str, new_role: str, requester_em
             return True
 
 
+# ─── Password Reset ───────────────────────────────────────────────────────────
+
+def create_password_reset_token(email: str) -> Optional[str]:
+    """Generates a password reset token for an existing user."""
+    import hashlib
+    email = email.lower().strip()
+    user = get_user_by_email_global(email)
+    if not user:
+        return None
+    
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text("""
+                INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used, created_at)
+                VALUES (:user_id, :token_hash, :expires_at, 0, :now)
+            """), {
+                "user_id": user["id"],
+                "token_hash": token_hash,
+                "expires_at": expires_at,
+                "now": now
+            })
+    return raw
+
+
+def reset_password_with_token(raw_token: str, new_password: str) -> bool:
+    """Validates the reset token and updates the user's password."""
+    import hashlib
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    with admin_engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT user_id FROM password_reset_tokens 
+            WHERE token_hash = :h AND used = 0 AND expires_at > :now
+        """), {"h": token_hash, "now": now}).mappings().first()
+        
+        if not row:
+            return False
+        
+        user_id = row["user_id"]
+        validate_password_strength(new_password)
+        new_hash = hash_password(new_password)
+        
+        with conn.begin():
+            conn.execute(
+                text("UPDATE users SET password_hash = :h WHERE id = :uid"), 
+                {"h": new_hash, "uid": user_id}
+            )
+            conn.execute(
+                text("UPDATE password_reset_tokens SET used = 1 WHERE token_hash = :h"), 
+                {"h": token_hash}
+            )
+    return True
+
+
 # ─── Permission helpers ───────────────────────────────────────────────────────
 
 def get_role_permissions(role: str) -> list[str]:
@@ -789,3 +867,10 @@ class UpdateRoleRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str

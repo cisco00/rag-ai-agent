@@ -1,3 +1,4 @@
+import { api } from '../../lib/api';
 import {
   LayoutDashboard,
   Database,
@@ -98,7 +99,7 @@ export function Sidebar({
             style={{ backgroundColor: primaryColor }}
           >
             {branding.logo_url ? (
-              <img src={branding.logo_url} alt="Logo" className="w-full h-full object-cover" />
+              <img src={api.resolveUrl(branding.logo_url)} alt="Logo" className="w-full h-full object-cover" />
             ) : (
               <TrendingUp size={24} />
             )}

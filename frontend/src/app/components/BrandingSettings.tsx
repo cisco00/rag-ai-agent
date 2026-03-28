@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Palette, Save, Eye, RotateCcw, CheckCircle } from 'lucide-react';
+import { Palette, Save, Eye, RotateCcw, CheckCircle, Upload } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface Branding {
@@ -35,13 +35,35 @@ export function BrandingSettings({ onBrandingChange }: BrandingSettingsProps) {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [logoError, setLogoError] = useState(false);
+    const [uploading, setUploading] = useState(false);
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Call our new backend endpoint
+            const response = await api.post<{ logo_url: string }>('/logo', formData);
+            setForm(f => ({ ...f, logo_url: api.resolveUrl(response.logo_url) }));
+            setLogoError(false);
+        } catch (err: any) {
+            console.error('Logo upload failed:', err);
+            alert(`Logo upload failed: ${err.message || 'Check your internet connection or file format.'}`);
+        } finally {
+            setUploading(false);
+        }
+    };
 
     // Load current branding on mount
     useEffect(() => {
         const fetchBranding = async () => {
             try {
                 const data = await api.get<Branding>('/branding');
-                setForm(data);
+                setForm({ ...data, logo_url: api.resolveUrl(data.logo_url) });
             } catch (err) {
                 console.error('Failed to load branding:', err);
             } finally {
@@ -151,20 +173,33 @@ export function BrandingSettings({ onBrandingChange }: BrandingSettingsProps) {
                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                 Logo URL
                             </label>
-                            <input
-                                type="url"
-                                value={form.logo_url}
-                                onChange={e => { setForm(f => ({ ...f, logo_url: e.target.value })); setLogoError(false); }}
-                                placeholder="https://example.com/logo.png"
-                                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                            />
+                            <div className="flex gap-2">
+                                <input
+                                    type="url"
+                                    value={form.logo_url}
+                                    onChange={e => { setForm(f => ({ ...f, logo_url: e.target.value })); setLogoError(false); }}
+                                    placeholder="https://example.com/logo.png"
+                                    className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                                />
+                                <label className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium text-gray-700 whitespace-nowrap">
+                                    <Upload className="size-4" />
+                                    {uploading ? 'Uploading...' : 'Upload File'}
+                                    <input 
+                                        type="file" 
+                                        className="hidden" 
+                                        accept="image/*" 
+                                        onChange={handleFileChange} 
+                                        disabled={uploading} 
+                                    />
+                                </label>
+                            </div>
                             <p className="text-xs text-gray-400 mt-1">
-                                Link to your logo image (PNG, SVG, or JPEG). Leave blank to show text name instead.
+                                Upload an image or link to your logo (PNG, SVG, or JPEG). Leave blank to show text name instead.
                             </p>
                             {form.logo_url && !logoError && (
                                 <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg inline-flex items-center gap-3">
                                     <img
-                                        src={form.logo_url}
+                                        src={api.resolveUrl(form.logo_url)}
                                         alt="Logo preview"
                                         onError={() => setLogoError(true)}
                                         className="h-10 w-auto object-contain"
@@ -255,7 +290,7 @@ export function BrandingSettings({ onBrandingChange }: BrandingSettingsProps) {
                             >
                                 {form.logo_url && !logoError ? (
                                     <img
-                                        src={form.logo_url}
+                                        src={api.resolveUrl(form.logo_url)}
                                         alt="Logo"
                                         onError={() => setLogoError(true)}
                                         className="h-8 w-auto object-contain mb-1"

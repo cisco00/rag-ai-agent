@@ -353,15 +353,15 @@ uploads_root = os.path.join(backend_dir, "static", "uploads")
 os.makedirs(uploads_root, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(request: Request, full_path: str):
-        file_path = os.path.join(static_dir, full_path)
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            return FileResponse(file_path)
-        index_path = os.path.join(static_dir, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        return {"error": "Frontend not found"}
+@app.get("/{full_path:path}")
+async def serve_spa(request: Request, full_path: str):
+    file_path = os.path.join(static_dir, full_path)
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        return FileResponse(file_path)
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"error": "Frontend not found"}
 
 if __name__ == "__main__":
     import uvicorn

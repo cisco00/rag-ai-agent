@@ -142,8 +142,9 @@ export default function App() {
     if (!isAuthenticated) return;
     api.get<Branding>('/branding')
       .then((data) => {
-        setBranding(data);
-        localStorage.setItem('vantage_branding', JSON.stringify(data));
+        const resolved = { ...data, logo_url: api.resolveUrl(data.logo_url) };
+        setBranding(resolved);
+        localStorage.setItem('vantage_branding', JSON.stringify(resolved));
       })
       .catch(() => { /* keep localStorage fallback */ });
   }, [isAuthenticated]);
@@ -261,10 +262,14 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <div
-                className="size-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+                className="size-8 rounded-lg flex items-center justify-center text-white text-xs font-bold overflow-hidden"
                 style={{ backgroundColor: branding.primary_color }}
               >
-                {branding.org_name.charAt(0)}
+                {branding.logo_url ? (
+                  <img src={api.resolveUrl(branding.logo_url)} alt="Logo" className="w-full h-full object-cover" />
+                ) : (
+                  branding.org_name.charAt(0)
+                )}
               </div>
               <span className="font-bold text-gray-900 truncate max-w-[150px]">{branding.org_name}</span>
             </div>
