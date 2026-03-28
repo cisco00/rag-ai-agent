@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Menu, X } from 'lucide-react';
+import { Menu } from 'lucide-react';
+import { LangfuseWeb } from 'langfuse';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { DatabaseConfig } from './components/DatabaseConfig';
@@ -20,6 +21,11 @@ import { DataProfiler } from './components/DataProfiler';
 import { LandingPage } from './components/LandingPage';
 import { AboutPage } from './components/AboutPage';
 import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
+
+const langfuse = new LangfuseWeb({
+  publicKey: (import.meta as any).env?.VITE_LANGFUSE_PUBLIC_KEY || "pk-lf-vantage-dev",
+  baseUrl: (import.meta as any).env?.VITE_LANGFUSE_HOST || "http://localhost:3000",
+});
 
 /** Decode JWT payload without verifying signature (client-side only) */
 function decodeJwtPayload(token: string): any {
@@ -83,6 +89,14 @@ export default function App() {
     return DEFAULT_BRANDING;
   });
 
+  // Check for invite_token on load and route to AuthPage if necessary
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('invite_token')) {
+      setPublicScreen('auth');
+    }
+  }, []);
+
   const isAuthenticated = !!(apiKey && accessToken);
 
   // Proactively refresh token on startup if it's expired or nearly expired
@@ -133,6 +147,19 @@ export default function App() {
       })
       .catch(() => { /* keep localStorage fallback */ });
   }, [isAuthenticated]);
+
+  // Recover user profile if missing from localStorage on load
+  useEffect(() => {
+    if (!isAuthenticated || user) return;
+    api.get('/auth/me')
+      .then((data) => {
+        setUser(data);
+        localStorage.setItem('vantage_user', JSON.stringify(data));
+      })
+      .catch((err) => {
+        console.error('[App] Failed to recover user profile:', err);
+      });
+  }, [isAuthenticated, user]);
 
   // Poll unseen insights count every 30s
   useEffect(() => {
@@ -270,7 +297,7 @@ export default function App() {
             />
           )}
           {currentView === 'management' && (
-            <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} />
+            <DataManagement apiKey={apiKey!} onConfigured={() => setIsConfigured(true)} user={user} />
           )}
           {currentView === 'import' && (
             <FileImport
@@ -287,6 +314,7 @@ export default function App() {
               apiKey={apiKey!}
               initialQuery={initialQuery || undefined}
               onQueryProcessed={() => setInitialQuery(null)}
+              user={user}
             />
           )}
           {currentView === 'reports' && <Reports apiKey={apiKey!} />}
@@ -296,7 +324,7 @@ export default function App() {
           {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
           {currentView === 'insights' && <Insights />}
           {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
-          {currentView === 'boards' && <DashboardsView apiKey={apiKey!} />}
+          {currentView === 'boards' && <DashboardsView apiKey={apiKey!} user={user} />}
           {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
           {currentView === 'about' && <AboutPage />}
           {currentView === 'branding' && (
@@ -307,6 +335,7 @@ export default function App() {
               onLoginSuccess={() => { }}
               existingKey={apiKey}
               isSettingsMode={true}
+              user={user}
             />
           )}
         </main>

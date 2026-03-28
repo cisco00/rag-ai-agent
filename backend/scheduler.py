@@ -7,7 +7,8 @@ import asyncio
 import os
 
 from models import get_db, ScheduledReport, Organization
-from utils import send_email_mock
+from email_service import send_scheduled_report_email
+from org_context_manager import OrgContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +58,17 @@ def execute_scheduled_report(report_id: int):
                 # AnalyticsAgent.run_query is synchronous
                 result = agent.run_query(report.query)
                 
-                # Format Email Body
-                subject = f"Bi-Weekly Insight: {report.query}"
-                body = f"""
-                Hello,
-                
-                Here is your scheduled analysis for: "{report.query}"
-                
-                Analysis:
-                {result['text']}
-                
-                Generated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-                """
-                
-                # Send Emails
+                # Send styled HTML report emails
                 recipients = report.recipients.split(',')
                 for email in recipients:
                     email = email.strip()
                     if email:
-                        send_email_mock(email, subject, body)
+                        send_scheduled_report_email(
+                            to_email=email,
+                            query=report.query,
+                            analysis=result['text'],
+                            frequency=report.frequency,
+                        )
                 
                 # Update next_run_at
                 if report.frequency == 'daily':
@@ -129,3 +122,65 @@ def refresh_jobs():
             logger.info(f"Loaded {len(reports)} scheduled jobs")
     except Exception as e:
         logger.error(f"Failed to refresh jobs: {e}", exc_info=True)
+
+def run_organizational_learning():
+    """
+    Background job to process pending user corrections across all organizations.
+    This allows the AI to learn from feedback automatically.
+    """
+    logger.info("Running scheduled organizational learning task")
+    try:
+        from main import AnalyticsAgent
+        from config import get_agent_config
+        
+        # Get main event loop for async processing
+        import asyncio
+        import api
+        loop = getattr(api, "_main_loop", None)
+        if not loop:
+             try:
+                 loop = asyncio.get_running_loop()
+             except RuntimeError:
+                 logger.error("Could not get running event loop for organizational learning")
+                 return
+
+        with get_db() as db:
+            orgs = db.query(Organization).all()
+            for org in orgs:
+                try:
+                    # Initialize OrgContextManager
+                    # We need an LLM caller. We'll use a temporary AnalyticsAgent for this.
+                    # This ensures we use the correct LLM provider and token.
+                    context_manager = OrgContextManager(org.id)
+                    
+                    # Define an LLM caller that OrgContextManager can use
+                    async def llm_caller(prompt: str) -> str:
+                        # Use a dedicated AnalyticsAgent to get a configured LLM client
+                        # We don't necessarily need a database connection for just LLM calls,
+                        # but AnalyticsAgent requires it. We'll use the org's connection if available.
+                        with AnalyticsAgent(connection_string=org.db_connection_string) as agent:
+                            response = agent.client.chat_completion(
+                                model=agent.config.model_name,
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            return response.choices[0].message.content
+
+                    context_manager.llm_caller = llm_caller
+                    
+                    # Process corrections async
+                    # We use run_coroutine_threadsafe because APScheduler runs in threads
+                    future = asyncio.run_coroutine_threadsafe(
+                        context_manager.process_pending_corrections(), 
+                        loop
+                    )
+                    # We don't strictly need to wait for the result here if we want it completely backgrounded,
+                    # but waiting (with timeout) lets us log progress.
+                    processed_count = future.result(timeout=60)
+                    if processed_count > 0:
+                        logger.info(f"Org {org.id}: Processed {processed_count} corrections")
+                        
+                except Exception as org_exc:
+                    logger.error(f"Failed learning for org {org.id}: {org_exc}")
+                    
+    except Exception as e:
+        logger.error(f"Error in organizational learning background job: {e}", exc_info=True)

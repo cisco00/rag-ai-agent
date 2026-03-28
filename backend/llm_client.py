@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import json
 import logging
+import os
 from dataclasses import dataclass
 
 # Try imports
@@ -19,6 +20,21 @@ try:
     HAS_HF = True
 except ImportError:
     HAS_HF = False
+
+try:
+    from langfuse import Langfuse
+    HAS_LANGFUSE = True
+except ImportError:
+    HAS_LANGFUSE = False
+
+# Initialize Langfuse
+langfuse = None
+if HAS_LANGFUSE:
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    if public_key and secret_key:
+        langfuse = Langfuse(public_key=public_key, secret_key=secret_key, host=host)
 
 from logging_config import get_logger
 
@@ -81,6 +97,16 @@ class HuggingFaceClientWrapper(LLMClient):
     ) -> CompletionResponse:
         
         # HF InferenceClient uses OpenAI-compatible format directly
+        generation = None
+        if langfuse:
+            generation = langfuse.start_observation(
+                name=f"hf-completion-{model}",
+                as_type="generation",
+                model=model,
+                input=messages,
+                metadata={"provider": "huggingface"}
+            )
+
         response = self.client.chat_completion(
             model=model,
             messages=messages,
@@ -88,6 +114,25 @@ class HuggingFaceClientWrapper(LLMClient):
             tool_choice=tool_choice,
             max_tokens=max_tokens
         )
+        
+        if generation:
+            # Ensure response message is serializable
+            msg = response.choices[0].message
+            output_data = {
+                "role": msg.role,
+                "content": msg.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in (msg.tool_calls or [])
+                ]
+            }
+            generation.update(output=output_data)
+            generation.end()
         
         # Convert to our standardized object (which mimics OpenAI/HF anyway)
         # But explicitly mapping ensures safety if underlying lib changes
@@ -286,34 +331,97 @@ class GoogleGeminiClient(LLMClient):
         
         # Generate
         # We need to send the last content
-        response = chat.send_message(last_msg["parts"])
+        generation = None
+        if langfuse:
+            generation = langfuse.start_observation(
+                name=f"google-completion-{model}",
+                as_type="generation",
+                model=model,
+                input=messages,
+                metadata={"provider": "google"}
+            )
         
+        import time
+        from google.api_core import exceptions as google_exceptions
+
+        retry_count = 0
+        max_retries = 3
+        backoff_factor = 2
+
+        response = None
+        while retry_count <= max_retries:
+            try:
+                response = chat.send_message(last_msg["parts"])
+                break # Break loop on success
+
+            except google_exceptions.ResourceExhausted as e:
+                retry_count += 1
+                if retry_count > max_retries:
+                    logger.error(f"Gemini API rate limit exceeded after {max_retries} retries: {e}")
+                    from exceptions import ModelAPIError
+                    raise ModelAPIError(f"Rate limit exceeded (429): {str(e)}")
+                
+                wait_time = backoff_factor ** retry_count
+                logger.warning(f"Gemini API rate limit (429) hit. Retrying in {wait_time}s... (Attempt {retry_count}/{max_retries})")
+                time.sleep(wait_time)
+
+            except Exception as e:
+                logger.error(f"Gemini API error: {e}")
+                from exceptions import ModelAPIError
+                raise ModelAPIError(str(e))
+        
+        if response is None:
+            raise RuntimeError("Failed to get a response from Gemini API after retries.")
+
         # Parse response
         # Gemini response structure: response.candidates[0].content.parts
         
         content_text = ""
         tool_calls = []
         
-        for part in response.parts:
+        # Extract parts to convert to serializable format
+        raw_parts = []
+        try:
+             # response.parts can fail if there's an error in the response
+             raw_parts = list(response.parts)
+        except Exception as e:
+             logger.error(f"Error accessing response parts: {e}")
+
+        for part in raw_parts:
             if part.text:
                 content_text += part.text
             if part.function_call:
                 # Convert args to JSON string to match OpenAI/HF format
-                # function_call.args is a MapComposite, which behaves like a dict
                 try:
-                    # Direct dict conversion works for MapComposite
                     args_dict = dict(part.function_call.args)
                 except Exception:
-                     # Fallback if direct dict conversion fails (unlikely)
-                     args_dict = {}
+                    args_dict = {}
                      
                 tool_calls.append(ToolCall(
-                    id="call_" + part.function_call.name, # Gemini doesn't give ID, generate one
+                    id="call_" + part.function_call.name, 
                     function=ToolCallFunction(
                         name=part.function_call.name,
                         arguments=json.dumps(clean_proto_data(args_dict))
                     )
                 ))
+
+        if generation:
+            # Convert Gemini response to serializable dict
+            output_data = {
+                "role": "assistant",
+                "content": content_text,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in tool_calls
+                ]
+            }
+            generation.update(output=output_data)
+            generation.end()
         
         return CompletionResponse(choices=[
             CompletionChoice(message=Message(

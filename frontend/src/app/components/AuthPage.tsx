@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
     Building2, CheckCircle, Copy, AlertCircle, Mail, Lock,
     User, UserPlus, LogIn, ArrowRight, TrendingUp, Sparkles,
-    ShieldCheck, Globe, Zap
+    ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -28,6 +28,7 @@ interface InviteAcceptFormProps {
     setInviteToken: (val: string) => void;
     setActiveTab: (val: 'login' | 'register' | 'invite') => void;
     setError: (err: string | null) => void;
+    setSuccess: (msg: string | null) => void;
     isLoading: boolean;
     setIsLoading: (val: boolean) => void;
 }
@@ -75,7 +76,7 @@ function LoginForm({ onLoginSuccess, setError, isLoading, setIsLoading }: LoginF
                 authRes.api_key,
                 authRes.access_token,
                 authRes.refresh_token,
-                authRes.user
+                authRes.user || authRes
             );
         } catch (err: any) {
             setError(err.message || 'Login failed');
@@ -157,7 +158,7 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
 
             localStorage.setItem('vantage_access_token', authRes.access_token);
             localStorage.setItem('vantage_refresh_token', authRes.refresh_token);
-            localStorage.setItem('vantage_user', JSON.stringify(authRes.user));
+            localStorage.setItem('vantage_user', JSON.stringify(authRes.user || authRes));
 
             setStep(2); // Success step
         } catch (err: any) {
@@ -233,7 +234,7 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
     );
 }
 
-function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError, isLoading, setIsLoading }: InviteAcceptFormProps) {
+function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError, setSuccess, isLoading, setIsLoading }: InviteAcceptFormProps) {
     const [invitePassword, setInvitePassword] = useState('');
     const [inviteDisplayName, setInviteDisplayName] = useState('');
 
@@ -253,7 +254,7 @@ function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError,
                 display_name: inviteDisplayName
             });
 
-            setError("Invitation accepted! Please login.");
+            setSuccess("Invitation accepted! Please login.");
             setActiveTab('login');
         } catch (err: any) {
             setError(err.message || 'Failed to accept invitation');
@@ -317,13 +318,15 @@ function InviteAcceptForm({ inviteToken, setInviteToken, setActiveTab, setError,
 
 interface AuthPageProps {
     onLoginSuccess: (apiKey: string, accessToken: string, refreshToken: string, user: any) => void;
-    existingKey?: string;
     isSettingsMode?: boolean;
+    user?: { permissions?: string[]; role?: string; email?: string };
+    existingKey?: string | null;
 }
-
-export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPageProps) {
+export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existingKey }: AuthPageProps) {
+    const hasManageUsers = (Array.isArray(user?.permissions) && user.permissions.includes('MANAGE_USERS')) || 
+                           (user?.role === 'owner' || user?.role === 'admin');
     const [activeTab, setActiveTab] = useState<'login' | 'register' | 'invite'>(
-        isSettingsMode ? 'invite' : (existingKey ? 'login' : 'register')
+        isSettingsMode ? 'invite' : 'register'
     );
     const [step, setStep] = useState(1); // For registration wizard
 
@@ -335,6 +338,9 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
     const [generatedInviteLink, setGeneratedInviteLink] = useState<string | null>(null);
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
+    const [inviteStatuses, setInviteStatuses] = useState<any[]>([]);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
 
     const [inviteToken, setInviteToken] = useState('');
 
@@ -347,12 +353,81 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
         }
     }, []);
 
+    useEffect(() => {
+        if (isSettingsMode) {
+            fetchInviteStatuses();
+        }
+    }, [isSettingsMode]);
+
+    const fetchInviteStatuses = async () => {
+        console.log('[AuthPage] Fetching invite statuses...');
+        try {
+            const res = await api.get<any[]>('/auth/invite/status');
+            console.log('[AuthPage] Statuses fetched:', res.length);
+            setInviteStatuses(res);
+        } catch (err) {
+            console.error('[AuthPage] Failed to fetch invite statuses', err);
+        }
+    };
+
+    const handleRemoveUser = async (email: string, isPending: boolean) => {
+        if (!window.confirm(`Are you sure you want to ${isPending ? 'revoke this invite' : 'remove this user'}?`)) {
+            return;
+        }
+        setActionLoading(email);
+        try {
+            const endpoint = isPending ? `/auth/invite/${email}` : `/auth/users/${email}`;
+            await api.delete(endpoint);
+            setSuccess(isPending ? 'Invite revoked successfully' : 'User removed successfully');
+            fetchInviteStatuses();
+        } catch (err: any) {
+            setError(err.message || 'Failed to remove user');
+        } finally {
+            setActionLoading(null);
+            setTimeout(() => setSuccess(null), 3000);
+        }
+    };
+
+    const handleChangeRole = async (email: string, currentRole: string, newRole: string) => {
+        if (currentRole === newRole) return;
+        if (newRole === 'owner') {
+            if (!window.confirm('WARNING: Making this user the Owner will demote you to Admin. You will lose owner privileges. Are you sure you want to hand over ownership?')) {
+                return;
+            }
+        } else {
+             if (!window.confirm(`Are you sure you want to change this user's role to ${newRole.replace('_', ' ')}?`)) {
+                return;
+             }
+        }
+        setActionLoading(email);
+        try {
+            await api.put(`/auth/users/${email}/role`, { role: newRole });
+            setSuccess('Role updated successfully');
+            
+            if (newRole === 'owner') {
+                // We demoted ourselves! Update local storage user context and refresh page 
+                const currentUser = JSON.parse(localStorage.getItem('vantage_user') || '{}');
+                currentUser.role = 'admin';
+                localStorage.setItem('vantage_user', JSON.stringify(currentUser));
+                window.location.reload();
+            } else {
+                fetchInviteStatuses();
+            }
+        } catch (err: any) {
+            setError(err.message || 'Failed to change role');
+        } finally {
+            setActionLoading(null);
+            setTimeout(() => setSuccess(null), 3000);
+        }
+    };
+
     const handleSendInvite = async () => {
         if (!inviteEmail.trim()) {
             setError('Email is required.');
             return;
         }
 
+        console.log('[AuthPage] Generating invite for:', inviteEmail);
         setIsLoading(true);
         setError(null);
         setSendInviteMessage(null);
@@ -368,6 +443,7 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
             setGeneratedInviteLink(link);
             setSendInviteMessage(`Invitation generated for ${inviteEmail}`);
             setInviteEmail('');
+            fetchInviteStatuses();
         } catch (err: any) {
             setError(err.message || 'Failed to generate invitation');
         } finally {
@@ -385,8 +461,23 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
     };
 
     if (isSettingsMode) {
+        if (!hasManageUsers) {
+            return (
+                <div className="space-y-8 animate-in fade-in duration-700">
+                    <div className="flex items-center gap-4">
+                        <div className="p-4 bg-gradient-to-br from-red-500 to-rose-600 text-white rounded-2xl shadow-lg shadow-red-500/20">
+                            <Lock size={24} />
+                        </div>
+                        <div>
+                            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Access Denied</h2>
+                            <p className="text-slate-500 text-sm font-medium">You do not have permission to manage users.</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
         return (
-            <div className="space-y-8 animate-in fade-in duration-700">
+            <div className="max-w-4xl mx-auto py-12 px-6 md:px-12 space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
                 <div className="flex items-center gap-4">
                     <div className="p-4 bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-2xl shadow-lg shadow-blue-500/20">
                         <UserPlus size={24} />
@@ -398,6 +489,18 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                 </div>
 
                 <div className="bg-white/70 backdrop-blur-md rounded-[1.5rem] md:rounded-[2rem] p-5 md:p-8 border border-slate-200/50 shadow-xl shadow-slate-200/20 space-y-6">
+                    {error && (
+                        <div className="flex items-start gap-3 text-red-600 bg-red-50/80 backdrop-blur-sm p-4 rounded-2xl text-[13px] border border-red-100 animate-in fade-in slide-in-from-top-4 duration-500">
+                            <AlertCircle className="size-5 shrink-0" />
+                            <span className="font-semibold leading-relaxed">{error}</span>
+                        </div>
+                    )}
+                    {success && (
+              <div className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-4 py-3 rounded-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+                <CheckCircle size={20} className="shrink-0" />
+                <p className="text-sm font-medium">{success}</p>
+              </div>
+            )}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                         <InputField
                             icon={Mail}
@@ -417,6 +520,9 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                             >
                                 <option value="analyst">Analyst</option>
                                 <option value="admin">Admin</option>
+                                <option value="business_owner">Business Owner</option>
+                                <option value="product_manager">Product Manager</option>
+                                <option value="operation_manager">Operations Manager</option>
                                 <option value="viewer">Viewer</option>
                             </select>
                         </div>
@@ -428,36 +534,126 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                         className="w-full py-4 bg-slate-900 hover:bg-black text-white rounded-2xl font-bold shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 flex items-center justify-center gap-2 active:scale-[0.98]"
                     >
                         {isLoading ? <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-white" /> : <Zap size={18} />}
-                        {isLoading ? 'Generating...' : 'Create Invitation Link'}
+                        Send Invitation Link
                     </button>
 
-                    {(error || sendInviteMessage) && (
-                        <div className={`p-4 rounded-2xl text-sm font-medium border animate-in zoom-in-95 ${error ? 'bg-red-50 text-red-600 border-red-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'
-                            }`}>
-                            {error || sendInviteMessage}
+                    {sendInviteMessage && (
+                        <div className="p-4 bg-emerald-50 text-emerald-700 rounded-xl flex items-center justify-between shadow-inner border border-emerald-100/50">
+                            <div className="flex items-center gap-3">
+                                <CheckCircle className="size-5 text-emerald-500" />
+                                <span className="font-semibold">{sendInviteMessage}</span>
+                            </div>
                         </div>
                     )}
 
                     {generatedInviteLink && (
-                        <div className="space-y-3 animate-in slide-in-from-bottom-4 duration-500">
-                            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1">Shareable Link</label>
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 shadow-inner">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                <LinkIcon size={14} />
+                                Shareable Invite Link
+                            </label>
                             <div className="flex gap-2">
                                 <input
-                                    type="text"
-                                    value={generatedInviteLink}
                                     readOnly
-                                    className="flex-1 px-4 py-3 bg-blue-50/50 border border-blue-100 rounded-xl font-mono text-[10px] text-blue-700 outline-none"
+                                    value={generatedInviteLink}
+                                    className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 font-mono outline-none shadow-sm"
+                                    onClick={(e) => (e.target as HTMLInputElement).select()}
                                 />
                                 <button
-                                    onClick={() => {
-                                        navigator.clipboard.writeText(generatedInviteLink);
-                                        setCopied(true);
-                                        setTimeout(() => setCopied(false), 2000);
+                                    onClick={async () => {
+                                        try {
+                                            await navigator.clipboard.writeText(generatedInviteLink);
+                                            const btn = document.getElementById('copy-btn');
+                                            if (btn) {
+                                                const original = btn.innerText;
+                                                btn.innerText = 'Copied!';
+                                                setTimeout(() => btn.innerText = original, 2000);
+                                            }
+                                        } catch (e) {
+                                            console.warn('Clipboard failed:', e);
+                                        }
                                     }}
-                                    className="px-4 bg-white border border-slate-200 rounded-xl text-slate-600 hover:text-blue-600 hover:border-blue-200 transition-all shadow-sm"
+                                    id="copy-btn"
+                                    className="px-4 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-sm transition-colors cursor-pointer"
                                 >
-                                    {copied ? <CheckCircle className="size-5 text-emerald-500" /> : <Copy className="size-5" />}
+                                    Copy
                                 </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {inviteStatuses.length > 0 && (
+                        <div className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Invitation Status</h3>
+                                <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-bold">
+                                    {inviteStatuses.length} TOTAL
+                                </span>
+                            </div>
+                            <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                                {inviteStatuses.map((status, idx) => (
+                                    <div key={idx} className="flex items-center justify-between p-3 bg-slate-50/50 rounded-xl border border-slate-100/50 group hover:bg-white hover:shadow-sm transition-all">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`p-2 rounded-lg ${
+                                                status.status === 'accepted' ? 'bg-emerald-50 text-emerald-500' :
+                                                status.status === 'expired' ? 'bg-rose-50 text-rose-500' :
+                                                'bg-amber-50 text-amber-500'
+                                            }`}>
+                                                {status.status === 'accepted' ? <CheckCircle size={16} /> : 
+                                                 status.status === 'expired' ? <AlertCircle size={16} /> :
+                                                 <Mail size={16} />}
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-slate-700 leading-none mb-1">{status.email}</p>
+                                                <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+                                                {(status.role || 'analyst').replace('_', ' ')} • {status.status === 'accepted' ? (status.display_name || status.email.split('@')[0]) : status.status}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            {/* Role Select */}
+                                            {hasManageUsers && status.email !== user?.email && status.status === 'accepted' && (
+                                                <select 
+                                                    value={status.role || 'viewer'}
+                                                    onChange={(e) => handleChangeRole(status.email, status.role, e.target.value)}
+                                                    disabled={actionLoading === status.email || (user?.role !== 'owner' && status.role === 'owner')}
+                                                    className="text-xs bg-white border border-slate-200 rounded px-2 py-1 outline-none font-medium text-slate-600 focus:border-blue-400 disabled:opacity-50 cursor-pointer"
+                                                >
+                                                    <option value="viewer">Viewer</option>
+                                                    <option value="analyst">Analyst</option>
+                                                    <option value="operation_manager">Operations Manager</option>
+                                                    <option value="product_manager">Product Manager</option>
+                                                    <option value="business_owner">Business Owner</option>
+                                                    <option value="marketing_team">Marketing Team</option>
+                                                    <option value="sales_team">Sales Team</option>
+                                                    <option value="admin">Admin</option>
+                                                    {user?.role === 'owner' && <option value="owner">Owner</option>}
+                                                </select>
+                                            )}
+
+                                            {status.last_login && (
+                                                <div className="text-right hidden sm:block">
+                                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Last Login</p>
+                                                    <p className="text-[10px] text-slate-500 font-semibold italic">
+                                                        {new Date(status.last_login).toLocaleDateString()}
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            {/* Remove Button */}
+                                            {hasManageUsers && status.email !== user?.email && (user?.role === 'owner' || status.role !== 'owner') && (
+                                                <button
+                                                    onClick={() => handleRemoveUser(status.email, status.status !== 'accepted')}
+                                                    disabled={actionLoading === status.email}
+                                                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                                                    title={status.status === 'accepted' ? "Remove User" : "Revoke Invite"}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}
@@ -591,6 +787,7 @@ export function AuthPage({ onLoginSuccess, existingKey, isSettingsMode }: AuthPa
                                     setInviteToken={setInviteToken}
                                     setActiveTab={setActiveTab}
                                     setError={setError}
+                                    setSuccess={setSuccess}
                                     isLoading={isLoading}
                                     setIsLoading={setIsLoading}
                                 />

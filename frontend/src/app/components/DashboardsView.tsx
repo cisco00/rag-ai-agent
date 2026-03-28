@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw, X, Pin, Globe, EyeOff, FileText } from 'lucide-react';
+import { LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw, X, Pin, Globe, EyeOff, FileText, Users } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 
-interface Dashboard { id: number; name: string; description?: string; is_public: number; share_token?: string; created_at: string; updated_at: string; }
+interface Dashboard { id: number; name: string; description?: string; is_public: number; share_token?: string; created_at: string; updated_at: string; created_by: number; is_shared: number; role_id: string; }
 interface Card { id: number; dashboard_id: number; org_id: number; title?: string; query_text?: string; response_text?: string; visualization?: any; card_type: string; layout_x: number; layout_y: number; layout_w: number; layout_h: number; }
 
 /** Safely parse visualization — the backend may store it as a JSON string */
@@ -19,14 +19,20 @@ function isValidViz(viz: any): boolean {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
+export function DashboardsView({ apiKey: _apiKey, user }: { apiKey: string, user?: { permissions?: string[], id?: number, role?: string } }) {
+    const hasManageDashboards = Array.isArray(user?.permissions) && user.permissions.includes('MANAGE_DASHBOARDS');
     const [dashboards, setDashboards] = useState<Dashboard[]>([]);
     const [selected, setSelected] = useState<Dashboard | null>(null);
     const [cards, setCards] = useState<Card[]>([]);
     const [showCreate, setShowCreate] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [form, setForm] = useState({ name: '', description: '' });
+    const [form, setForm] = useState({ name: '', description: '', is_shared: false, role_id: user?.role || 'analyst' });
     const [shareUrl, setShareUrl] = useState<string | null>(null);
+
+    const ROLES = [
+        "owner", "admin", "business_owner", "product_manager",
+        "operation_manager", "analyst", "sales_team", "marketing_team", "viewer",
+    ];
 
     const fetchDashboards = async () => {
         try { const d = await api.get<{ dashboards: Dashboard[] }>('/dashboards'); setDashboards(d.dashboards || []); }
@@ -46,8 +52,11 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
         if (!form.name.trim()) return;
         setLoading(true);
         try {
-            await api.post('/dashboards', form);
-            setShowCreate(false); setForm({ name: '', description: '' });
+            await api.post('/dashboards', {
+                ...form,
+                is_shared: form.is_shared ? 1 : 0
+            });
+            setShowCreate(false); setForm({ name: '', description: '', is_shared: false, role_id: user?.role || 'analyst' });
             fetchDashboards();
         } catch (e: any) { alert(e.message || 'Failed to create dashboard'); }
         setLoading(false);
@@ -88,9 +97,11 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
                         <LayoutDashboard className="size-5 text-blue-600" />
                         <h2 className="font-semibold text-gray-900">Dashboards</h2>
                     </div>
-                    <button onClick={() => setShowCreate(true)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg">
-                        <Plus className="size-4" />
-                    </button>
+                    {hasManageDashboards && (
+                        <button onClick={() => setShowCreate(true)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg">
+                            <Plus className="size-4" />
+                        </button>
+                    )}
                 </div>
 
                 {showCreate && (
@@ -98,7 +109,25 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
                         <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                             placeholder="Dashboard name" className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mb-2 focus:ring-2 focus:ring-blue-500" />
                         <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                            placeholder="Description (optional)" className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mb-2" />
+                            placeholder="Description (optional)" className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mb-3" />
+                        <div className="flex items-center gap-2 mb-2">
+                            <input type="checkbox" id="is_shared" checked={form.is_shared} onChange={e => setForm(f => ({ ...f, is_shared: e.target.checked }))} className="rounded text-blue-600 focus:ring-blue-500 size-4" />
+                            <label htmlFor="is_shared" className="text-sm text-gray-700 font-medium">Share with role</label>
+                        </div>
+
+                        {(user?.role === 'admin' || user?.role === 'owner') && (
+                            <div className="mb-3">
+                                <label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Target Role</label>
+                                <select 
+                                    value={form.role_id} 
+                                    onChange={e => setForm(f => ({ ...f, role_id: e.target.value }))}
+                                    className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500"
+                                >
+                                    {ROLES.map(r => <option key={r} value={r}>{r.replace('_', ' ')}</option>)}
+                                </select>
+                            </div>
+                        )}
+
                         <div className="flex gap-2">
                             <button onClick={handleCreate} disabled={loading || !form.name}
                                 className="flex-1 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
@@ -116,10 +145,13 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
                             className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors group ${selected?.id === d.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}>
                             <div className="flex items-center justify-between">
                                 <span className="text-sm font-medium truncate">{d.name}</span>
-                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                                    {d.is_public ? <Globe className="size-3 text-green-600" /> : null}
-                                    <button onClick={e => { e.stopPropagation(); handleDelete(d.id); }}
-                                        className="p-0.5 text-red-500 hover:bg-red-50 rounded"><Trash2 className="size-3" /></button>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {d.is_shared ? <span title="Shared with role"><Users className="size-3 text-blue-600 mr-1" /></span> : null}
+                                    {d.is_public ? <span title="Publicly shared"><Globe className="size-3 text-green-600 mr-1" /></span> : null}
+                                    {hasManageDashboards && d.created_by === user?.id && (
+                                        <button onClick={e => { e.stopPropagation(); handleDelete(d.id); }}
+                                            className="p-0.5 text-red-500 hover:bg-red-50 rounded" title="Delete dashboard"><Trash2 className="size-3.5" /></button>
+                                    )}
                                 </div>
                             </div>
                             {d.description && <p className="text-xs text-gray-400 truncate mt-0.5">{d.description}</p>}
@@ -150,10 +182,12 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
                                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-white text-gray-600">
                                     <RefreshCw className="size-3.5" />Refresh
                                 </button>
-                                <button onClick={() => handlePublish(selected.id, selected.is_public)}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${selected.is_public ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                                    {selected.is_public ? <><EyeOff className="size-4" />Unpublish</> : <><Globe className="size-4" />Publish</>}
-                                </button>
+                                {hasManageDashboards && selected.created_by === user?.id && (
+                                    <button onClick={() => handlePublish(selected.id, selected.is_public)}
+                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${selected.is_public ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+                                        {selected.is_public ? <><EyeOff className="size-4" />Unpublish</> : <><Globe className="size-4" />Publish</>}
+                                    </button>
+                                )}
                             </div>
                         </div>
 
@@ -202,10 +236,12 @@ export function DashboardsView({ apiKey: _apiKey }: { apiKey: string }) {
                                                         className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
                                                         <RefreshCw className="size-3.5" />
                                                     </button>
-                                                    <button onClick={() => handleRemoveCard(card.id)} title="Remove"
-                                                        className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors">
-                                                        <X className="size-3.5" />
-                                                    </button>
+                                                    {hasManageDashboards && selected.created_by === user?.id && (
+                                                        <button onClick={() => handleRemoveCard(card.id)} title="Remove"
+                                                            className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg transition-colors">
+                                                            <X className="size-3.5" />
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
 

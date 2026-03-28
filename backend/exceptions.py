@@ -129,7 +129,10 @@ class ModelAPIError(AgentError):
     
     def __init__(self, message: str, model_name: str = None):
         self.model_name = model_name
-        super().__init__(message)
+        user_msg = "The AI service is temporarily unavailable or at its limit. Please try again in 30-60 seconds."
+        if "402" in str(message):
+            user_msg = "The AI provider's usage limit has been reached. Please upgrade your plan or check quota."
+        super().__init__(message, user_message=user_msg)
 
 
 class MaxIterationsError(AgentError):
@@ -138,8 +141,8 @@ class MaxIterationsError(AgentError):
     def __init__(self, max_iterations: int):
         self.max_iterations = max_iterations
         super().__init__(
-            f"Agent reached maximum iterations ({max_iterations}) "
-            "without completing the query"
+            f"Agent reached maximum iterations ({max_iterations}) without completing the query",
+            user_message="The analysis is taking too many steps. Try breaking your question into smaller, more specific parts."
         )
 
 

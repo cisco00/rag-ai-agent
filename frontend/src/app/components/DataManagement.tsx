@@ -5,9 +5,12 @@ import { api } from '../../lib/api';
 interface DataManagementProps {
     apiKey: string;
     onConfigured?: () => void;
+    user?: { permissions?: string[] };
 }
 
-export function DataManagement({ apiKey, onConfigured }: DataManagementProps) {
+export function DataManagement({ apiKey, onConfigured, user }: DataManagementProps) {
+    const hasMutatePerm = Array.isArray(user?.permissions) && user.permissions.includes('MUTATE_TABLES');
+
     const [tables, setTables] = useState<string[]>([]);
     const [selectedTable, setSelectedTable] = useState<string>('');
     const [tableData, setTableData] = useState<any>(null);
@@ -206,33 +209,35 @@ export function DataManagement({ apiKey, onConfigured }: DataManagementProps) {
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2 md:gap-3">
-                            <button
-                                onClick={() => setShowFillModal(true)}
-                                className="flex items-center gap-2 px-3 md:px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors text-xs md:text-sm font-medium border border-indigo-100"
-                            >
-                                <Zap className="size-4" />
-                                <span className="hidden sm:inline">Fill Missing</span>
-                                <span className="sm:hidden">Fill</span>
-                            </button>
-                            <button
-                                onClick={handleDuplicate}
-                                disabled={isLoading}
-                                className="flex items-center gap-2 px-3 md:px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs md:text-sm font-medium border border-emerald-100"
-                            >
-                                <Copy className="size-4" />
-                                <span className="hidden sm:inline">Duplicate Table</span>
-                                <span className="sm:hidden">Duplicate</span>
-                            </button>
-                            <button
-                                onClick={handleDelete}
-                                disabled={isLoading}
-                                className="flex items-center gap-2 px-3 md:px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-xs md:text-sm font-medium border border-red-100"
-                            >
-                                <Trash2 className="size-4" />
-                                Delete
-                            </button>
-                        </div>
+                        {hasMutatePerm && (
+                            <div className="flex flex-wrap gap-2 md:gap-3">
+                                <button
+                                    onClick={() => setShowFillModal(true)}
+                                    className="flex items-center gap-2 px-3 md:px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 transition-colors text-xs md:text-sm font-medium border border-indigo-100"
+                                >
+                                    <Zap className="size-4" />
+                                    <span className="hidden sm:inline">Fill Missing</span>
+                                    <span className="sm:hidden">Fill</span>
+                                </button>
+                                <button
+                                    onClick={handleDuplicate}
+                                    disabled={isLoading}
+                                    className="flex items-center gap-2 px-3 md:px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-xs md:text-sm font-medium border border-emerald-100"
+                                >
+                                    <Copy className="size-4" />
+                                    <span className="hidden sm:inline">Duplicate Table</span>
+                                    <span className="sm:hidden">Duplicate</span>
+                                </button>
+                                <button
+                                    onClick={handleDelete}
+                                    disabled={isLoading}
+                                    className="flex items-center gap-2 px-3 md:px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-xs md:text-sm font-medium border border-red-100"
+                                >
+                                    <Trash2 className="size-4" />
+                                    Delete
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden relative">
@@ -284,7 +289,7 @@ export function DataManagement({ apiKey, onConfigured }: DataManagementProps) {
                                                                     <span className="truncate max-w-[200px]">
                                                                         {row[col.name] !== null ? String(row[col.name]) : <em className="text-gray-400">null</em>}
                                                                     </span>
-                                                                    {row._id && (
+                                                                    {row._id && hasMutatePerm && (
                                                                         <button
                                                                             onClick={() => {
                                                                                 setEditingCell({ rowId, column: col.name });

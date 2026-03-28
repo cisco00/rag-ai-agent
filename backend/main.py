@@ -457,7 +457,7 @@ class QueryProcessor:
     def _execute_tool(self, tool_call, verify_only: bool, parsed_args: dict) -> Any:
         fn = tool_call.function.name
 
-        logger.info(f"Executing tool: {fn}", extra={"args": str(parsed_args)[:100]})
+        logger.info(f"Executing tool: {fn}", extra={"tool_args": str(parsed_args)[:100]})
 
         if fn not in self.tool_map:
             raise ToolExecutionError(fn, "Tool not found")
@@ -676,21 +676,23 @@ class AnalyticsAgent:
 
         except AgentError as exc:
             logger.error(f"AgentError: {exc}", exc_info=True)
+            # Extract the user-friendly message if available
+            error_text = getattr(exc, "user_message", f"Error processing query: {str(exc)}")
             return {
-                "text":                 f"Error processing query: {exc}",
+                "text":                 error_text,
                 "visualization":        None,
                 "status":               "error",
                 "confidence":           0.0,
-                "confidence_reasoning": "Agent error — could not complete.",
+                "confidence_reasoning": f"Agent error: {str(exc)}",
             }
         except Exception as exc:
             logger.error(f"Unexpected error: {exc}", exc_info=True)
             return {
-                "text":                 f"An unexpected error occurred: {exc}",
+                "text":                 "I encountered an unexpected issue while processing your request. Please try rephrasing or contact support if it persists.",
                 "visualization":        None,
                 "status":               "error",
                 "confidence":           0.0,
-                "confidence_reasoning": "Unexpected error.",
+                "confidence_reasoning": f"Unexpected error: {str(exc)}",
             }
 
     def _run_confirmed_sql(

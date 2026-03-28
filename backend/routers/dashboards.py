@@ -6,7 +6,8 @@ from typing import List
 import os
 from fastapi import APIRouter, Depends, HTTPException
 
-from dependencies import get_current_org, get_org_connection_string
+from auth import get_current_user
+from dependencies import get_current_org, get_org_connection_string, require_permission
 from dashboards import (
     get_dashboards, create_dashboard, get_dashboard, get_cards,
     update_dashboard, delete_dashboard, publish_dashboard, unpublish_dashboard,
@@ -20,19 +21,24 @@ router = APIRouter()
 # ── Routes ──
 
 @router.get("/dashboards")
-async def list_dashboards(org=Depends(get_current_org)):
-    return {"dashboards": get_dashboards(org.id)}
+async def list_dashboards(org=Depends(get_current_org), user: dict = Depends(get_current_user)):
+    return {"dashboards": get_dashboards(org.id, user_id=user["id"], role_id=user["role"])}
 
 
 @router.post("/dashboards")
-async def create_new_dashboard(request: DashboardRequest, org=Depends(get_current_org)):
-    dash = create_dashboard(org.id, request.name, request.description)
+async def create_new_dashboard(request: DashboardRequest, org=Depends(get_current_org),
+                               user=Depends(require_permission("MANAGE_DASHBOARDS"))):
+    role_id = request.role_id if request.role_id else user["role"]
+    dash = create_dashboard(
+        org.id, request.name, request.description,
+        created_by=user["id"], role_id=role_id, is_shared=request.is_shared
+    )
     return {"status": "success", "dashboard": dash}
 
 
 @router.get("/dashboards/{dashboard_id}")
-async def get_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
-    dash = get_dashboard(dashboard_id, org.id)
+async def get_one_dashboard(dashboard_id: int, org=Depends(get_current_org), user: dict = Depends(get_current_user)):
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
     if not dash:
         raise HTTPException(status_code=404, detail="Dashboard not found.")
     cards = get_cards(dashboard_id, org.id)
@@ -41,36 +47,40 @@ async def get_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
 
 @router.patch("/dashboards/{dashboard_id}")
 async def update_one_dashboard(
-    dashboard_id: int, request: DashboardRequest, org=Depends(get_current_org)
+    dashboard_id: int, request: DashboardRequest, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
 ):
-    if not get_dashboard(dashboard_id, org.id):
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
         raise HTTPException(status_code=404, detail="Dashboard not found.")
-    dash = update_dashboard(dashboard_id, org.id, request.model_dump(exclude_unset=True))
+    dash = update_dashboard(dashboard_id, org.id, request.model_dump(exclude_unset=True), user_id=user["id"])
     return {"status": "success", "dashboard": dash}
 
 
 @router.delete("/dashboards/{dashboard_id}")
-async def delete_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
-    if not get_dashboard(dashboard_id, org.id):
+async def delete_one_dashboard(dashboard_id: int, org=Depends(get_current_org),
+                               user=Depends(require_permission("MANAGE_DASHBOARDS"))):
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
         raise HTTPException(status_code=404, detail="Dashboard not found.")
-    delete_dashboard(dashboard_id, org.id)
+    delete_dashboard(dashboard_id, org.id, user_id=user["id"])
     return {"status": "success"}
 
 
 @router.post("/dashboards/{dashboard_id}/publish")
-async def publish_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
-    if not get_dashboard(dashboard_id, org.id):
+async def publish_one_dashboard(dashboard_id: int, org=Depends(get_current_org),
+                                user=Depends(require_permission("MANAGE_DASHBOARDS"))):
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
         raise HTTPException(status_code=404, detail="Dashboard not found.")
-    token    = publish_dashboard(dashboard_id, org.id)
+    token    = publish_dashboard(dashboard_id, org.id, user_id=user["id"])
     base_url = os.getenv("APP_URL", "http://localhost:5173")
     return {"status": "success", "share_url": f"{base_url}/dashboards/shared/{token}"}
 
 
 @router.post("/dashboards/{dashboard_id}/unpublish")
-async def unpublish_one_dashboard(dashboard_id: int, org=Depends(get_current_org)):
-    if not get_dashboard(dashboard_id, org.id):
+async def unpublish_one_dashboard(dashboard_id: int, org=Depends(get_current_org),
+                                  user=Depends(require_permission("MANAGE_DASHBOARDS"))):
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
         raise HTTPException(status_code=404, detail="Dashboard not found.")
-    unpublish_dashboard(dashboard_id, org.id)
+    unpublish_dashboard(dashboard_id, org.id, user_id=user["id"])
     return {"status": "success"}
 
 
@@ -85,10 +95,14 @@ async def view_shared_dashboard(token: str):
 
 @router.post("/dashboards/{dashboard_id}/cards")
 async def add_dashboard_card(
-    dashboard_id: int, request: CardRequest, org=Depends(get_current_org)
+    dashboard_id: int, request: CardRequest, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
 ):
-    if not get_dashboard(dashboard_id, org.id):
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
+    if not dash:
         raise HTTPException(status_code=404, detail="Dashboard not found.")
+    if dash.get("created_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can modify cards.")
     card = add_card(dashboard_id, org.id, request.model_dump())
     return {"status": "success", "card": card}
 
@@ -96,8 +110,12 @@ async def add_dashboard_card(
 @router.patch("/dashboards/{dashboard_id}/cards/{card_id}")
 async def update_dashboard_card(
     dashboard_id: int, card_id: int,
-    request: CardRequest, org=Depends(get_current_org)
+    request: CardRequest, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
 ):
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
+    if not dash or dash.get("created_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can modify cards.")
     card = update_card(card_id, org.id, request.model_dump(exclude_unset=True))
     if not card:
         raise HTTPException(status_code=404, detail="Card not found.")
@@ -106,26 +124,36 @@ async def update_dashboard_card(
 
 @router.delete("/dashboards/{dashboard_id}/cards/{card_id}")
 async def delete_dashboard_card(
-    dashboard_id: int, card_id: int, org=Depends(get_current_org)
+    dashboard_id: int, card_id: int, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
 ):
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
+    if not dash or dash.get("created_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can modify cards.")
     remove_card(card_id, org.id)
     return {"status": "success"}
 
 
 @router.post("/dashboards/{dashboard_id}/layout")
 async def update_dashboard_layout(
-    dashboard_id: int, layout: List[CardLayoutItem], org=Depends(get_current_org)
+    dashboard_id: int, layout: List[CardLayoutItem], org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
 ):
-    if not get_dashboard(dashboard_id, org.id):
-        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
+    if not dash or dash.get("created_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can modify layout.")
     reorder_cards(dashboard_id, org.id, [i.model_dump() for i in layout])
     return {"status": "success"}
 
 
 @router.post("/dashboards/{dashboard_id}/cards/{card_id}/refresh")
 async def refresh_dashboard_card(
-    dashboard_id: int, card_id: int, org=Depends(get_current_org)
+    dashboard_id: int, card_id: int, org=Depends(get_current_org),
+    user: dict = Depends(get_current_user)
 ):
+    dash = get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
+    if not dash:
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
     conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
@@ -136,10 +164,13 @@ async def refresh_dashboard_card(
 
 
 @router.post("/dashboards/pin")
-async def pin_query_to_dashboard(request: PinQueryRequest, org=Depends(get_current_org)):
-    dash = get_dashboard(request.dashboard_id, org.id)
+async def pin_query_to_dashboard(request: PinQueryRequest, org=Depends(get_current_org),
+                                 user=Depends(require_permission("MANAGE_DASHBOARDS"))):
+    dash = get_dashboard(request.dashboard_id, org.id, user_id=user["id"], role_id=user["role"])
     if not dash:
         raise HTTPException(status_code=404, detail="Dashboard not found.")
+    if dash.get("created_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can pin cards.")
 
     existing = get_cards(request.dashboard_id, org.id)
     max_y    = max((c["layout_y"] + c["layout_h"] for c in existing), default=0)

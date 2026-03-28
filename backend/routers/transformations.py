@@ -8,7 +8,8 @@ from fastapi import APIRouter, HTTPException, Depends
 
 from database import DatabaseManager
 from dependencies import (
-    get_current_org, get_org_connection_string, get_cached_schema_summary
+    get_current_org, get_org_connection_string, get_cached_schema_summary,
+    require_permission
 )
 from utils import clean_llm_json_content
 from schemas import TransformRequest, TransformSuggestRequest
@@ -19,7 +20,8 @@ router = APIRouter()
 # ── Routes ──
 
 @router.post("/transform")
-async def transform_data(request: TransformRequest, org=Depends(get_current_org)):
+async def transform_data(request: TransformRequest, org=Depends(get_current_org),
+                         user=Depends(require_permission("MUTATE_TABLES"))):
     """Apply transformations to a table."""
     try:
         db_conn = get_org_connection_string(org)
@@ -74,7 +76,8 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
 
 
 @router.post("/transform/suggest")
-async def suggest_transformations(request: TransformSuggestRequest, org=Depends(get_current_org)):
+async def suggest_transformations(request: TransformSuggestRequest, org=Depends(get_current_org),
+                                  user=Depends(require_permission("MUTATE_TABLES"))):
     """Suggest transformation operations based on natural language prompt."""
     try:
         from config import get_agent_config

@@ -25,11 +25,11 @@ from models import (
     get_org_by_api_key, create_org, update_org_db
 )
 from database import DatabaseManager
-from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK
-from utils import send_email_mock
+from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission
+from email_service import send_welcome_email
 from schemas import (
     RegisterRequest, ConfigRequest, LoginRequest, RegisterUserRequest,
-    AcceptInviteRequest
+    AcceptInviteRequest, InviteRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -50,14 +50,7 @@ async def register(request: RegisterRequest):
                 org.db_connection_string = db_conn_str
                 logger.info(f"Auto-provisioned database for org: {org.name}")
 
-                email_subject = "Your Vantage AI Database Details"
-                email_body = (
-                    f"Hello,\n\nYour new organization '{org.name}' has been created successfully!\n\n"
-                    f"Database Connection String:\n{db_conn_str}\n\n"
-                    f"Your API Key is:\n{org.api_key}\n\n"
-                    "Please save this API key securely. Welcome to Vantage AI!"
-                )
-                send_email_mock(request.email, email_subject, email_body)
+                send_welcome_email(request.email, org.name, org.api_key)
         except Exception as e:
             logger.error(f"Failed to auto-provision database: {e}")
 
@@ -196,6 +189,33 @@ async def refresh_route(refresh_token: str):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+@router.post("/invite")
+async def invite_user_route(request: InviteRequest,
+                            user: dict = Depends(require_permission("MANAGE_USERS"))):
+    """Generate an invitation token for a new team member."""
+    try:
+        token = auth_module.create_invite(
+            org_id=user["org_id"],
+            email=request.email,
+            role=request.role,
+            invited_by=user["id"],
+        )
+        return {"token": token, "email": request.email, "role": request.role}
+    except Exception as e:
+        logger.error(f"Invite failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/invite/status")
+async def get_invite_status_route(user: dict = Depends(require_permission("MANAGE_USERS"))):
+    """Return the status of all invitations for the current organization."""
+    try:
+        return auth_module.get_invite_statuses(user["org_id"])
+    except Exception as e:
+        logger.error(f"Failed to fetch invite statuses: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/accept-invite")
 async def accept_invite_route(request: AcceptInviteRequest, response: Response):
     """Accept an invitation to join an organization."""
@@ -212,9 +232,56 @@ async def accept_invite_route(request: AcceptInviteRequest, response: Response):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.delete("/invite/{email}")
+async def revoke_invite_route(email: str, user: dict = Depends(require_permission("MANAGE_USERS"))):
+    """Revoke a pending invitation for a specific email."""
+    try:
+        success = auth_module.revoke_invite(user["org_id"], email)
+        if not success:
+            raise HTTPException(status_code=404, detail="Active invite not found")
+        return {"status": "success", "message": "Invite revoked"}
+    except Exception as e:
+        logger.error(f"Failed to revoke invite: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/users/{email}")
+async def remove_user_route(email: str, user: dict = Depends(require_permission("MANAGE_USERS"))):
+    """Remove a user from the organization."""
+    try:
+        auth_module.remove_user(
+            org_id=user["org_id"], 
+            target_email=email, 
+            requester_role=user["role"], 
+            requester_email=user["email"]
+        )
+        return {"status": "success", "message": "User removed"}
+    except Exception as e:
+        logger.error(f"Failed to remove user: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/users/{email}/role")
+async def change_user_role_route(email: str, request: auth_module.UpdateRoleRequest, user: dict = Depends(require_permission("MANAGE_USERS"))):
+    """Change a user's role, allowing ownership handover."""
+    try:
+        auth_module.change_user_role(
+            org_id=user["org_id"],
+            target_email=email,
+            new_role=request.role,
+            requester_email=user["email"],
+            requester_role=user["role"]
+        )
+        return {"status": "success", "message": f"Role updated to {request.role}"}
+    except Exception as e:
+        logger.error(f"Failed to change user role: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/me")
 async def get_me(user: dict = Depends(auth_module.get_current_user)):
-    """Return the current authenticated user's profile."""
+    """Return the current authenticated user's profile, including permissions."""
+    user["permissions"] = auth_module.get_role_permissions(user.get("role", "viewer"))
     return user
 
 
@@ -228,7 +295,8 @@ async def get_config(org=Depends(get_current_org)):
 
 
 @router.post("/config")
-async def configure_db(request: ConfigRequest, org=Depends(get_current_org)):
+async def configure_db(request: ConfigRequest, org=Depends(get_current_org),
+                      user=Depends(require_permission("MANAGE_ORG"))):
     """Update the DB connection string for the current organization."""
     try:
         db_manager = DatabaseManager(connection_string=request.connection_string)

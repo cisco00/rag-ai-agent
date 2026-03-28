@@ -152,6 +152,8 @@ class CorrelationRequest(BaseModel):
 class DashboardRequest(BaseModel):
     name: str
     description: Optional[str] = None
+    role_id: Optional[str] = None
+    is_shared: bool = False
 
 class CardRequest(BaseModel):
     title: str

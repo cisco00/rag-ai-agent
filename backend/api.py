@@ -33,7 +33,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models import init_admin_db, get_org_by_api_key, SessionLocal, Organization
 from database import DatabaseManager
-from scheduler import start_scheduler, shutdown_scheduler, refresh_jobs
+from scheduler import start_scheduler, shutdown_scheduler, refresh_jobs, run_organizational_learning
 from org_context_manager import ensure_context_tables
 from insight_engine import InsightScheduler, ensure_insight_tables
 from auth import ensure_auth_tables
@@ -41,6 +41,8 @@ from alerts import ensure_alert_tables, evaluate_all_alerts, ALERT_CHECK_INTERVA
 from dashboards import ensure_dashboard_tables
 from dependencies import get_org_connection_string
 from job_queue import start_job_queue, stop_job_queue
+
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
 from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context
@@ -92,6 +94,16 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
         )
         logger.info(f"Alert evaluator registered (interval={ALERT_CHECK_INTERVAL_MINUTES}m)")
+        
+        # ── Organizational Learning via APScheduler ─────────────────────────────
+        _LEARNING_INTERVAL_MINUTES = 30
+        _scheduler.add_job(
+            run_organizational_learning,
+            trigger=IntervalTrigger(minutes=_LEARNING_INTERVAL_MINUTES),
+            id="org_learning_job",
+            replace_existing=True,
+        )
+        logger.info(f"Organizational learning job registered (interval={_LEARNING_INTERVAL_MINUTES}m)")
     except Exception as _e:
         logger.warning(f"Could not register alert evaluator: {_e}")
 
@@ -145,6 +157,8 @@ app = FastAPI(
     lifespan=lifespan,
     redirect_slashes=False
 )
+
+Instrumentator().instrument(app).expose(app)
 
 # ── Request Logging Middleware ───────────────────────────────────────────────
 @app.middleware("http")
@@ -219,20 +233,22 @@ else:
         "Set CORS_ORIGINS=<your frontend URL> before deploying to production."
     )
 
-_CORS_ALLOW_HEADERS = [
-    "Authorization",
-    "X-API-Key",
-    "Content-Type",
-    "Accept",
+_CORS_ALLOW_HEADERS = ["*"]
+
+_PERMISSIVE_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    "http://localhost", "http://127.0.0.1",
+    "http://0.0.0.0:5173", "http://0.0.0.0"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=cors_origins + _PERMISSIVE_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=_CORS_ALLOW_HEADERS,
-    expose_headers=["Content-Disposition"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # SPA Fallback Path Logic
@@ -329,6 +345,13 @@ if os.path.exists(static_dir):
     assets_dir = os.path.join(static_dir, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+# ── Uploads Static Files ──────────────────────────────────────────────────────
+# Ensure uploads directory exists and is served
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+uploads_root = os.path.join(backend_dir, "static", "uploads")
+os.makedirs(uploads_root, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):

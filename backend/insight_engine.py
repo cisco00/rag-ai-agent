@@ -125,6 +125,13 @@ class InsightEngine:
         self.max_stored    = max_stored
         ensure_insight_tables()
 
+    def close(self):
+        """Clean up resources."""
+        if hasattr(self, 'agent') and self.agent:
+            self.agent.close()
+        if hasattr(self, 'db') and self.db:
+            self.db.close()
+
     # ── Metric discovery ──────────────────────────────────────────────────────
 
     def _discover_key_metrics(self) -> list[dict]:
@@ -163,34 +170,34 @@ class InsightEngine:
 
     # ── Baseline comparison ───────────────────────────────────────────────────
 
+    def _is_postgres(self) -> bool:
+        """Check if the org's data DB is PostgreSQL."""
+        try:
+            return self.db.engine.dialect.name == "postgresql"
+        except Exception:
+            return False
+
     def _get_recent_value(
         self, table: str, column: str, date_col: Optional[str]
     ) -> Optional[float]:
         """24-hour average for the metric."""
         try:
             if date_col:
-                # Use CURRENT_TIMESTAMP - 1 day (ANSI SQL, works on both dialects)
+                if self._is_postgres():
+                    where = f'WHERE "{date_col}" >= CURRENT_TIMESTAMP - INTERVAL \'1 day\''
+                else:
+                    where = f'WHERE "{date_col}" >= date(\'now\', \'-1 day\')'
                 sql = (
                     f'SELECT AVG("{column}") AS val FROM "{table}" '
-                    f'WHERE "{date_col}" >= CURRENT_TIMESTAMP - INTERVAL \'1 day\' '
+                    f'{where} '
                     f'AND "{column}" IS NOT NULL'
                 )
-                # SQLite uses date() not INTERVAL — fall back
-                try:
-                    result = self.db.execute_query(sql)
-                except Exception:
-                    sql = (
-                        f'SELECT AVG("{column}") AS val FROM "{table}" '
-                        f'WHERE "{date_col}" >= date(\'now\', \'-1 day\') '
-                        f'AND "{column}" IS NOT NULL'
-                    )
-                    result = self.db.execute_query(sql)
             else:
                 sql = (
                     f'SELECT AVG("{column}") AS val FROM "{table}" '
                     f'WHERE "{column}" IS NOT NULL'
                 )
-                result = self.db.execute_query(sql)
+            result = self.db.execute_query(sql)
 
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
@@ -206,10 +213,16 @@ class InsightEngine:
         """Rolling N-day average (excluding last 24 h) as baseline."""
         try:
             if date_col:
+                if self._is_postgres():
+                    where_start = f'WHERE "{date_col}" >= CURRENT_TIMESTAMP - INTERVAL \'{self.lookback_days} days\''
+                    where_end   = f'AND "{date_col}" < CURRENT_TIMESTAMP - INTERVAL \'1 day\''
+                else:
+                    where_start = f'WHERE "{date_col}" >= date(\'now\', \'-{self.lookback_days} days\')'
+                    where_end   = f'AND "{date_col}" < date(\'now\', \'-1 day\')'
                 sql = (
                     f'SELECT AVG("{column}") AS val FROM "{table}" '
-                    f'WHERE "{date_col}" >= date(\'now\', \'-{self.lookback_days} days\') '
-                    f'AND "{date_col}" < date(\'now\', \'-1 day\') '
+                    f'{where_start} '
+                    f'{where_end} '
                     f'AND "{column}" IS NOT NULL'
                 )
             else:
@@ -466,9 +479,13 @@ class InsightScheduler:
                 try:
                     engine = self.engine_factory(org_id)
                     if engine:
-                        await asyncio.get_event_loop().run_in_executor(
-                            None, engine.run_watchdog
-                        )
+                        try:
+                            await asyncio.get_event_loop().run_in_executor(
+                                None, engine.run_watchdog
+                            )
+                        finally:
+                            if hasattr(engine, "close"):
+                                engine.close()
                 except Exception as exc:
                     logger.error(
                         f"[InsightScheduler] Watchdog failed for org {org_id}: {exc}"

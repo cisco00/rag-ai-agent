@@ -185,6 +185,7 @@ class QueryHistory(Base):
     response = Column(Text, nullable=False)
     visualization = Column(Text, nullable=True)  # JSON string
     sql_query = Column(Text, nullable=True)
+    user_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     def __repr__(self):
@@ -222,6 +223,7 @@ class ChatSession(Base):
     id = Column(String(32), primary_key=True)
     org_id = Column(Integer, nullable=False, index=True)
     title = Column(String(255), nullable=True)
+    user_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -290,23 +292,34 @@ def init_admin_db():
     logger.info("Creating admin database tables")
     try:
         if ADMIN_DB_URL.startswith("sqlite"):
-             # For SQLite, we can just close and reopen connection or use raw connection
-             # Start with simple creation
              Base.metadata.create_all(bind=engine)
         else:
              Base.metadata.create_all(bind=engine)
-        logger.info("Admin database tables created successfully")
+             
+        # Manual migrations for new columns
+        with engine.connect() as conn:
+            with conn.begin():
+                try:
+                    conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE query_history ADD COLUMN user_id INTEGER"))
+                except Exception:
+                    pass
+                    
+        logger.info("Admin database tables created and migrations applied")
     except Exception as e:
         logger.error(f"Failed to create admin database tables: {e}", exc_info=True)
         raise DatabaseError(f"Failed to initialize admin database: {str(e)}") from e
 
 
-def create_chat_session(org_id: int, title: Optional[str] = None) -> ChatSession:
+def create_chat_session(org_id: int, title: Optional[str] = None, user_id: Optional[int] = None) -> ChatSession:
     """Create a new chat session."""
     try:
         with get_db() as db:
             session_id = secrets.token_urlsafe(16)
-            session = ChatSession(id=session_id, org_id=org_id, title=title)
+            session = ChatSession(id=session_id, org_id=org_id, title=title, user_id=user_id)
             db.add(session)
             # Commit handled by context manager
             db.flush()
@@ -743,7 +756,8 @@ def create_query_history(
     query: str,
     response: str,
     visualization: Optional[dict] = None,
-    sql_query: Optional[str] = None
+    sql_query: Optional[str] = None,
+    user_id: Optional[int] = None
 ) -> QueryHistory:
     """
     Create a new query history entry.
@@ -757,7 +771,8 @@ def create_query_history(
                 query=query,
                 response=response,
                 visualization=json.dumps(visualization) if visualization else None,
-                sql_query=sql_query
+                sql_query=sql_query,
+                user_id=user_id
             )
             db.add(history)
             db.flush()
@@ -771,7 +786,7 @@ def create_query_history(
         return None
 
 
-def get_org_history(org_id: int, limit: int = 50) -> list[QueryHistory]:
+def get_org_history(org_id: int, limit: int = 50, user_id: Optional[int] = None) -> list[QueryHistory]:
     """
     Get query history for an organization.
     """
@@ -779,9 +794,14 @@ def get_org_history(org_id: int, limit: int = 50) -> list[QueryHistory]:
     
     try:
         with get_db() as db:
-            history = db.query(QueryHistory).filter(
+            query_obj = db.query(QueryHistory).filter(
                 QueryHistory.org_id == org_id
-            ).order_by(QueryHistory.created_at.desc()).limit(limit).all()
+            )
+            
+            if user_id is not None:
+                query_obj = query_obj.filter(QueryHistory.user_id == user_id)
+                
+            history = query_obj.order_by(QueryHistory.created_at.desc()).limit(limit).all()
             
             # Detach
             for item in history:

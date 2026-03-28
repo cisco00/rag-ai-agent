@@ -20,7 +20,7 @@ import httpx
 from sqlalchemy import text
 
 from models import engine as admin_engine
-from utils import send_email_mock
+from email_service import send_email_mock
 from logging_config import get_logger
 
 logger = get_logger(__name__)

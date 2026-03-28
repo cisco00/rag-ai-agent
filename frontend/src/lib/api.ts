@@ -90,7 +90,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     let errorDetail = `Request failed (${response.status})`;
     try {
       const data = await response.json();
-      errorDetail = data.detail || data.message || errorDetail;
+      if (Array.isArray(data.detail)) {
+        // FastAPI 422 validation errors: [{loc, msg, type}, ...]
+        errorDetail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
+      } else {
+        errorDetail = data.detail || data.message || errorDetail;
+      }
     } catch {
       errorDetail = response.statusText || errorDetail;
     }

@@ -377,7 +377,12 @@ def register_first_user(email: str, password: str,
 def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
     email = email.lower().strip()
     user  = get_user_by_email(org_id, email) if org_id else get_user_by_email_global(email)
-    if not user or not verify_password(password, user["password_hash"]):
+    if not user:
+        logger.error(f"Login failed: User {email} not found.")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    
+    if not verify_password(password, user["password_hash"]):
+        logger.error(f"Login failed: Password mismatch for user {email}.")
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     effective_org_id = user["org_id"]
@@ -462,10 +467,31 @@ def create_invite(org_id: int, email: str, role: str, invited_by: int) -> str:
     import hashlib
     if role not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid role.")
+    
+    email = email.lower().strip()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    with admin_engine.connect() as conn:
+        # Check if user already exists
+        existing_user = conn.execute(
+            text("SELECT 1 FROM users WHERE org_id = :org_id AND email = :email AND is_active = 1"),
+            {"org_id": org_id, "email": email}
+        ).fetchone()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User already exists in this organization.")
+
+        # Check if active invite already exists (unused and not expired)
+        existing_invite = conn.execute(
+            text("SELECT 1 FROM invite_tokens WHERE org_id = :org_id AND email = :email AND used = 0 AND expires_at > :now"),
+            {"org_id": org_id, "email": email, "now": now}
+        ).fetchone()
+        if existing_invite:
+            raise HTTPException(status_code=400, detail="An active invitation has already been sent to this email.")
+
     raw        = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw.encode()).hexdigest()
     expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-    now        = datetime.now(timezone.utc).isoformat()
+    
     with admin_engine.connect() as conn:
         with conn.begin():
             conn.execute(text("""
@@ -474,7 +500,7 @@ def create_invite(org_id: int, email: str, role: str, invited_by: int) -> str:
                 VALUES
                     (:org_id, :email, :role, :token_hash, :invited_by, :expires_at, 0, :now)
             """), {
-                "org_id": org_id, "email": email.lower().strip(),
+                "org_id": org_id, "email": email,
                 "role": role, "token_hash": token_hash,
                 "invited_by": invited_by, "expires_at": expires_at, "now": now,
             })
@@ -508,10 +534,159 @@ def accept_invite(raw_token: str, password: str,
     return login_user(email=invite["email"], password=password, org_id=invite["org_id"])
 
 
+def get_invite_statuses(org_id: int) -> list[dict]:
+    """
+    Return a unified list of all organization members (users) and
+    all pending/expired invitations.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with admin_engine.connect() as conn:
+        # 1. Get all active users in the org
+        users = conn.execute(
+            text("SELECT email, display_name, role, last_login_at, created_at FROM users "
+                 "WHERE org_id = :org_id AND is_active = 1"),
+            {"org_id": org_id}
+        ).mappings().all()
+        
+        # 2. Get all pending/expired invite tokens
+        invites = conn.execute(
+            text("SELECT email, role, created_at, expires_at FROM invite_tokens "
+                 "WHERE org_id = :org_id AND used = 0"),
+            {"org_id": org_id}
+        ).mappings().all()
+        
+        results = []
+        seen_emails = set()
+        
+        # Add actual users first
+        for u in users:
+            results.append({
+                "email": u["email"],
+                "display_name": u["display_name"],
+                "role": u["role"],
+                "status": "accepted",
+                "last_login": u["last_login_at"],
+                "created_at": u["created_at"]
+            })
+            seen_emails.add(u["email"])
+            
+        # Add remaining invitations
+        for inv in invites:
+            # Skip if we already added a user with this email (shouldn't happen with used=0 but safe)
+            if inv["email"] in seen_emails:
+                continue
+                
+            status = "pending"
+            if inv["expires_at"] < now:
+                status = "expired"
+                
+            results.append({
+                "email": inv["email"],
+                "role": inv["role"],
+                "status": status,
+                "created_at": inv["created_at"],
+            })
+            
+        # Optional: Sort by created_at desc
+        results.sort(key=lambda x: x["created_at"], reverse=True)
+            
+        return results
+
+
+def revoke_invite(org_id: int, email: str) -> bool:
+    """Revoke a pending invitation for an email in an organization."""
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            result = conn.execute(
+                text("DELETE FROM invite_tokens WHERE org_id = :org_id AND email = :email AND used = 0"),
+                {"org_id": org_id, "email": email}
+            )
+            return result.rowcount > 0
+
+
+def remove_user(org_id: int, target_email: str, requester_role: str, requester_email: str) -> bool:
+    """
+    Remove a user from the organization.
+    Only owners and admins can remove users. Owners cannot be removed.
+    """
+    if requester_role not in ["owner", "admin"]:
+        raise ValueError("Requires 'owner' or 'admin' role to remove users.")
+    if target_email == requester_email:
+        raise ValueError("Cannot remove yourself.")
+        
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            target = conn.execute(
+                text("SELECT id, role FROM users WHERE org_id = :org_id AND email = :email"),
+                {"org_id": org_id, "email": target_email}
+            ).fetchone()
+            
+            if not target:
+                raise ValueError("Target user not found.")
+                
+            # Extract fields securely
+            target_role = target[1] if hasattr(target, '_mapping') else list(target)[1]
+            
+            if target_role == "owner":
+                raise ValueError("Cannot remove the organization owner. The owner must hand over ownership first.")
+                
+            conn.execute(
+                text("DELETE FROM users WHERE org_id = :org_id AND email = :email"),
+                {"org_id": org_id, "email": target_email}
+            )
+            return True
+
+
+def change_user_role(org_id: int, target_email: str, new_role: str, requester_email: str, requester_role: str) -> bool:
+    """
+    Change a user's role. If the new role is 'owner', the requester must be an owner,
+    and the requester will be demoted to 'admin' (Ownership Handover).
+    """
+    if requester_role not in ["owner", "admin"]:
+        raise ValueError("Requires 'owner' or 'admin' role to change roles.")
+        
+    if new_role not in ROLES:
+        raise ValueError(f"Invalid role '{new_role}'. Must be one of {ROLES}.")
+        
+    if new_role == "owner" and requester_role != "owner":
+        raise ValueError("Only an existing owner can hand over ownership.")
+        
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            target = conn.execute(
+                text("SELECT id, role FROM users WHERE org_id = :org_id AND email = :email"),
+                {"org_id": org_id, "email": target_email}
+            ).fetchone()
+            
+            if not target:
+                raise ValueError("Target user not found.")
+                
+            # Using index 1 for role 
+            target_role = target[1] if hasattr(target, '_mapping') else list(target)[1]
+            
+            if target_role == "owner" and new_role != "owner":
+                # Forcing an owner demotion without handover
+                raise ValueError("Cannot demote the organization owner. The owner must hand over ownership to someone else explicitly.")
+                
+            if new_role == "owner":
+                # Ownership Handover: Demote requester to 'admin' and promote target to 'owner'
+                if requester_email != target_email:
+                    conn.execute(
+                        text("UPDATE users SET role = 'admin' WHERE org_id = :o AND email = :e"),
+                        {"o": org_id, "e": requester_email}
+                    )
+            
+            conn.execute(
+                text("UPDATE users SET role = :new_role WHERE org_id = :org_id AND email = :email"),
+                {"new_role": new_role, "org_id": org_id, "email": target_email}
+            )
+            return True
+
+
 # ─── Permission helpers ───────────────────────────────────────────────────────
 
-def get_role_permissions(role: str) -> dict[str, bool]:
-    return {perm: (role in members) for perm, members in _P.items()}
+def get_role_permissions(role: str) -> list[str]:
+    return [perm for perm, members in _P.items() if role in members]
 
 
 def get_role_summary() -> dict[str, dict]:

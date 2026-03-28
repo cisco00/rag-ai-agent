@@ -39,6 +39,8 @@ def ensure_dashboard_tables():
             description TEXT,
             is_public   INTEGER NOT NULL DEFAULT 0,
             share_token TEXT UNIQUE,
+            role_id     TEXT NOT NULL DEFAULT 'analyst',
+            is_shared   INTEGER NOT NULL DEFAULT 0,
             created_by  INTEGER,
             created_at  TEXT NOT NULL,
             updated_at  TEXT NOT NULL
@@ -73,6 +75,16 @@ def ensure_dashboard_tables():
         with conn.begin():
             for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
+            
+            # Simple migration for existing DBs
+            try:
+                conn.execute(text("ALTER TABLE dashboards ADD COLUMN role_id TEXT NOT NULL DEFAULT 'analyst'"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE dashboards ADD COLUMN is_shared INTEGER NOT NULL DEFAULT 0"))
+            except Exception:
+                pass
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -118,7 +130,7 @@ def _get_last_insert_id(conn, table: str, dialect: str) -> int:
 # ─── Dashboard CRUD ───────────────────────────────────────────────────────────
 
 def create_dashboard(org_id: int, name: str, description: Optional[str] = None,
-                     created_by: Optional[int] = None) -> dict:
+                     created_by: Optional[int] = None, role_id: str = "analyst", is_shared: bool = False) -> dict:
     """
     Fix #12: New row is fetched by its exact ID, not by ORDER BY created_at DESC.
     """
@@ -130,22 +142,24 @@ def create_dashboard(org_id: int, name: str, description: Optional[str] = None,
             if dialect == "postgresql":
                 result = conn.execute(text("""
                     INSERT INTO dashboards
-                        (org_id, name, description, is_public, created_by, created_at, updated_at)
-                    VALUES (:org_id, :name, :description, 0, :created_by, :now, :now)
+                        (org_id, name, description, is_public, role_id, is_shared, created_by, created_at, updated_at)
+                    VALUES (:org_id, :name, :description, 0, :role_id, :is_shared, :created_by, :now, :now)
                     RETURNING id
                 """), {
                     "org_id": org_id, "name": name,
-                    "description": description, "created_by": created_by, "now": now,
+                    "description": description, "role_id": role_id, "is_shared": 1 if is_shared else 0,
+                    "created_by": created_by, "now": now,
                 })
                 new_id = result.scalar()
             else:
                 conn.execute(text("""
                     INSERT INTO dashboards
-                        (org_id, name, description, is_public, created_by, created_at, updated_at)
-                    VALUES (:org_id, :name, :description, 0, :created_by, :now, :now)
+                        (org_id, name, description, is_public, role_id, is_shared, created_by, created_at, updated_at)
+                    VALUES (:org_id, :name, :description, 0, :role_id, :is_shared, :created_by, :now, :now)
                 """), {
                     "org_id": org_id, "name": name,
-                    "description": description, "created_by": created_by, "now": now,
+                    "description": description, "role_id": role_id, "is_shared": 1 if is_shared else 0,
+                    "created_by": created_by, "now": now,
                 })
                 new_id = conn.execute(text("SELECT last_insert_rowid()")).scalar()
 
@@ -156,21 +170,33 @@ def create_dashboard(org_id: int, name: str, description: Optional[str] = None,
     return dict(row)
 
 
-def get_dashboards(org_id: int) -> list[dict]:
+def get_dashboards(org_id: int, user_id: Optional[int] = None, role_id: Optional[str] = None) -> list[dict]:
     with admin_engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM dashboards WHERE org_id=:org_id ORDER BY updated_at DESC"),
-            {"org_id": org_id}
-        ).mappings().all()
+        qry = "SELECT * FROM dashboards WHERE org_id=:org_id"
+        params = {"org_id": org_id}
+        
+        # Admins and Owners can see all dashboards in their org
+        if role_id not in ("owner", "admin") and user_id is not None and role_id is not None:
+            qry += " AND role_id=:role_id AND (created_by=:user_id OR is_shared=1)"
+            params.update({"role_id": role_id, "user_id": user_id})
+        
+        qry += " ORDER BY updated_at DESC"
+        
+        rows = conn.execute(text(qry), params).mappings().all()
     return [dict(r) for r in rows]
 
 
-def get_dashboard(dashboard_id: int, org_id: int) -> Optional[dict]:
+def get_dashboard(dashboard_id: int, org_id: int, user_id: Optional[int] = None, role_id: Optional[str] = None) -> Optional[dict]:
     with admin_engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT * FROM dashboards WHERE id=:id AND org_id=:org_id"),
-            {"id": dashboard_id, "org_id": org_id}
-        ).mappings().first()
+        qry = "SELECT * FROM dashboards WHERE id=:id AND org_id=:org_id"
+        params = {"id": dashboard_id, "org_id": org_id}
+        
+        # Admins and Owners can see all dashboards in their org
+        if role_id not in ("owner", "admin") and user_id is not None and role_id is not None:
+            qry += " AND role_id=:role_id AND (created_by=:user_id OR is_shared=1)"
+            params.update({"role_id": role_id, "user_id": user_id})
+            
+        row = conn.execute(text(qry), params).mappings().first()
     return dict(row) if row else None
 
 
@@ -183,56 +209,79 @@ def get_dashboard_by_share_token(token: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def update_dashboard(dashboard_id: int, org_id: int, updates: dict) -> dict:
-    allowed    = {"name", "description"}
+def update_dashboard(dashboard_id: int, org_id: int, updates: dict, user_id: Optional[int] = None) -> dict:
+    allowed    = {"name", "description", "is_shared"}
     filtered   = {k: v for k, v in updates.items() if k in allowed}
+    if "is_shared" in filtered:
+        filtered["is_shared"] = 1 if filtered["is_shared"] else 0
     filtered["updated_at"] = datetime.utcnow().isoformat()
     filtered["id"]         = dashboard_id
     filtered["org_id"]     = org_id
-    set_clause = ", ".join(f"{k}=:{k}" for k in filtered if k not in ("id", "org_id"))
+    set_clause = ", ".join(f"{k}=:{k}" for k in filtered if k not in ("id", "org_id", "user_id"))
+    
+    where_clause = "id=:id AND org_id=:org_id"
+    if user_id is not None:
+        where_clause += " AND created_by=:user_id"
+        filtered["user_id"] = user_id
+        
     with admin_engine.connect() as conn:
         with conn.begin():
             conn.execute(
-                text(f"UPDATE dashboards SET {set_clause} WHERE id=:id AND org_id=:org_id"),
+                text(f"UPDATE dashboards SET {set_clause} WHERE {where_clause}"),
                 filtered
             )
     return get_dashboard(dashboard_id, org_id)
 
 
-def delete_dashboard(dashboard_id: int, org_id: int):
+def delete_dashboard(dashboard_id: int, org_id: int, user_id: Optional[int] = None):
     with admin_engine.connect() as conn:
         with conn.begin():
-            conn.execute(
-                text("DELETE FROM dashboard_cards WHERE dashboard_id=:did AND org_id=:org_id"),
-                {"did": dashboard_id, "org_id": org_id}
-            )
-            conn.execute(
-                text("DELETE FROM dashboards WHERE id=:id AND org_id=:org_id"),
-                {"id": dashboard_id, "org_id": org_id}
-            )
+            where_clause = "id=:id AND org_id=:org_id"
+            params = {"id": dashboard_id, "org_id": org_id}
+            if user_id is not None:
+                where_clause += " AND created_by=:user_id"
+                params["user_id"] = user_id
+                
+            # Need to verify it exists and we can delete it (before cascading dashboard_cards)
+            res = conn.execute(text(f"DELETE FROM dashboards WHERE {where_clause}"), params)
+            if res.rowcount > 0:
+                conn.execute(
+                    text("DELETE FROM dashboard_cards WHERE dashboard_id=:did AND org_id=:org_id"),
+                    {"did": dashboard_id, "org_id": org_id}
+                )
 
 
-def publish_dashboard(dashboard_id: int, org_id: int) -> str:
+def publish_dashboard(dashboard_id: int, org_id: int, user_id: Optional[int] = None) -> str:
     token = secrets.token_urlsafe(16)
     now   = datetime.utcnow().isoformat()
     with admin_engine.connect() as conn:
         with conn.begin():
+            where_clause = "id=:id AND org_id=:org_id"
+            params = {"token": token, "now": now, "id": dashboard_id, "org_id": org_id}
+            if user_id is not None:
+                where_clause += " AND created_by=:user_id"
+                params["user_id"] = user_id
+                
             conn.execute(
-                text("UPDATE dashboards SET is_public=1, share_token=:token, updated_at=:now "
-                     "WHERE id=:id AND org_id=:org_id"),
-                {"token": token, "now": now, "id": dashboard_id, "org_id": org_id}
+                text(f"UPDATE dashboards SET is_public=1, share_token=:token, updated_at=:now WHERE {where_clause}"),
+                params
             )
     return token
 
 
-def unpublish_dashboard(dashboard_id: int, org_id: int):
+def unpublish_dashboard(dashboard_id: int, org_id: int, user_id: Optional[int] = None):
     now = datetime.utcnow().isoformat()
     with admin_engine.connect() as conn:
         with conn.begin():
+            where_clause = "id=:id AND org_id=:org_id"
+            params = {"now": now, "id": dashboard_id, "org_id": org_id}
+            if user_id is not None:
+                where_clause += " AND created_by=:user_id"
+                params["user_id"] = user_id
+                
             conn.execute(
-                text("UPDATE dashboards SET is_public=0, share_token=NULL, updated_at=:now "
-                     "WHERE id=:id AND org_id=:org_id"),
-                {"now": now, "id": dashboard_id, "org_id": org_id}
+                text(f"UPDATE dashboards SET is_public=0, share_token=NULL, updated_at=:now WHERE {where_clause}"),
+                params
             )
 
 

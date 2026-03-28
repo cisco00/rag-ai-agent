@@ -9,6 +9,7 @@ interface QueryInterfaceProps {
   apiKey: string;
   initialQuery?: string;
   onQueryProcessed?: () => void;
+  user?: { permissions?: string[], id?: number, role?: string };
 }
 
 interface Message {
@@ -25,7 +26,8 @@ interface Message {
   queryId?: string;
 }
 
-export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: QueryInterfaceProps) {
+export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }: QueryInterfaceProps) {
+  const hasManageDashboards = Array.isArray(user?.permissions) && user.permissions.includes('MANAGE_DASHBOARDS');
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -302,7 +304,8 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
     setPinUserQuery(prevUser?.content || message.content.substring(0, 80));
     try {
       const d = await api.get<{ dashboards: any[] }>('/dashboards');
-      setDashboards(d.dashboards || []);
+      const myDashboards = (d.dashboards || []).filter((dash: any) => dash.created_by === user?.id);
+      setDashboards(myDashboards);
     } catch (e) { setDashboards([]); }
     setShowPinModal(true);
   };
@@ -449,13 +452,15 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed }: Query
                           </button>
                         </>
                       )}
-                      <button
-                        onClick={() => handleOpenPin(message, index)}
-                        className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
-                      >
-                        <Pin className="size-3 md:size-4" />
-                        Pin
-                      </button>
+                      {hasManageDashboards && (
+                        <button
+                          onClick={() => handleOpenPin(message, index)}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
+                        >
+                          <Pin className="size-3 md:size-4" />
+                          Pin
+                        </button>
+                      )}
 
                       {/* Feedback buttons */}
                       <div className="ml-auto flex items-center gap-1 md:gap-2">

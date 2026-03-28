@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
 import time
+import json
 
 from exceptions import (
     ConnectionError,
@@ -419,9 +420,20 @@ class DatabaseManager:
                 "if_exists": if_exists
             }
         )
-        
         try:
-            df.to_sql(table_name, self.engine, if_exists=if_exists, index=False)
+            # Flatten nested dictionaries into separate columns
+            temp_df = self._flatten_dataframe(df)
+            
+            # Serialize any remaining columns that contain lists or other dicts (if nested too deep)
+            for col in temp_df.columns:
+                # Check if column has any dict or list objects (SQLite doesn't support them)
+                if temp_df[col].apply(lambda x: isinstance(x, (dict, list))).any():
+                    logger.debug(f"Serializing column '{col}' to JSON for table '{table_name}'")
+                    temp_df[col] = temp_df[col].apply(
+                        lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
+                    )
+            
+            temp_df.to_sql(table_name, self.engine, if_exists=if_exists, index=False)
             
             # Refresh inspector to pick up new table
             self.inspector = inspect(self.engine)
@@ -444,6 +456,67 @@ class DatabaseManager:
             raise QueryExecutionError(
                 f"Failed to load DataFrame into table '{table_name}': {str(e)}"
             ) from e
+
+    def _flatten_dataframe(self, df):
+        """
+        Recursively flatten dictionary columns in a DataFrame using pd.json_normalize.
+        
+        Args:
+            df: pandas DataFrame to flatten
+            
+        Returns:
+            Flattened pandas DataFrame
+        """
+        import pandas as pd
+        
+        # Working copy
+        flat_df = df.copy()
+        MAX_DEPTH = 3 # Avoid infinite recursion
+        depth = 0
+        
+        while depth < MAX_DEPTH:
+            # Re-index to ensure join logic works correctly
+            flat_df = flat_df.reset_index(drop=True)
+            
+            # Find columns that contain at least one dictionary
+            dict_cols = []
+            for col in flat_df.columns:
+                try:
+                    if flat_df[col].apply(lambda x: isinstance(x, dict)).any():
+                        dict_cols.append(col)
+                except Exception:
+                    continue
+            
+            if not dict_cols:
+                break
+                
+            logger.debug(f"Flattening dictionary columns: {dict_cols} (depth: {depth})")
+            
+            for col in dict_cols:
+                try:
+                    # Convert column to list of dicts (handling None)
+                    data = [item if isinstance(item, dict) else {} for item in flat_df[col]]
+                    
+                    # Normalize using pandas utility
+                    normalized = pd.json_normalize(data)
+                    
+                    # If empty or only nulls, skip
+                    if normalized.empty:
+                        continue
+                        
+                    # Prefix columns with original column name and replace dots with underscores
+                    normalized.columns = [f"{col}_{c.replace('.', '_')}" for c in normalized.columns]
+                    
+                    # Join back and drop original
+                    flat_df = flat_df.drop(columns=[col]).join(normalized)
+                except Exception as e:
+                    logger.warning(f"Failed to flatten column '{col}': {e}")
+                    # Keep the original column if flattening fails
+                    continue
+            
+            depth += 1
+            
+        return flat_df
 
     def get_table_data(self, table_name: str) -> Any:
         """

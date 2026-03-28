@@ -255,8 +255,8 @@ def log_function_call(func):
             f"Calling {func.__name__}",
             extra={
                 "function": func.__name__,
-                "args": str(args)[:100],  # Limit length
-                "kwargs": str(kwargs)[:100]
+                "func_args": str(args)[:100],  # Limit length
+                "func_kwargs": str(kwargs)[:100],
             }
         )
         

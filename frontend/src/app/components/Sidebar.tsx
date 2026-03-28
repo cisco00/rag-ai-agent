@@ -35,6 +35,7 @@ interface SidebarProps {
     display_name: string;
     role: string;
     email: string;
+    permissions?: string[];
   };
   onLogout?: () => void;
   onClose?: () => void;
@@ -61,21 +62,31 @@ export function Sidebar({
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
   ];
 
+  const hasPerm = (perm: string) => {
+    if (Array.isArray(user?.permissions) && user.permissions.includes(perm)) return true;
+    // Fallback for missing permissions in older session data
+    if (user?.role === 'business_owner') return true; // Owners have all perms
+    if (perm === 'MANAGE_USERS' && user?.role === 'admin') return true;
+    if (perm === 'WRITE_DATA' && user?.role === 'admin') return true;
+    if (perm === 'MUTATE_TABLES' && (user?.role === 'admin' || user?.role === 'editor')) return true;
+    return false;
+  };
+
   const toolsItems = [
-    { id: 'database', label: 'Connect DB', icon: Database },
-    { id: 'import', label: 'Import File', icon: FileUp },
-    { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured },
-    { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured },
-    { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured },
-    { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured },
-  ];
+    { id: 'database', label: 'Connect DB', icon: Database, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'import', label: 'Import File', icon: FileUp, hide: !hasPerm('WRITE_DATA') },
+    { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') && !hasPerm('MUTATE_TABLES') },
+    { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
+    { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured, hide: !hasPerm('VIEW_ADVANCED') },
+    { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') },
+  ].filter(item => !item.hide);
 
   const adminItems = [
-    { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured },
-    { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured },
-    { id: 'branding', label: 'Branding', icon: Settings },
-    { id: 'settings', label: 'Invite Members', icon: UserPlus },
-  ];
+    { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
+    { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
+    { id: 'branding', label: 'Branding', icon: Settings, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') },
+  ].filter(item => !item.hide);
 
   return (
     <aside className="w-64 h-full bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 shadow-2xl lg:shadow-none">

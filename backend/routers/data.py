@@ -21,8 +21,9 @@ from models import (
     create_chat_session, add_chat_message, get_chat_history
 )
 from database import DatabaseManager
-from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK
-from utils import send_email_mock, clean_llm_json_content
+from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission
+from utils import clean_llm_json_content
+from email_service import send_email_mock
 from validators import sanitize_table_name
 from export_manager import ExportManager
 from scheduler import schedule_job_for_report
@@ -52,11 +53,12 @@ async def get_available_databases(org=Depends(get_current_org)):
         return {"status": "success", "databases": history}
     except Exception as e:
         logger.error(f"Failed to fetch connection history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to retrieve database connection history.")
 
 
 @router.post("/database/create-postgres")
-async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(get_current_org)):
+async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(get_current_org),
+                                   user=Depends(require_permission("MANAGE_ORG"))):
     """Create a new Postgres database, a new user, and update org config"""
     import psycopg2
     from psycopg2 import sql
@@ -176,7 +178,7 @@ Vantage AI Team
         
     except Exception as e:
         logger.error(f"Failed to create database: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create the database. Please verify your administrative credentials and ensure the database name is unique.")
 
 
 @router.post("/import")
@@ -184,7 +186,8 @@ async def import_file_to_database(
     file: UploadFile = File(...), 
     table_name: Optional[str] = Form(None),
     if_exists: str = Form('replace'),
-    org=Depends(get_current_org)
+    org=Depends(get_current_org),
+    user=Depends(require_permission("WRITE_DATA"))
 ):
     """
     Import a CSV or Excel file directly into the organization's configured database.
@@ -289,7 +292,8 @@ async def import_multiple_files(
     table_prefix: Optional[str] = None,
     if_exists: str = 'replace',
     cleaning_options: Optional[str] = Form(None),
-    org=Depends(get_current_org)
+    org=Depends(get_current_org),
+    user=Depends(require_permission("WRITE_DATA"))
 ):
     """
     Import multiple CSV or Excel files at once into the organization's database.
@@ -351,7 +355,8 @@ async def import_multiple_files(
     try:
         db_manager = DatabaseManager(connection_string=org.db_connection_string)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to initialize database manager for import: {e}")
+        raise HTTPException(status_code=500, detail="Failed to connect to the database for import. Please check your organization's database configuration.")
     uploader = FileUploader(db_manager)
     
     import tempfile
@@ -437,7 +442,8 @@ async def import_multiple_files(
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)):
+async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org),
+                      user=Depends(require_permission("WRITE_DATA"))):
     content = await file.read()
     filename = file.filename
     
@@ -610,7 +616,7 @@ async def get_table_profile(table_name: str, force: bool = False, org=Depends(ge
         return {"status": "success", "profile": profile}
     except Exception as e:
         logger.error(f"Profiling failed for {table_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to generate a profile for table '{table_name}'. Please ensure the table contains valid data.")
 
 
 @router.post("/feedback")
@@ -659,7 +665,8 @@ async def list_data_sources(org=Depends(get_current_org)):
 
 
 @router.post("/import/api")
-async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org)):
+async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org),
+                          user=Depends(require_permission("WRITE_DATA"))):
     """Import data from an external API."""
     import httpx
     try:
@@ -697,9 +704,14 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
         # Save to DB
         # Create database manager with org's connection string
         if not org.db_connection_string:
-             # Auto-provision (reuse logic or error)
-             raise HTTPException(status_code=400, detail="Organization has no database configured")
-             
+             # Auto-provision a database for the organization
+             print(f"Auto-provisioning database for org {org.name}")
+             db_path = f"sqlite:///org_{org.api_key[:8]}.db"
+             update_org_db(org.api_key, db_path)
+             # Refresh org object and file cache
+             org.db_connection_string = db_path
+             with FILE_DB_CACHE_LOCK:
+                 FILE_DB_CACHE.pop(org.api_key, None)
         db_manager = DatabaseManager(connection_string=org.db_connection_string)
         success = db_manager.load_dataframe(df, request.table_name, if_exists=request.if_exists)
         db_manager.close()
@@ -842,7 +854,8 @@ async def analyze_file(file: UploadFile = File(...), org=Depends(get_current_org
 
 
 @router.post("/tables/{table_name}/duplicate")
-async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)):
+async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org),
+                                   user=Depends(require_permission("MUTATE_TABLES"))):
     # Use get_org_connection_string which checks FILE_DB_CACHE first (same as /tables)
     conn_str = get_org_connection_string(org)
     if not conn_str:
@@ -864,7 +877,8 @@ async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)
 
 
 @router.patch("/tables/{table_name}/cell")
-async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=Depends(get_current_org)):
+async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=Depends(get_current_org),
+                               user=Depends(require_permission("MUTATE_TABLES"))):
     # Determine which DB to use
     conn_str = get_org_connection_string(org)
     if not conn_str:
@@ -897,7 +911,8 @@ async def fill_missing_values_endpoint(
     table_name: str, 
     column_name: str, 
     request: FillMissingRequest, 
-    org=Depends(get_current_org)
+    org=Depends(get_current_org),
+    user=Depends(require_permission("MUTATE_TABLES"))
 ):
     with FILE_DB_CACHE_LOCK:
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
@@ -922,7 +937,8 @@ async def fill_missing_values_endpoint(
 
 
 @router.delete("/tables/{table_name}")
-async def delete_table_endpoint(table_name: str, org=Depends(get_current_org)):
+async def delete_table_endpoint(table_name: str, org=Depends(get_current_org),
+                                user=Depends(require_permission("MUTATE_TABLES"))):
     """Delete a table (only copies allowed)"""
     with FILE_DB_CACHE_LOCK:
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
@@ -949,7 +965,8 @@ async def delete_table_endpoint(table_name: str, org=Depends(get_current_org)):
 
 
 @router.post("/tables/{table_name}/columns/rename")
-async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, org=Depends(get_current_org)):
+async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, org=Depends(get_current_org),
+                                 user=Depends(require_permission("MUTATE_TABLES"))):
     with FILE_DB_CACHE_LOCK:
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
@@ -967,7 +984,8 @@ async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, 
 
 
 @router.delete("/tables/{table_name}/columns/{column_name}")
-async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(get_current_org)):
+async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(get_current_org),
+                               user=Depends(require_permission("MUTATE_TABLES"))):
     with FILE_DB_CACHE_LOCK:
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:
@@ -985,7 +1003,8 @@ async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(ge
 
 
 @router.delete("/tables/{table_name}/rows/{row_id}")
-async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_current_org)):
+async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_current_org),
+                              user=Depends(require_permission("MUTATE_TABLES"))):
     with FILE_DB_CACHE_LOCK:
         conn_str = FILE_DB_CACHE.get(org.api_key) or org.db_connection_string
     if not conn_str:

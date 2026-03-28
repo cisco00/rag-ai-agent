@@ -5,7 +5,7 @@ routers/alerts.py — Alerting and monitoring routes.
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
-from dependencies import get_current_org, get_org_connection_string
+from dependencies import get_current_org, get_org_connection_string, require_permission
 from alerts import (
     get_alert_rules, create_alert_rule, get_alert_rule, update_alert_rule,
     delete_alert_rule, get_alert_history, _evaluate_metric_rule, _evaluate_freshness_rule
@@ -23,7 +23,8 @@ async def list_alerts(org=Depends(get_current_org)):
 
 
 @router.post("/alerts")
-async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org)):
+async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org),
+                       user=Depends(require_permission("MANAGE_ALERTS"))):
     """Create a new alert rule."""
     data = request.model_dump()
     rule = create_alert_rule(org.id, data)
@@ -31,7 +32,8 @@ async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org)):
 
 
 @router.patch("/alerts/{rule_id}")
-async def update_alert(rule_id: int, request: AlertRuleRequest, org=Depends(get_current_org)):
+async def update_alert(rule_id: int, request: AlertRuleRequest, org=Depends(get_current_org),
+                       user=Depends(require_permission("MANAGE_ALERTS"))):
     rule = get_alert_rule(rule_id, org.id)
     if not rule:
         raise HTTPException(status_code=404, detail="Alert rule not found.")
@@ -40,7 +42,8 @@ async def update_alert(rule_id: int, request: AlertRuleRequest, org=Depends(get_
 
 
 @router.delete("/alerts/{rule_id}")
-async def remove_alert(rule_id: int, org=Depends(get_current_org)):
+async def remove_alert(rule_id: int, org=Depends(get_current_org),
+                       user=Depends(require_permission("MANAGE_ALERTS"))):
     if not get_alert_rule(rule_id, org.id):
         raise HTTPException(status_code=404, detail="Alert rule not found.")
     delete_alert_rule(rule_id, org.id)
@@ -48,7 +51,8 @@ async def remove_alert(rule_id: int, org=Depends(get_current_org)):
 
 
 @router.post("/alerts/{rule_id}/toggle")
-async def toggle_alert(rule_id: int, org=Depends(get_current_org)):
+async def toggle_alert(rule_id: int, org=Depends(get_current_org),
+                       user=Depends(require_permission("MANAGE_ALERTS"))):
     rule = get_alert_rule(rule_id, org.id)
     if not rule:
         raise HTTPException(status_code=404, detail="Alert rule not found.")
@@ -57,7 +61,8 @@ async def toggle_alert(rule_id: int, org=Depends(get_current_org)):
 
 
 @router.post("/alerts/{rule_id}/test")
-async def test_alert(rule_id: int, org=Depends(get_current_org)):
+async def test_alert(rule_id: int, org=Depends(get_current_org),
+                     user=Depends(require_permission("MANAGE_ALERTS"))):
     """Manually trigger evaluation of one rule right now (ignores cooldown)."""
     rule     = get_alert_rule(rule_id, org.id)
     if not rule:

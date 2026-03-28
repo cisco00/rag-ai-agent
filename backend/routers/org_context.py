@@ -14,10 +14,13 @@ from models import (
     get_shared_report, get_org_shared_reports, ScheduledReport,
     get_db
 )
+from exceptions import RAGAgentError, ModelAPIError
 from database import DatabaseManager
 from dependencies import (
-    get_current_org, get_org_connection_string, get_cached_schema_summary
+    get_current_org, get_org_connection_string, get_cached_schema_summary,
+    require_permission
 )
+from auth import get_current_user
 from org_context_manager import OrgContextManager
 from export_manager import ExportManager
 from scheduler import schedule_job_for_report
@@ -39,7 +42,8 @@ async def get_org_context(org=Depends(get_current_org)):
 
 
 @router.post("/organization/context", response_model=ContextEntryResponse)
-async def add_org_context(request: ContextEntryRequest, org=Depends(get_current_org)):
+async def add_org_context(request: ContextEntryRequest, org=Depends(get_current_org),
+                          user=Depends(require_permission("MANAGE_ORG"))):
     """Add or update business context."""
     ctx_manager = OrgContextManager(org.id)
     try:
@@ -56,7 +60,8 @@ async def add_org_context(request: ContextEntryRequest, org=Depends(get_current_
 
 
 @router.delete("/organization/context/{key}")
-async def delete_org_context(key: str, org=Depends(get_current_org)):
+async def delete_org_context(key: str, org=Depends(get_current_org),
+                             user=Depends(require_permission("MANAGE_ORG"))):
     """Delete context entry."""
     ctx_manager = OrgContextManager(org.id)
     ctx_manager.delete_context(key)
@@ -71,7 +76,8 @@ async def get_org_context_stats(org=Depends(get_current_org)):
 
 
 @router.post("/organization/context/process-corrections")
-async def process_corrections(org=Depends(get_current_org)):
+async def process_corrections(org=Depends(get_current_org),
+                              user=Depends(require_permission("MANAGE_ORG"))):
     """Trigger processing of pending corrections for implicit learning."""
     from main import AnalyticsAgent
     from config import get_agent_config
@@ -97,7 +103,7 @@ async def process_corrections(org=Depends(get_current_org)):
 
 
 @router.post("/query", response_model=QueryResponse)
-async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
+async def execute_query(request: QueryRequest, org=Depends(get_current_org), user=Depends(get_current_user)):
     conn_str = get_org_connection_string(org, prefer_file_db=request.use_file)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
@@ -143,7 +149,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
                     query=request.query,
                     response=result["text"],
                     visualization=result.get("visualization"),
-                    sql_query=result.get("sql_query")
+                    sql_query=result.get("sql_query"),
+                    user_id=user["id"]
                 )
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
@@ -154,7 +161,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
                     query=request.query,
                     response=result["text"],
                     visualization=result.get("visualization"),
-                    sql_query=request.confirmed_sql
+                    sql_query=request.confirmed_sql,
+                    user_id=user["id"]
                 )
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
@@ -174,9 +182,18 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org)):
             status=result.get("status", "success"),
             sql_query=result.get("sql_query")
         )
+    except RAGAgentError as e:
+        logger.error(f"RAG Agent Error: {e}", exc_info=True)
+        # Use a more appropriate status code if it's a known error
+        status_code = 400
+        if isinstance(e, ModelAPIError):
+            status_code = 503 # Service Unavailable (temporary)
+        
+        detail_msg = getattr(e, "user_message", str(e))
+        raise HTTPException(status_code=status_code, detail=detail_msg)
     except Exception as e:
-        logger.error(f"Query execution failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected query failure: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred during analysis. Please try again.")
     finally:
         agent.close()
 
@@ -244,7 +261,8 @@ async def get_shared(report_id: str):
 
 
 @router.post("/export/pdf")
-async def export_pdf(request: QueryResponse, org=Depends(get_current_org)):
+async def export_pdf(request: QueryResponse, org=Depends(get_current_org),
+                     user=Depends(require_permission("EXPORT"))):
     """Export analysis result as PDF"""
     try:
         manager = ExportManager()
@@ -262,7 +280,8 @@ async def export_pdf(request: QueryResponse, org=Depends(get_current_org)):
 
 
 @router.post("/export/pptx")
-async def export_pptx(request: QueryResponse, org=Depends(get_current_org)):
+async def export_pptx(request: QueryResponse, org=Depends(get_current_org),
+                      user=Depends(require_permission("EXPORT"))):
     """Export analysis result as PowerPoint"""
     try:
         manager = ExportManager()
@@ -280,7 +299,8 @@ async def export_pptx(request: QueryResponse, org=Depends(get_current_org)):
 
 
 @router.post("/scheduled-reports")
-async def create_scheduled_report(request: ScheduledReportRequest, org=Depends(get_current_org)):
+async def create_scheduled_report(request: ScheduledReportRequest, org=Depends(get_current_org),
+                                  user=Depends(require_permission("VIEW_REPORTS"))):
     """Schedule a new automated report"""
     from datetime import datetime, timedelta
     try:
@@ -333,7 +353,8 @@ async def list_scheduled_reports(org=Depends(get_current_org)):
 
 
 @router.delete("/scheduled-reports/{report_id}")
-async def delete_scheduled_report(report_id: int, org=Depends(get_current_org)):
+async def delete_scheduled_report(report_id: int, org=Depends(get_current_org),
+                                  user=Depends(require_permission("VIEW_REPORTS"))):
     """Cancel a scheduled report"""
     try:
         with get_db() as db:

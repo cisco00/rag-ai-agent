@@ -9,8 +9,10 @@ from fastapi.concurrency import run_in_threadpool
 
 from database import DatabaseManager
 from dependencies import (
-    get_current_org, get_org_connection_string, get_cached_schema_summary
+    get_current_org, get_org_connection_string, get_cached_schema_summary,
+    require_permission
 )
+from auth import get_current_user
 from models import get_org_history
 from schemas import (
     ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse
@@ -22,7 +24,8 @@ router = APIRouter()
 # ── Routes ──
 
 @router.post("/analytics/forecast")
-async def get_forecast(request: ForecastRequest, org=Depends(get_current_org)):
+async def get_forecast(request: ForecastRequest, org=Depends(get_current_org),
+                       user=Depends(require_permission("VIEW_ADVANCED"))):
     """Generate a time-series forecast."""
     try:
         db_conn = get_org_connection_string(org)
@@ -46,11 +49,12 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org)):
         
     except Exception as e:
          logger.error(f"Forecast failed: {e}", exc_info=True)
-         raise HTTPException(status_code=500, detail=str(e))
+         raise HTTPException(status_code=500, detail="Forecasting engine failed. Please verify that your date and value columns are correctly formatted.")
 
 
 @router.post("/analytics/anomaly")
-async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org)):
+async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org),
+                        user=Depends(require_permission("VIEW_ADVANCED"))):
     """Detect anomalies in a dataset."""
     try:
         db_conn = get_org_connection_string(org)
@@ -74,11 +78,12 @@ async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org)):
         
     except Exception as e:
          logger.error(f"Anomaly detection failed: {e}", exc_info=True)
-         raise HTTPException(status_code=500, detail=str(e))
+         raise HTTPException(status_code=500, detail="Anomaly detection failed. This usually occurs if there are too few data points or invalid numeric values.")
 
 
 @router.post("/analytics/correlation")
-async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_current_org)):
+async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_current_org),
+                                 user=Depends(require_permission("VIEW_ADVANCED"))):
     """Calculate correlation matrix for a table."""
     db_conn = get_org_connection_string(org)
     
@@ -113,7 +118,7 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
         raise
     except Exception as e:
         logger.error(f"Correlation API failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Correlation calculation failed. Please ensure you have selected columns with numeric data.")
 
 
 @router.get("/analytics/suggested-queries", response_model=SuggestQueriesResponse)
@@ -175,10 +180,10 @@ async def get_suggested_queries(org=Depends(get_current_org)):
 
 
 @router.get("/analytics/history")
-async def get_history(limit: int = 50, org=Depends(get_current_org)):
-    """Get past queries for the organization"""
+async def get_history(limit: int = 50, org=Depends(get_current_org), user=Depends(get_current_user)):
+    """Get past queries for the organization (filtered by user)"""
     try:
-        history = get_org_history(org.id, limit)
+        history = get_org_history(org.id, limit, user_id=user["id"])
         return {"history": history}
     except Exception as e:
         logger.error(f"Error fetching history: {e}")
