@@ -12,13 +12,13 @@ from models import (
     get_org_history, create_feedback, create_query_history,
     get_chat_history, add_chat_message, create_shared_report,
     get_shared_report, get_org_shared_reports, ScheduledReport,
-    get_db
+    get_db, update_org_db
 )
 from exceptions import RAGAgentError, ModelAPIError
 from database import DatabaseManager
 from dependencies import (
     get_current_org, get_org_connection_string, get_cached_schema_summary,
-    require_permission
+    require_permission, FILE_DB_CACHE, FILE_DB_CACHE_LOCK
 )
 from auth import get_current_user
 from org_context_manager import OrgContextManager
@@ -26,13 +26,40 @@ from export_manager import ExportManager
 from scheduler import schedule_job_for_report
 from schemas import (
     ContextEntryRequest, ContextEntryResponse, QueryRequest,
-    QueryResponse, ScheduledReportRequest
+    QueryResponse, ScheduledReportRequest, ConfigRequest
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── Routes ──
+
+@router.get("/config")
+async def get_config(org=Depends(get_current_org)):
+    """Return the DB connection string for the current organization."""
+    return {
+        "status": "success",
+        "connection_string": org.db_connection_string
+    }
+
+@router.post("/config")
+async def configure_db(request: ConfigRequest, org=Depends(get_current_org),
+                      user=Depends(require_permission("MANAGE_ORG"))):
+    """Update the DB connection string for the current organization."""
+    try:
+        db_manager = DatabaseManager(connection_string=request.connection_string)
+        db_manager.list_tables()  # Validate connection
+        db_manager.close()
+
+        update_org_db(org.api_key, request.connection_string)
+
+        with FILE_DB_CACHE_LOCK:
+            FILE_DB_CACHE.pop(org.api_key, None)
+
+        return {"status": "success", "message": "Database connection string updated."}
+    except Exception as e:
+        logger.error(f"DB CONFIG ERROR: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to connect: {str(e)}")
 
 @router.get("/organization/context", response_model=List[ContextEntryResponse])
 async def get_org_context(org=Depends(get_current_org)):

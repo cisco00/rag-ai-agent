@@ -322,32 +322,3 @@ async def get_me(user: dict = Depends(auth_module.get_current_user)):
     """Return the current authenticated user's profile, including permissions."""
     user["permissions"] = auth_module.get_role_permissions(user.get("role", "viewer"))
     return user
-
-
-@router.get("/config")
-async def get_config(org=Depends(get_current_org)):
-    """Return the DB connection string for the current organization."""
-    return {
-        "status": "success",
-        "connection_string": org.db_connection_string
-    }
-
-
-@router.post("/config")
-async def configure_db(request: ConfigRequest, org=Depends(get_current_org),
-                      user=Depends(require_permission("MANAGE_ORG"))):
-    """Update the DB connection string for the current organization."""
-    try:
-        db_manager = DatabaseManager(connection_string=request.connection_string)
-        db_manager.list_tables()  # Validate connection
-        db_manager.close()
-
-        update_org_db(org.api_key, request.connection_string)
-
-        with FILE_DB_CACHE_LOCK:
-            FILE_DB_CACHE.pop(org.api_key, None)
-
-        return {"status": "success", "message": "Database connection string updated."}
-    except Exception as e:
-        logger.error(f"DB CONFIG ERROR: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to connect: {str(e)}")

@@ -57,7 +57,7 @@ services:
     ports:
       - "8080:8000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@vantage-db:5432/vantage_db
+
       - ADMIN_DB_URL=sqlite:////data/admin.db
       - ADMIN_DB_PATH=/data/admin.db
       - CORS_ORIGINS=http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1
@@ -67,13 +67,7 @@ services:
       resources:
         limits:
           memory: 2G
-    depends_on:
-      vantage-db:
-        condition: service_healthy
-      vantage-mysql:
-        condition: service_healthy
-      vantage-mariadb:
-        condition: service_healthy
+
     volumes:
       - ./backend:/app
       - vantage_admin_data:/data
