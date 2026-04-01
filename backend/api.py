@@ -53,11 +53,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 insight_scheduler: Optional[InsightScheduler] = None
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global insight_scheduler
+    global insight_scheduler, _main_loop
     init_admin_db()
     ensure_insight_tables()
 
