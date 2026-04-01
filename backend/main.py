@@ -234,6 +234,7 @@ class QueryResult:
     had_error_retry:       bool                       = False
     confidence:            Optional[float]            = None
     confidence_reasoning:  Optional[str]              = None
+    thinking_process:      List[Dict[str, Any]]       = field(default_factory=list)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -318,6 +319,7 @@ class QueryProcessor:
         # Bug #16: track the most recent execute_query result rows
         last_result_rows: Optional[List[Dict]]   = None
         had_error_retry                          = False
+        thinking_process: List[Dict[str, Any]]   = []
 
         logger.info(f"QueryProcessor.process: {query[:100]}")
 
@@ -364,6 +366,11 @@ class QueryProcessor:
             if not tool_calls:
                 logger.info(f"Completed in {iteration_count} iterations")
                 final_text = response_msg.content
+                thinking_process.append({
+                    "step": iteration_count,
+                    "thought": response_msg.content or "Finalizing response...",
+                    "action": "Complete"
+                })
                 break
 
             msg_dict: Dict = {"role": response_msg.role, "content": response_msg.content}
@@ -380,6 +387,18 @@ class QueryProcessor:
                     for tc in response_msg.tool_calls
                 ]
             messages.append(msg_dict)
+
+            # Record reasoning and intended tool calls
+            thinking_process.append({
+                "step": iteration_count,
+                "thought": response_msg.content or "Analyzing...",
+                "tool_calls": [
+                    {
+                        "name": tc.function.name,
+                        "args": tc.function.arguments
+                    } for tc in tool_calls
+                ]
+            })
 
             for tc in tool_calls:
                 # Parse args once so we can store them for Bug #17
@@ -452,6 +471,7 @@ class QueryProcessor:
             had_error_retry      = had_error_retry,
             confidence           = confidence,
             confidence_reasoning = confidence_reasoning,
+            thinking_process     = thinking_process,
         )
 
     def _execute_tool(self, tool_call, verify_only: bool, parsed_args: dict) -> Any:
@@ -478,7 +498,24 @@ class QueryProcessor:
 # 6.  ANALYTICS AGENT
 # ═════════════════════════════════════════════════════════════════════════════
 
-_JOIN_PROMPT_ADDENDUM = """
+_THINKING_PROCESS_RULES = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THINKING PROCESS RULES (CORE TRANSPARENCY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You MUST explain your logical reasoning in the 'content' field BEFORE every tool call. 
+The user will see this trace to verify your logic.
+- STATE YOUR CURRENT GOAL: What are you trying to achieve in this specific step?
+- ANALYZE YOUR KNOWLEDGE: What do you already know from previous steps?
+- JUSTIFY YOUR ACTION: Why is the chosen tool or SQL query the most logical next step?
+- If you encounter a schema you don't recognize, explain your deduction about the column names.
+- ALWAYS 'think out loud' in the content field. Do NOT emit a tool call with empty content.
+
+Example turn:
+  Thought: "The user wants a monthly trend. I see a 'created_at' column in the 'orders' table. I will count orders grouped by month using this column to provide the trend."
+  Tool: execute_query(sql="SELECT ...")
+"""
+
+_JOIN_PROMPT_ADDENDUM = _THINKING_PROCESS_RULES + """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MULTI-TABLE QUERY RULES  (always follow these)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -632,6 +669,7 @@ class AnalyticsAgent:
                     "visualization":        None,
                     "confidence":           confidence,
                     "confidence_reasoning": confidence_reasoning,
+                    "thinking_process":     thinking_process,
                 }
 
             except MaxIterationsError:
@@ -645,6 +683,7 @@ class AnalyticsAgent:
                     "status":               "error",
                     "confidence":           0.0,
                     "confidence_reasoning": "Query did not complete within iteration limit.",
+                    "thinking_process":     thinking_process,
                 }
 
             clean_text, viz_data = VisualizationParser.parse(result.text)
@@ -672,6 +711,7 @@ class AnalyticsAgent:
                 "sql_query":            result.sql_query,
                 "confidence":           result.confidence,
                 "confidence_reasoning": result.confidence_reasoning,
+                "thinking_process":     result.thinking_process,
             }
 
         except AgentError as exc:

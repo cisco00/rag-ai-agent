@@ -5,11 +5,11 @@ This module defines SQLAlchemy models for organizations and shared reports,
 along with CRUD operations.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Index
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Index, text
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, List, Dict
 import secrets
 import os
 from datetime import datetime, timedelta
@@ -210,6 +210,9 @@ class DataSource(Base):
     source_type = Column(String(50), nullable=False) # 'api', 'upload', 'database'
     connection_details = Column(Text, nullable=True) # JSON with URL, params, or filepath
     table_name = Column(String(255), nullable=True)
+    refresh_interval = Column(Integer, nullable=True) # Interval in minutes
+    last_synced_at = Column(DateTime, nullable=True)
+    is_active = Column(Integer, default=1) # 1 for active, 0 for inactive
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -239,6 +242,7 @@ class ChatMessage(Base):
     role = Column(String(50), nullable=False) # 'user', 'assistant'
     content = Column(Text, nullable=False)
     visualization = Column(Text, nullable=True)  # JSON string
+    thinking_process = Column(Text, nullable=True)  # JSON string
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     def __repr__(self):
@@ -307,6 +311,22 @@ def init_admin_db():
                     conn.execute(text("ALTER TABLE query_history ADD COLUMN user_id INTEGER"))
                 except Exception:
                     pass
+                try:
+                    conn.execute(text("ALTER TABLE chat_messages ADD COLUMN thinking_process TEXT"))
+                    logger.info("Migration: added thinking_process to chat_messages")
+                except Exception as e:
+                    logger.warning(f"Migration: chat_messages.thinking_process may already exist or error: {e}")
+                
+                # New migrations for DataSource refresh
+                try:
+                    conn.execute(text("ALTER TABLE data_sources ADD COLUMN refresh_interval INTEGER"))
+                except Exception: pass
+                try:
+                    conn.execute(text("ALTER TABLE data_sources ADD COLUMN last_synced_at DATETIME"))
+                except Exception: pass
+                try:
+                    conn.execute(text("ALTER TABLE data_sources ADD COLUMN is_active INTEGER DEFAULT 1"))
+                except Exception: pass
                     
         logger.info("Admin database tables created and migrations applied")
     except Exception as e:
@@ -330,12 +350,21 @@ def create_chat_session(org_id: int, title: Optional[str] = None, user_id: Optio
         logger.error(f"Failed to create chat session: {e}", exc_info=True)
         raise DatabaseError(f"Failed to create chat session: {str(e)}") from e
 
-def add_chat_message(session_id: str, role: str, content: str, visualization: Optional[dict] = None) -> ChatMessage:
+def add_chat_message(session_id: str, role: str, content: str, 
+                     visualization: Optional[dict] = None, 
+                     thinking_process: Optional[list] = None) -> ChatMessage:
     """Add a message to a chat session."""
     try:
         with get_db() as db:
             viz_json = json.dumps(visualization) if visualization else None
-            msg = ChatMessage(session_id=session_id, role=role, content=content, visualization=viz_json)
+            thought_json = json.dumps(thinking_process) if thinking_process else None
+            msg = ChatMessage(
+                session_id=session_id, 
+                role=role, 
+                content=content, 
+                visualization=viz_json,
+                thinking_process=thought_json
+            )
             db.add(msg)
             db.flush()
             db.refresh(msg)
@@ -535,6 +564,60 @@ def log_connection(org_id: int, connection_string: str):
                 logger.debug(f"Logged new connection for org {org_id}")
     except Exception as e:
         logger.error(f"Failed to log connection for org {org_id}: {e}")
+
+
+def create_data_source(
+    org_id: int,
+    name: str,
+    source_type: str,
+    connection_details: dict,
+    table_name: Optional[str] = None,
+    refresh_interval: Optional[int] = None
+) -> DataSource:
+    """Create a new data source record."""
+    try:
+        with get_db() as db:
+            source = DataSource(
+                org_id=org_id,
+                name=name,
+                source_type=source_type,
+                connection_details=json.dumps(connection_details),
+                table_name=table_name,
+                refresh_interval=refresh_interval
+            )
+            db.add(source)
+            db.flush()
+            db.refresh(source)
+            db.expunge(source)
+            return source
+    except Exception as e:
+        logger.error(f"Failed to create data source: {e}")
+        return None
+
+
+def get_org_data_sources(org_id: int) -> List[DataSource]:
+    """Get all data sources for an organization."""
+    try:
+        with get_db() as db:
+            sources = db.query(DataSource).filter(DataSource.org_id == org_id).all()
+            for s in sources:
+                db.expunge(s)
+            return sources
+    except Exception as e:
+        logger.error(f"Failed to get data sources: {e}")
+        return []
+
+
+def update_data_source_sync(source_id: int, last_synced_at: datetime):
+    """Update last sync timestamp for a data source."""
+    try:
+        with get_db() as db:
+            source = db.query(DataSource).filter(DataSource.id == source_id).first()
+            if source:
+                source.last_synced_at = last_synced_at
+                db.flush()
+    except Exception as e:
+        logger.error(f"Failed to update data source sync: {e}")
 
 
 def get_org_connection_history(org_id: int) -> list[str]:

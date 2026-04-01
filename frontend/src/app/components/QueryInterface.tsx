@@ -1,5 +1,32 @@
 import { useState, useEffect } from 'react';
-import { Send, Loader2, FileDown, Share2, BarChart3, Mic, MicOff, ThumbsUp, ThumbsDown, MessageSquare, Plus, Trash2, X, Pin, Check } from 'lucide-react';
+import { 
+  BarChart3, 
+  Send, 
+  Loader2, 
+  Cpu, 
+  Search, 
+  History, 
+  ChevronRight, 
+  Plus, 
+  Settings, 
+  PanelLeftClose, 
+  PanelLeft, 
+  LogOut, 
+  CheckCircle2, 
+  AlertCircle,
+  Brain,
+  FileDown, 
+  Share2, 
+  Mic, 
+  MicOff, 
+  ThumbsUp, 
+  ThumbsDown, 
+  MessageSquare, 
+  Trash2, 
+  X, 
+  Pin, 
+  Check 
+} from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
@@ -24,6 +51,7 @@ interface Message {
   timestamp: Date;
   feedback?: 'up' | 'down' | null;
   queryId?: string;
+  thinkingProcess?: any[];
 }
 
 export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }: QueryInterfaceProps) {
@@ -143,6 +171,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
           timestamp: new Date(msg.created_at || Date.now()),
           visualization: msg.visualization || undefined,
           queryId: msg.query_id || undefined,
+          thinkingProcess: msg.thinking_process || undefined,
         })));
       }
       setIsSidebarOpen(false);
@@ -207,6 +236,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         timestamp: new Date(),
         feedback: null,
         queryId: response.query_id,
+        thinkingProcess: response.thinking_process,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -429,6 +459,46 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                   {message.visualization && (
                     <div className="mt-4 overflow-x-auto">
                       <ChartDisplay visualization={message.visualization} />
+                    </div>
+                  )}
+
+                  {message.role === 'assistant' && message.thinkingProcess && message.thinkingProcess.length > 0 && (
+                    <div className="mt-4">
+                      <details className="group border border-gray-100 rounded-xl bg-gray-50/50 shadow-sm overflow-hidden">
+                        <summary className="flex items-center gap-2 p-3 cursor-pointer select-none text-sm font-semibold text-gray-700 hover:bg-gray-100/50 transition-colors">
+                          <Brain className="size-4 text-blue-500 group-open:text-blue-600" />
+                          <span>View Logical Reasoning Trace</span>
+                          <span className="ml-auto text-xs font-normal text-gray-400 group-open:rotate-180 transition-transform">▼</span>
+                        </summary>
+                        <div className="p-4 pt-0 space-y-4 border-t border-gray-100 bg-white rounded-b-xl">
+                          {message.thinkingProcess.map((step: any, i: number) => (
+                            <div key={i} className="relative pl-6 border-l-2 border-blue-100">
+                              <div className="absolute -left-1.5 top-1 size-3 rounded-full bg-blue-100 border-2 border-white" />
+                              <div className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-1">
+                                Step {step.step}: {step.action || 'Analysis'}
+                              </div>
+                              <p className="text-sm text-gray-700 leading-relaxed mb-2">
+                                {step.thought}
+                              </p>
+                              {step.tool_calls && step.tool_calls.length > 0 && (
+                                <div className="space-y-2">
+                                  {step.tool_calls.map((tc: any, j: number) => (
+                                    <div key={j} className="bg-gray-50 rounded-lg p-3 text-xs font-mono text-gray-600 break-all border border-gray-200">
+                                      <div className="font-bold text-gray-900 mb-1 flex items-center gap-2">
+                                        <BarChart3 className="size-3" />
+                                        {tc.name}
+                                      </div>
+                                      <div className="opacity-80">
+                                        {JSON.stringify(tc.args)}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     </div>
                   )}
 

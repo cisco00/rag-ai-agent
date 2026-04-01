@@ -6,9 +6,13 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 
-from models import get_db, ScheduledReport, Organization
+from models import get_db, ScheduledReport, Organization, DataSource, update_data_source_sync
 from email_service import send_scheduled_report_email
 from org_context_manager import OrgContextManager
+from database import DatabaseManager
+import httpx
+import pandas as pd
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,86 @@ def shutdown_scheduler():
     if scheduler.running:
         scheduler.shutdown()
         logger.info("Scheduler shutdown")
+
+def execute_data_source_sync(source_id: int):
+    """
+    Background job to synchronize a data source (e.g., API refresh).
+    """
+    logger.info(f"Starting background sync for DataSource {source_id}")
+    
+    try:
+        with get_db() as db:
+            source = db.query(DataSource).filter(DataSource.id == source_id).first()
+            if not source or not source.is_active:
+                logger.warning(f"DataSource {source_id} not found or inactive")
+                return
+            
+            org = db.query(Organization).filter(Organization.id == source.org_id).first()
+            if not org or not org.db_connection_string:
+                logger.error(f"Organization or DB connection missing for DataSource {source_id}")
+                return
+            
+            details = json.loads(source.connection_details)
+            
+            if source.source_type == 'api':
+                url = details.get('url')
+                method = details.get('method', 'GET')
+                headers = details.get('headers')
+                params = details.get('params')
+                
+                # Fetch fresh data
+                with httpx.Client() as client:
+                    resp = client.request(method, url, headers=headers, params=params, timeout=60.0)
+                    resp.raise_for_status()
+                    data = resp.json()
+                
+                # Convert to DataFrame
+                if isinstance(data, list):
+                    df = pd.DataFrame(data)
+                elif isinstance(data, dict):
+                    found_list = False
+                    for key, val in data.items():
+                        if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                            df = pd.DataFrame(val)
+                            found_list = True
+                            break
+                    if not found_list:
+                         df = pd.DataFrame([data])
+                else:
+                     logger.error(f"Could not parse API data for Source {source_id}")
+                     return
+
+                # Update database
+                db_manager = DatabaseManager(connection_string=org.db_connection_string)
+                success = db_manager.load_dataframe(df, source.table_name, if_exists='replace')
+                db_manager.close()
+                
+                if success:
+                    update_data_source_sync(source.id, datetime.utcnow())
+                    logger.info(f"Successfully synced DataSource {source_id} to table '{source.table_name}'")
+                else:
+                    logger.error(f"Failed to load synced data for Source {source_id}")
+
+            # Schedule next run
+            if source.refresh_interval:
+                next_run = datetime.utcnow() + timedelta(minutes=source.refresh_interval)
+                schedule_job_for_source(source.id, next_run)
+
+    except Exception as e:
+        logger.error(f"Error syncing DataSource {source_id}: {e}", exc_info=True)
+
+def schedule_job_for_source(source_id: int, run_date: datetime):
+    """Schedule a data source sync job."""
+    scheduler.add_job(
+        execute_data_source_sync,
+        'date',
+        run_date=run_date,
+        args=[source_id],
+        id=f"source_sync_{source_id}",
+        replace_existing=True,
+        misfire_grace_time=None
+    )
+    logger.info(f"Scheduled sync for DataSource {source_id} at {run_date}")
 
 def execute_scheduled_report(report_id: int):
     """
@@ -118,8 +202,25 @@ def refresh_jobs():
             
             for report in reports:
                 schedule_job_for_report(report.id, report.next_run_at)
+            
+            # Load and schedule data source syncs
+            sources = db.query(DataSource).filter(
+                DataSource.is_active == 1,
+                DataSource.refresh_interval != None
+            ).all()
+
+            for source in sources:
+                # If never synced, sync now. Otherwise schedule based on interval.
+                if not source.last_synced_at:
+                    run_at = datetime.utcnow() + timedelta(seconds=10)
+                else:
+                    run_at = source.last_synced_at + timedelta(minutes=source.refresh_interval)
+                    if run_at < datetime.utcnow():
+                        run_at = datetime.utcnow() + timedelta(seconds=10)
                 
-            logger.info(f"Loaded {len(reports)} scheduled jobs")
+                schedule_job_for_source(source.id, run_at)
+                
+            logger.info(f"Loaded {len(reports)} reports and {len(sources)} data source syncs")
     except Exception as e:
         logger.error(f"Failed to refresh jobs: {e}", exc_info=True)
 

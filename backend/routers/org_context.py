@@ -171,7 +171,9 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
             try:
                 response_text = result.get("text", "")
                 visualization = result.get("visualization")
-                add_chat_message(request.session_id, "assistant", response_text, visualization=visualization)
+                thinking_process = result.get("thinking_process")
+                add_chat_message(request.session_id, "assistant", response_text, 
+                                 visualization=visualization, thinking_process=thinking_process)
             except Exception as e:
                 logger.error(f"Failed to save assistant message: {e}")
 
@@ -180,7 +182,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
             response=result.get("text", ""),
             visualization=result.get("visualization"),
             status=result.get("status", "success"),
-            sql_query=result.get("sql_query")
+            sql_query=result.get("sql_query"),
+            thinking_process=result.get("thinking_process")
         )
     except RAGAgentError as e:
         logger.error(f"RAG Agent Error: {e}", exc_info=True)
@@ -330,12 +333,11 @@ async def create_scheduled_report(request: ScheduledReportRequest, org=Depends(g
 
 @router.get("/scheduled-reports")
 async def list_scheduled_reports(org=Depends(get_current_org)):
-    """List active scheduled reports"""
+    """List all scheduled reports for the organization."""
     try:
         with get_db() as db:
             reports = db.query(ScheduledReport).filter(
-                ScheduledReport.org_id == org.id,
-                ScheduledReport.is_active == 1
+                ScheduledReport.org_id == org.id
             ).all()
             return [
                 {
@@ -343,7 +345,8 @@ async def list_scheduled_reports(org=Depends(get_current_org)):
                     "query": r.query,
                     "frequency": r.frequency,
                     "next_run_at": r.next_run_at.isoformat(),
-                    "recipients": r.recipients
+                    "recipients": r.recipients,
+                    "is_active": r.is_active
                 }
                 for r in reports
             ]
@@ -355,7 +358,7 @@ async def list_scheduled_reports(org=Depends(get_current_org)):
 @router.delete("/scheduled-reports/{report_id}")
 async def delete_scheduled_report(report_id: int, org=Depends(get_current_org),
                                   user=Depends(require_permission("VIEW_REPORTS"))):
-    """Cancel a scheduled report"""
+    """Delete a scheduled report permanently."""
     try:
         with get_db() as db:
             report = db.query(ScheduledReport).filter(
@@ -364,11 +367,61 @@ async def delete_scheduled_report(report_id: int, org=Depends(get_current_org),
             ).first()
             if not report:
                 raise HTTPException(status_code=404, detail="Report not found")
-            report.is_active = 0
+            db.delete(report)
             db.commit()
-            return {"message": "Report cancelled"}
+            return {"message": "Report deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to cancel report: {e}", exc_info=True)
+        logger.error(f"Failed to delete report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/scheduled-reports/{report_id}/toggle")
+async def toggle_scheduled_report(report_id: int, org=Depends(get_current_org),
+                                  user=Depends(require_permission("VIEW_REPORTS"))):
+    """Toggle a scheduled report (Pause/Resume)."""
+    try:
+        with get_db() as db:
+            report = db.query(ScheduledReport).filter(
+                ScheduledReport.id == report_id,
+                ScheduledReport.org_id == org.id
+            ).first()
+            if not report:
+                raise HTTPException(status_code=404, detail="Report not found")
+            report.is_active = 1 if report.is_active == 0 else 0
+            db.commit()
+            db.refresh(report)
+            return {"status": "success", "is_active": report.is_active}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to toggle report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/scheduled-reports/{report_id}")
+async def update_scheduled_report(report_id: int, request: ScheduledReportRequest,
+                                  org=Depends(get_current_org),
+                                  user=Depends(require_permission("VIEW_REPORTS"))):
+    """Update a scheduled report configuration."""
+    try:
+        with get_db() as db:
+            report = db.query(ScheduledReport).filter(
+                ScheduledReport.id == report_id,
+                ScheduledReport.org_id == org.id
+            ).first()
+            if not report:
+                raise HTTPException(status_code=404, detail="Report not found")
+            
+            report.query = request.query
+            report.frequency = request.frequency
+            report.recipients = request.recipients
+            db.commit()
+            db.refresh(report)
+            return {"message": "Report updated successfully", "id": report.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

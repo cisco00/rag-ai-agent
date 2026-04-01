@@ -25,9 +25,11 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
         id: r.id,
         query: r.query,
         frequency: r.frequency,
-        recipients: r.recipients.split(',').map((email: string) => email.trim()).filter(Boolean),
+        recipients: Array.isArray(r.recipients) 
+          ? r.recipients 
+          : r.recipients.split(',').map((email: string) => email.trim()).filter(Boolean),
         nextRun: new Date(r.next_run_at),
-        isActive: true,
+        isActive: r.is_active === 1 || r.is_active === true,
       }));
       setReports(formatted);
     } catch (err) {
@@ -40,6 +42,7 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
   }, []);
 
   const [showModal, setShowModal] = useState(false);
+  const [editingReportId, setEditingReportId] = useState<number | null>(null);
   const [newReport, setNewReport] = useState({
     query: '',
     frequency: 'weekly',
@@ -49,22 +52,47 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
   const handleCreateReport = async () => {
     if (!newReport.query || !newReport.recipients) return;
     try {
-      await api.post('/scheduled-reports', {
-        query: newReport.query,
-        frequency: newReport.frequency,
-        recipients: newReport.recipients
-      });
+      if (editingReportId) {
+        await api.put(`/scheduled-reports/${editingReportId}`, {
+          query: newReport.query,
+          frequency: newReport.frequency,
+          recipients: newReport.recipients
+        });
+      } else {
+        await api.post('/scheduled-reports', {
+          query: newReport.query,
+          frequency: newReport.frequency,
+          recipients: newReport.recipients
+        });
+      }
       setShowModal(false);
+      setEditingReportId(null);
       setNewReport({ query: '', frequency: 'weekly', recipients: '' });
       fetchReports();
     } catch (err) {
       console.error(err);
-      alert('Failed to schedule report');
+      alert(editingReportId ? 'Failed to update report' : 'Failed to schedule report');
     }
   };
 
-  const toggleActive = () => {
-    alert('Pausing/Resuming schedules is not yet supported by the backend.');
+  const toggleActive = async (id: number) => {
+    try {
+      await api.patch(`/scheduled-reports/${id}/toggle`);
+      fetchReports();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to toggle report status');
+    }
+  };
+
+  const startEdit = (report: ScheduledReport) => {
+    setEditingReportId(report.id);
+    setNewReport({
+      query: report.query,
+      frequency: report.frequency,
+      recipients: report.recipients.join(', ')
+    });
+    setShowModal(true);
   };
 
   const deleteReport = async (id: number) => {
@@ -198,10 +226,10 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => toggleActive()}
+                    onClick={() => toggleActive(report.id)}
                     className={`p-2 rounded-lg transition-colors ${report.isActive
                       ? 'bg-green-100 text-green-600 hover:bg-green-200'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                       }`}
                     title={report.isActive ? 'Deactivate' : 'Activate'}
                   >
@@ -212,7 +240,7 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
                     )}
                   </button>
                   <button
-                    onClick={() => alert('Editing schedules is not yet supported by the backend.')}
+                    onClick={() => startEdit(report)}
                     className="p-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors"
                     title="Edit"
                   >
@@ -239,10 +267,12 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <div className="flex items-center gap-3">
                 <Clock className="size-6 text-blue-600" />
-                <h2 className="text-xl font-bold text-gray-900">Create Scheduled Report</h2>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {editingReportId ? 'Edit Scheduled Report' : 'Create Scheduled Report'}
+                </h2>
               </div>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => { setShowModal(false); setEditingReportId(null); }}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 ×
@@ -295,7 +325,7 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
 
             <div className="flex justify-end gap-3 p-6 border-t border-gray-200">
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => { setShowModal(false); setEditingReportId(null); }}
                 className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Cancel
@@ -305,7 +335,7 @@ export function ScheduledReports({ }: ScheduledReportsProps) {
                 disabled={!newReport.query || !newReport.recipients}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 transition-colors font-medium"
               >
-                Create Schedule
+                {editingReportId ? 'Save Changes' : 'Create Schedule'}
               </button>
             </div>
           </div>

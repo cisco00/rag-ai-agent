@@ -71,11 +71,19 @@ async def get_session_messages(session_id: str, org=Depends(get_current_org), us
                 except Exception:
                     logger.warning(f"Failed to parse visualization for message {msg.id}")
             
+            thought = None
+            if msg.thinking_process:
+                try:
+                    thought = json.loads(msg.thinking_process)
+                except Exception:
+                    logger.warning(f"Failed to parse thinking process for message {msg.id}")
+
             responses.append({
                 "id": msg.id,
                 "role": msg.role,
                 "content": msg.content,
                 "visualization": viz,
+                "thinking_process": thought,
                 "created_at": msg.created_at
             })
         return responses

@@ -55,7 +55,7 @@ services:
     build: ./backend
     container_name: vantage_backend
     ports:
-      - "8000:8000"
+      - "8080:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@vantage-db:5432/vantage_db
       - ADMIN_DB_URL=sqlite:////data/admin.db
@@ -83,7 +83,7 @@ services:
     build:
       context: ./frontend
       args:
-        - VITE_API_URL=http://localhost:8000
+        - VITE_API_URL=http://localhost:8080
     container_name: vantage_frontend
     ports:
       - "5173:80"

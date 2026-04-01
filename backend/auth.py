@@ -236,6 +236,12 @@ def decode_access_token(token: str) -> dict:
 
 def create_user(org_id: int, email: str, password: str,
                 role: str = "analyst", display_name: Optional[str] = None) -> dict:
+    email = email.lower().strip()
+    if get_user_by_email_global(email):
+        raise HTTPException(
+            status_code=400, 
+            detail="An account with this email already exists. Please use another email to register."
+        )
     validate_password_strength(password)
     if role not in ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {ROLES}")
@@ -490,13 +496,12 @@ def create_invite(org_id: int, email: str, role: str, invited_by: int) -> str:
     now = datetime.now(timezone.utc).isoformat()
     
     with admin_engine.connect() as conn:
-        # Check if user already exists
-        existing_user = conn.execute(
-            text("SELECT 1 FROM users WHERE org_id = :org_id AND email = :email AND is_active = 1"),
-            {"org_id": org_id, "email": email}
-        ).fetchone()
-        if existing_user:
-            raise HTTPException(status_code=400, detail="User already exists in this organization.")
+        # Check if user already exists (globally)
+        if get_user_by_email_global(email):
+            raise HTTPException(
+                status_code=400, 
+                detail="An account with this email already exists. Please use another email to register."
+            )
 
         # Check if active invite already exists (unused and not expired)
         existing_invite = conn.execute(
