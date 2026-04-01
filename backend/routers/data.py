@@ -18,7 +18,8 @@ from models import (
     create_shared_report, get_shared_report, get_org_shared_reports,
     ScheduledReport, get_db, create_feedback, create_query_history,
     get_org_history, DataSource, ChatSession, ChatMessage,
-    create_chat_session, add_chat_message, get_chat_history
+    create_chat_session, add_chat_message, get_chat_history,
+    create_data_source
 )
 from database import DatabaseManager
 from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission
@@ -719,7 +720,6 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
         
         if success:
             # Register DataSource using CRUD function
-            from models import create_data_source
             source = create_data_source(
                 org_id=org.id,
                 name=f"API: {request.url}",
@@ -1027,7 +1027,6 @@ async def clean_and_import_api(request: ApiCleanImportRequest, org=Depends(get_c
         db_manager.close()
 
         if success:
-            from models import create_data_source
             source = create_data_source(
                 org_id=org.id,
                 name=f"API: {request.url}",

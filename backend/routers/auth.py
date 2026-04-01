@@ -41,6 +41,9 @@ router = APIRouter()
 @router.post("/register")
 async def register(request: RegisterRequest):
     """Register a new organization and optionally provision a DB."""
+    if auth_module.get_user_by_email_global(request.email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+        
     try:
         org = create_org(request.name, request.email)
         try:
@@ -62,7 +65,7 @@ async def register(request: RegisterRequest):
         }
     except Exception as e:
         logger.error(f"Registration error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Organization name already exists or registration failed.")
+        raise HTTPException(status_code=400, detail="Organization name already exists or email already in use.")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
