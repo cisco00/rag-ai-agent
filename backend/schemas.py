@@ -66,6 +66,7 @@ class QueryResponse(BaseModel):
     visualization: Optional[dict] = None
     status: str
     sql_query: Optional[str] = None
+    thinking_process: Optional[List[Dict[str, Any]]] = None
 
 class FeedbackRequest(BaseModel):
     query: str
@@ -83,6 +84,9 @@ class DataSourceResponse(BaseModel):
     name: str
     source_type: str
     table_name: Optional[str] = None
+    refresh_interval: Optional[int] = None
+    last_synced_at: Optional[datetime] = None
+    is_active: Optional[int] = 1
     created_at: datetime
     class Config:
         from_attributes = True
@@ -94,6 +98,39 @@ class ApiImportRequest(BaseModel):
     params: Optional[Dict[str, str]] = None
     table_name: str
     if_exists: str = "replace"
+    refresh_interval: Optional[int] = None # in minutes
+
+class ApiPreviewRequest(BaseModel):
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    params: Optional[Dict[str, str]] = None
+
+class CleaningConfig(BaseModel):
+    # Auto cleaning
+    drop_null_rows: bool = False
+    drop_null_columns: bool = False
+    drop_duplicates: bool = False
+    # Manual: type conversions  {"col_name": "int"|"float"|"str"|"datetime"|"bool"}
+    type_conversions: Optional[Dict[str, str]] = None
+    # Manual: formatting  [{"column":"name","action":"lowercase"|"uppercase"|"trim"|"title"}]
+    formatting: Optional[List[Dict[str, Any]]] = None
+    # Manual: validation  [{"column":"age","rule":"min_value","value":0}, ...]
+    validation_rules: Optional[List[Dict[str, Any]]] = None
+    # Manual: exclude columns
+    exclude_columns: Optional[List[str]] = None
+    # Manual: row filters  [{"column":"status","op":"==","value":"active"}]
+    row_filters: Optional[List[Dict[str, Any]]] = None
+
+class ApiCleanImportRequest(BaseModel):
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    params: Optional[Dict[str, str]] = None
+    table_name: str
+    if_exists: str = "replace"
+    refresh_interval: Optional[int] = None
+    cleaning_config: Optional[CleaningConfig] = None
 
 class TransformRequest(BaseModel):
     table_name: str
@@ -206,6 +243,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     visualization: Optional[Dict[str, Any]] = None
+    thinking_process: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
     class Config:
         from_attributes = True

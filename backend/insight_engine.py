@@ -423,6 +423,10 @@ class InsightEngine:
 
     def _parse_insight(self, row: dict) -> dict:
         row["likely_causes"] = json.loads(row.get("likely_causes") or "[]")
+        import math
+        if "change_pct" in row and isinstance(row["change_pct"], float):
+            if math.isnan(row["change_pct"]) or math.isinf(row["change_pct"]):
+                row["change_pct"] = None
         return row
 
 

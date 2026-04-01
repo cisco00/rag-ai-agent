@@ -37,7 +37,8 @@ router = APIRouter()
 
 from schemas import (
     CreateDatabaseRequest, DataSourceResponse, UpdateCellRequest,
-    FeedbackRequest, RenameColumnRequest, FillMissingRequest, ApiImportRequest
+    FeedbackRequest, RenameColumnRequest, FillMissingRequest, ApiImportRequest,
+    ApiPreviewRequest, ApiCleanImportRequest, CleaningConfig
 )
 
 
@@ -717,25 +718,342 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
         db_manager.close()
         
         if success:
-            # Register DataSource
-            with get_db() as db:
-                import json
-                source = DataSource(
-                    org_id=org.id,
-                    name=f"API: {request.url}",
-                    source_type="api",
-                    connection_details=json.dumps({"url": request.url, "method": request.method}),
-                    table_name=request.table_name
-                )
-                db.add(source)
-                db.commit()
+            # Register DataSource using CRUD function
+            from models import create_data_source
+            source = create_data_source(
+                org_id=org.id,
+                name=f"API: {request.url}",
+                source_type="api",
+                connection_details={
+                    "url": request.url, 
+                    "method": request.method,
+                    "headers": request.headers,
+                    "params": request.params
+                },
+                table_name=request.table_name,
+                refresh_interval=request.refresh_interval
+            )
                 
-            return {"status": "success", "message": f"Imported {len(df)} rows to table '{request.table_name}'"}
+            return {
+                "status": "success", 
+                "message": f"Imported {len(df)} rows to table '{request.table_name}'",
+                "source_id": source.id if source else None
+            }
         else:
             raise HTTPException(status_code=500, detail="Failed to save data to database")
 
     except Exception as e:
         logger.error(f"API import failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/import/api/preview")
+async def preview_api_import(request: ApiPreviewRequest, org=Depends(get_current_org),
+                             user=Depends(require_permission("WRITE_DATA"))):
+    """Fetch data from an external API and return a preview without saving to the database."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                params=request.params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+
+        data = response.json()
+
+        # Convert to DataFrame (same heuristics as import endpoint)
+        if isinstance(data, list):
+            df = pd.json_normalize(data)
+        elif isinstance(data, dict):
+            found_list = False
+            for key, val in data.items():
+                if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                    df = pd.json_normalize(val)
+                    found_list = True
+                    break
+            if not found_list:
+                df = pd.json_normalize(data)
+        else:
+            raise HTTPException(status_code=400, detail="Could not parse API response as tabular data")
+
+        if df.empty:
+            return {
+                "row_count": 0,
+                "columns": [],
+                "preview_rows": [],
+                "missing_values": {}
+            }
+
+        # Build column info
+        columns = [{"name": col, "type": str(df[col].dtype)} for col in df.columns]
+
+        # Missing values (only columns with nulls)
+        missing_values = {}
+        for col in df.columns:
+            null_count = int(df[col].isnull().sum())
+            if null_count > 0:
+                missing_values[col] = null_count
+
+        # Preview rows — first 5, NaN replaced with None for JSON
+        df_preview = df.head(5).copy()
+        
+        # Replace inf and -inf with NaN first
+        import numpy as np
+        df_preview.replace([np.inf, -np.inf], np.nan, inplace=True)
+        # Convert to object to allow None, then replace NaN with None
+        df_preview = df_preview.astype(object).where(pd.notnull(df_preview), None)
+        
+        preview_rows = df_preview.to_dict(orient='records')
+
+        return {
+            "row_count": len(df),
+            "columns": columns,
+            "preview_rows": preview_rows,
+            "missing_values": missing_values
+        }
+
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"API returned error {e.response.status_code}: {e.response.text[:300]}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to reach the API: {str(e)}")
+    except Exception as e:
+        logger.error(f"API preview failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def apply_cleaning_config(df: pd.DataFrame, config: CleaningConfig) -> tuple:
+    """Apply cleaning rules to a DataFrame. Returns (cleaned_df, report_lines)."""
+    report: list[str] = []
+    original_rows = len(df)
+    original_cols = len(df.columns)
+
+    # ── Auto cleaning ──
+    if config.drop_null_columns:
+        null_cols = df.columns[df.isnull().all()].tolist()
+        if null_cols:
+            df = df.drop(columns=null_cols)
+            report.append(f"Removed {len(null_cols)} entirely-empty column(s): {', '.join(null_cols)}")
+
+    if config.drop_null_rows:
+        before = len(df)
+        df = df.dropna()
+        dropped = before - len(df)
+        if dropped:
+            report.append(f"Removed {dropped} row(s) with missing values")
+
+    if config.drop_duplicates:
+        before = len(df)
+        df = df.drop_duplicates()
+        dropped = before - len(df)
+        if dropped:
+            report.append(f"Removed {dropped} duplicate row(s)")
+
+    # ── Manual: Exclude columns ──
+    if config.exclude_columns:
+        existing = [c for c in config.exclude_columns if c in df.columns]
+        if existing:
+            df = df.drop(columns=existing)
+            report.append(f"Excluded {len(existing)} column(s): {', '.join(existing)}")
+
+    # ── Manual: Type conversions ──
+    if config.type_conversions:
+        for col, target_type in config.type_conversions.items():
+            if col not in df.columns:
+                continue
+            try:
+                if target_type == "int":
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                elif target_type == "float":
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                elif target_type == "str":
+                    df[col] = df[col].astype(str)
+                elif target_type == "datetime":
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                elif target_type == "bool":
+                    df[col] = df[col].astype(bool)
+                report.append(f"Converted '{col}' to {target_type}")
+            except Exception as e:
+                report.append(f"Failed to convert '{col}' to {target_type}: {e}")
+
+    # ── Manual: Formatting ──
+    if config.formatting:
+        for rule in config.formatting:
+            col = rule.get("column")
+            action = rule.get("action")
+            if col not in df.columns:
+                continue
+            try:
+                df[col] = df[col].astype(str)
+                if action == "lowercase":
+                    df[col] = df[col].str.lower()
+                elif action == "uppercase":
+                    df[col] = df[col].str.upper()
+                elif action == "trim":
+                    df[col] = df[col].str.strip()
+                elif action == "title":
+                    df[col] = df[col].str.title()
+                report.append(f"Applied '{action}' formatting to '{col}'")
+            except Exception as e:
+                report.append(f"Formatting failed for '{col}': {e}")
+
+    # ── Manual: Validation rules ──
+    if config.validation_rules:
+        for rule in config.validation_rules:
+            col = rule.get("column")
+            rule_type = rule.get("rule")
+            value = rule.get("value")
+            if col not in df.columns:
+                continue
+            before = len(df)
+            try:
+                if rule_type == "min_value":
+                    numeric_col = pd.to_numeric(df[col], errors='coerce')
+                    df = df[numeric_col.isna() | (numeric_col >= float(value))]
+                elif rule_type == "max_value":
+                    numeric_col = pd.to_numeric(df[col], errors='coerce')
+                    df = df[numeric_col.isna() | (numeric_col <= float(value))]
+                elif rule_type == "after_column":
+                    # value is the name of the other date column
+                    if value in df.columns:
+                        d1 = pd.to_datetime(df[col], errors='coerce')
+                        d2 = pd.to_datetime(df[value], errors='coerce')
+                        df = df[d1.isna() | d2.isna() | (d1 >= d2)]
+                dropped = before - len(df)
+                if dropped:
+                    report.append(f"Validation '{rule_type}' on '{col}': removed {dropped} invalid row(s)")
+            except Exception as e:
+                report.append(f"Validation failed for '{col}': {e}")
+
+    # ── Manual: Row filters ──
+    if config.row_filters:
+        for flt in config.row_filters:
+            col = flt.get("column")
+            op = flt.get("op", "==")
+            value = flt.get("value")
+            if col not in df.columns:
+                continue
+            before = len(df)
+            try:
+                series = df[col]
+                # Try numeric comparison
+                try:
+                    num_val = float(value)
+                    series = pd.to_numeric(series, errors='coerce')
+                    if op == "==": df = df[series == num_val]
+                    elif op == "!=": df = df[series != num_val]
+                    elif op == ">": df = df[series > num_val]
+                    elif op == "<": df = df[series < num_val]
+                    elif op == ">=": df = df[series >= num_val]
+                    elif op == "<=": df = df[series <= num_val]
+                except (ValueError, TypeError):
+                    # String comparison
+                    if op == "==": df = df[series.astype(str) == str(value)]
+                    elif op == "!=": df = df[series.astype(str) != str(value)]
+                    elif op == "contains": df = df[series.astype(str).str.contains(str(value), case=False, na=False)]
+                dropped = before - len(df)
+                if dropped:
+                    report.append(f"Row filter '{col} {op} {value}': removed {dropped} row(s)")
+            except Exception as e:
+                report.append(f"Row filter failed for '{col}': {e}")
+
+    report.append(f"Final: {len(df)} rows, {len(df.columns)} columns (from {original_rows} rows, {original_cols} columns)")
+    return df, report
+
+
+@router.post("/import/api/clean-and-import")
+async def clean_and_import_api(request: ApiCleanImportRequest, org=Depends(get_current_org),
+                               user=Depends(require_permission("WRITE_DATA"))):
+    """Fetch data from an API, apply cleaning rules, then save to the database."""
+    import httpx
+    try:
+        # Fetch data
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                params=request.params,
+                timeout=30.0
+            )
+            response.raise_for_status()
+
+        data = response.json()
+
+        # Parse to DataFrame
+        if isinstance(data, list):
+            df = pd.json_normalize(data)
+        elif isinstance(data, dict):
+            found_list = False
+            for key, val in data.items():
+                if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                    df = pd.json_normalize(val)
+                    found_list = True
+                    break
+            if not found_list:
+                df = pd.json_normalize(data)
+        else:
+            raise HTTPException(status_code=400, detail="Could not parse API response as tabular data")
+
+        if df.empty:
+            return {"status": "success", "message": "API returned 0 rows", "rows": 0, "cleaning_report": []}
+
+        # Apply cleaning
+        cleaning_report = []
+        if request.cleaning_config:
+            df, cleaning_report = apply_cleaning_config(df, request.cleaning_config)
+
+        if df.empty:
+            return {
+                "status": "success",
+                "message": "All rows were removed during cleaning",
+                "rows": 0,
+                "cleaning_report": cleaning_report
+            }
+
+        # Save to DB
+        if not org.db_connection_string:
+            db_path = f"sqlite:///org_{org.api_key[:8]}.db"
+            update_org_db(org.api_key, db_path)
+            org.db_connection_string = db_path
+            with FILE_DB_CACHE_LOCK:
+                FILE_DB_CACHE.pop(org.api_key, None)
+
+        db_manager = DatabaseManager(connection_string=org.db_connection_string)
+        success = db_manager.load_dataframe(df, request.table_name, if_exists=request.if_exists)
+        db_manager.close()
+
+        if success:
+            from models import create_data_source
+            source = create_data_source(
+                org_id=org.id,
+                name=f"API: {request.url}",
+                source_type="api",
+                connection_details={
+                    "url": request.url,
+                    "method": request.method,
+                    "cleaned": True
+                },
+                table_name=request.table_name,
+                refresh_interval=request.refresh_interval
+            )
+            return {
+                "status": "success",
+                "message": f"Imported {len(df)} rows to table '{request.table_name}'",
+                "rows": len(df),
+                "source_id": source.id if source else None,
+                "cleaning_report": cleaning_report
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save data to database")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API clean-and-import failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
