@@ -89,6 +89,7 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
     import secrets
     import string
+    from fastapi.concurrency import run_in_threadpool
 
     safe_name = "".join(c for c in org_name.lower() if c.isalnum())[:10]
     unique_suffix = api_key[:8]

@@ -106,7 +106,23 @@ class DatabaseManager:
                 "pool_size": config.pool_size,
                 "max_overflow": config.max_overflow,
                 "pool_timeout": config.pool_timeout,
-            }) 
+            })
+            
+            # Add driver-specific timeouts for production safety
+            try:
+                dialect = self.connection_string.split("://")[0].lower()
+                if "postgresql" in dialect:
+                    engine_kwargs["connect_args"] = {
+                        "connect_timeout": 10,
+                        "options": "-c statement_timeout=30000"  # 30 seconds
+                    }
+                elif "mysql" in dialect:
+                    engine_kwargs["connect_args"] = {
+                        "connect_timeout": 10,
+                        "read_timeout": 30
+                    }
+            except Exception:
+                pass
         else:
             # SQLite-specific settings
             engine_kwargs["connect_args"] = {"check_same_thread": False}
@@ -243,13 +259,19 @@ class DatabaseManager:
                             }]
             
             except SQLAlchemyError as e:
-                error_msg = f"Query execution failed: {str(e)}"
-                logger.error(
-                    error_msg,
-                    exc_info=True,
-                    extra={"query": sql[:200]}
-                )
-                raise QueryExecutionError(error_msg, query=sql) from e
+                # Sanitize error message for production
+                raw_msg = str(e)
+                
+                # Friendly user message logic
+                user_msg = "The database query failed. Check for syntax errors or permission issues."
+                if "column" in raw_msg and "does not exist" in raw_msg:
+                    user_msg = "One of the requested columns was not found in the table."
+                elif "table" in raw_msg and "does not exist" in raw_msg:
+                    user_msg = "The requested table was not found."
+                elif "permission denied" in raw_msg:
+                    user_msg = "The database user does not have permission to perform this action."
+                
+                raise QueryExecutionError(raw_msg, query=sql, user_message=user_msg) from e
         
         try:
             return self._execute_with_retry(_execute)
@@ -303,7 +325,8 @@ class DatabaseManager:
                 exc_info=True
             )
             raise QueryExecutionError(
-                f"Failed to describe table '{table_name}': {str(e)}"
+                f"Failed to describe table '{table_name}': {str(e)}",
+                user_message="We couldn't retrieve the table structure. Please check if the table still exists."
             ) from e
     
     def get_table_stats(self, table_name: str) -> Dict[str, Any]:
@@ -366,8 +389,8 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"Error getting stats for {table_name}: {e}", exc_info=True)
-            # Return empty stats on error rather than crashing the whole overview
-            return {"table_name": table_name, "error": str(e)}
+            # Return empty stats on error with a friendly note
+            return {"table_name": table_name, "error": "Could not calculate stats for this table."}
 
     def list_tables(self) -> List[str]:
         """

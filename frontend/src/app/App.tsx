@@ -19,6 +19,7 @@ import { AlertsManager } from './components/AlertsManager';
 import { DashboardsView } from './components/DashboardsView';
 import { DataProfiler } from './components/DataProfiler';
 import { LandingPage } from './components/LandingPage';
+import { AdminPanel } from './components/AdminPanel';
 import { AboutPage } from './components/AboutPage';
 import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
 
@@ -45,7 +46,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
-  'insights' | 'alerts' | 'boards' | 'profiler' | 'about';
+  'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -332,6 +333,7 @@ export default function App() {
           {currentView === 'boards' && <DashboardsView apiKey={apiKey!} user={user} />}
           {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
           {currentView === 'about' && <AboutPage />}
+          {currentView === 'admin' && <AdminPanel />}
           {currentView === 'branding' && (
             <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
           )}

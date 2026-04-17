@@ -32,17 +32,76 @@ import pandas as pd
 from profiler import profile_table
 
 logger = logging.getLogger(__name__)
+from schemas import (
+    CreateDatabaseRequest, FeedbackRequest, DataSourceResponse, 
+    ApiImportRequest, ApiPreviewRequest, CleaningConfig, 
+    ApiCleanImportRequest, UpdateCellRequest, FillMissingRequest, 
+    RenameColumnRequest
+)
+
 router = APIRouter()
 
 
 
-from schemas import (
-    CreateDatabaseRequest, DataSourceResponse, UpdateCellRequest,
-    FeedbackRequest, RenameColumnRequest, FillMissingRequest, ApiImportRequest,
-    ApiPreviewRequest, ApiCleanImportRequest, CleaningConfig
-)
+# ── Helpers ──
 
+def _read_df_from_content(content: bytes, filename: str) -> Optional[pd.DataFrame]:
+    """Helper to read DataFrame from bytes content (blocking)."""
+    if filename.endswith('.csv'):
+        try:
+            return pd.read_csv(io.BytesIO(content), encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                return pd.read_csv(io.BytesIO(content), encoding='latin1')
+            except Exception:
+                return pd.read_csv(io.BytesIO(content), encoding='cp1252', errors='replace')
+    elif filename.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(io.BytesIO(content))
+    return None
 
+def _import_file_to_db_sync(uploader, tmp_path, table_name, if_exists):
+    """Helper to perform the blocking DB upload."""
+    return uploader.upload_file_to_db(
+        file_path=tmp_path,
+        table_name=table_name,
+        if_exists=if_exists
+    )
+
+def clean_dataframe(df):
+    """Clean dataframe by handling missing and null values"""
+    cleaning_report = []
+    
+    # 1. Drop columns that are entirely null
+    null_cols = df.columns[df.isnull().all()].tolist()
+    if null_cols:
+        df = df.drop(columns=null_cols)
+        cleaning_report.append(f"Removed {len(null_cols)} empty columns")
+    
+    # 2. Drop rows where more than 50% of values are null
+    threshold = len(df.columns) * 0.5
+    df = df.dropna(thresh=threshold)
+    
+    # 3. Handle remaining nulls by column type
+    for col in df.columns:
+        null_count = df[col].isnull().sum()
+        if null_count > 0:
+            # For numeric columns, fill with median
+            if pd.api.types.is_numeric_dtype(df[col]):
+                median_val = df[col].median()
+                df[col] = df[col].fillna(median_val)
+                cleaning_report.append(f"Filled {null_count} nulls in '{col}' with median ({median_val})")
+            
+            # For categorical/text columns, fill with mode or 'Unknown'
+            else:
+                if df[col].mode().empty:
+                    df[col] = df[col].fillna('Unknown')
+                    cleaning_report.append(f"Filled {null_count} nulls in '{col}' with 'Unknown'")
+                else:
+                    mode_val = df[col].mode()[0]
+                    df[col] = df[col].fillna(mode_val)
+                    cleaning_report.append(f"Filled {null_count} nulls in '{col}' with mode ('{mode_val}')")
+    
+    return df, cleaning_report
 
 # ── Routes ──
 
@@ -50,12 +109,8 @@ from schemas import (
 async def get_available_databases(org=Depends(get_current_org)):
     """Fetch connection history for the organization."""
     from models import get_org_connection_history
-    try:
-        history = get_org_connection_history(org.id)
-        return {"status": "success", "databases": history}
-    except Exception as e:
-        logger.error(f"Failed to fetch connection history: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve database connection history.")
+    history = get_org_connection_history(org.id)
+    return {"status": "success", "databases": history}
 
 
 @router.post("/database/create-postgres")
@@ -188,6 +243,7 @@ async def import_file_to_database(
     file: UploadFile = File(...), 
     table_name: Optional[str] = Form(None),
     if_exists: str = Form('replace'),
+    cleaning_config: Optional[str] = Form(None),
     org=Depends(get_current_org),
     user=Depends(require_permission("WRITE_DATA"))
 ):
@@ -218,22 +274,30 @@ async def import_file_to_database(
     filename = file.filename
     
     try:
-        # Import file_uploader module
-        from file_uploader import FileUploader
+        # Read file into DataFrame in threadpool
+        df = await run_in_threadpool(_read_df_from_content, content, filename)
         
-        # Read file into DataFrame
-        if filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(content))
-        elif filename.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(io.BytesIO(content))
-        else:
+        if df is None:
             raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel (.csv, .xls, .xlsx)")
         
         # Validate file is not empty
         if df.empty:
             raise HTTPException(status_code=400, detail="File is empty or contains no data")
         
-        # Store original stats
+        # Apply cleaning config if provided
+        cleaning_report = []
+        if cleaning_config:
+            import json
+            from schemas import CleaningConfig
+            try:
+                config_dict = json.loads(cleaning_config)
+                config = CleaningConfig(**config_dict)
+                # Offload cleaning to threadpool
+                df, cleaning_report = await run_in_threadpool(apply_cleaning_config, df, config)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error applying cleaning config: {str(e)}")
+
+        # Store stats
         original_rows = len(df)
         original_cols = len(df.columns)
         
@@ -241,27 +305,36 @@ async def import_file_to_database(
         db_manager = DatabaseManager(connection_string=org.db_connection_string)
         
         # Create file uploader instance
+        from file_uploader import FileUploader
         uploader = FileUploader(db_manager)
         
         # Save file temporarily
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
-            tmp_file.write(content)
-            tmp_path = tmp_file.name
+        if cleaning_config:
+            # If we cleaned the DataFrame, save it as a new CSV
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            df.to_csv(tmp_path, index=False)
+        else:
+            with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
+                tmp_file.write(content)
+                tmp_path = tmp_file.name
         
         try:
             if not table_name:
                 table_name = sanitize_table_name(filename)
 
-            # Upload file to database
-            result = uploader.upload_file_to_db(
-                file_path=tmp_path,
-                table_name=table_name,
-                if_exists=if_exists
+            # Upload file to database in threadpool
+            result = await run_in_threadpool(
+                _import_file_to_db_sync,
+                uploader,
+                tmp_path,
+                table_name,
+                if_exists
             )
             
             if result['success']:
-                return {
+                res_data = {
                     "status": "success",
                     "message": f"File '{filename}' imported successfully",
                     "table_name": result['table_name'],
@@ -272,6 +345,15 @@ async def import_file_to_database(
                     "action": if_exists,
                     "database": org.db_connection_string.split('://')[0]  # Show DB type
                 }
+                if cleaning_report:
+                    res_data["cleaning_summary"] = {"actions": cleaning_report}
+                # Log file upload activity
+                try:
+                    from auth import log_activity
+                    log_activity(user.get("id"), user.get("org_id"), "File Uploaded", {"filename": filename, "table": table_name, "rows": result['rows_imported']})
+                except Exception:
+                    pass
+                return res_data
             else:
                 raise HTTPException(status_code=500, detail=result.get('error', 'Import failed'))
         
@@ -293,7 +375,7 @@ async def import_multiple_files(
     files: List[UploadFile] = File(...),
     table_prefix: Optional[str] = None,
     if_exists: str = 'replace',
-    cleaning_options: Optional[str] = Form(None),
+    cleaning_config: Optional[str] = Form(None),
     org=Depends(get_current_org),
     user=Depends(require_permission("WRITE_DATA"))
 ):
@@ -325,14 +407,16 @@ async def import_multiple_files(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
     
-    # Parse cleaning options
+    # Parse global cleaning config
     import json
-    options_map = {}
-    if cleaning_options:
+    global_cleaning_config = None
+    if cleaning_config:
         try:
-            options_map = json.loads(cleaning_options)
-        except json.JSONDecodeError:
-            pass # Ignore invalid JSON, treat as no options
+            from schemas import CleaningConfig
+            config_dict = json.loads(cleaning_config)
+            global_cleaning_config = CleaningConfig(**config_dict)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid cleaning config: {str(e)}")
     
     # Limit number of files to prevent abuse
     max_files = 20
@@ -385,21 +469,40 @@ async def import_multiple_files(
                 # Generate table name
                 table_name = sanitize_table_name(filename, prefix=table_prefix)
                 
+                # Read info to DataFrame for cleaning in threadpool
+                df = await run_in_threadpool(_read_df_from_content, content, filename)
+                    
+                if df is None or df.empty:
+                    file_result["status"] = "failed"
+                    file_result["error"] = "File is empty or contains no data, or unsupported format."
+                    results["failed"] += 1
+                    results["files"].append(file_result)
+                    continue
+                    
+                cleaning_report = []
+                if global_cleaning_config:
+                    df, cleaning_report = await run_in_threadpool(apply_cleaning_config, df, global_cleaning_config)
+
                 # Save file temporarily
-                with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
-                    tmp_file.write(content)
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv' if global_cleaning_config else Path(filename).suffix, delete=False) as tmp_file:
                     tmp_path = tmp_file.name
                 
-                # Get options for this file if available
-                file_options = options_map.get(filename, None)
+                if global_cleaning_config:
+                    await run_in_threadpool(df.to_csv, tmp_path, index=False)
+                else:
+                    def _write_bytes(p, data):
+                        with open(p, 'wb') as f:
+                            f.write(data)
+                    await run_in_threadpool(_write_bytes, tmp_path, content)
                 
                 try:
-                    # Upload file to database
-                    result = uploader.upload_file_to_db(
-                        file_path=tmp_path,
-                        table_name=table_name,
-                        if_exists=if_exists,
-                        cleaning_options=file_options
+                    # Upload file to database in threadpool
+                    result = await run_in_threadpool(
+                        _import_file_to_db_sync,
+                        uploader,
+                        tmp_path,
+                        table_name,
+                        if_exists
                     )
                     
                     if result['success']:
@@ -408,6 +511,8 @@ async def import_multiple_files(
                         file_result["rows_imported"] = result['rows_imported']
                         file_result["columns"] = result['columns']
                         file_result["column_names"] = result['column_names']
+                        if cleaning_report:
+                            file_result["cleaning_summary"] = {"actions": cleaning_report}
                         results["successful"] += 1
                     else:
                         file_result["status"] = "failed"
@@ -450,17 +555,8 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
     filename = file.filename
     
     try:
-        import pandas as pd
-        def read_df_sync(content, filename):
-            if filename.endswith('.csv'):
-                return pd.read_csv(io.BytesIO(content))
-            elif filename.endswith(('.xls', '.xlsx')):
-                return pd.read_excel(io.BytesIO(content))
-            else:
-                return None
-
-        # Run blocking pandas read in a threadpool
-        df = await run_in_threadpool(read_df_sync, content, filename)
+        # Read file into DataFrame in threadpool
+        df = await run_in_threadpool(_read_df_from_content, content, filename)
         
         if df is None:
              raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel.")
@@ -468,45 +564,8 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         # Store original row count for reporting
         original_rows = len(df)
         
-        # DATA CLEANING FUNCTION
-        def clean_dataframe(df):
-            """Clean dataframe by handling missing and null values"""
-            cleaning_report = []
-            
-            # 1. Drop columns that are entirely null
-            null_cols = df.columns[df.isnull().all()].tolist()
-            if null_cols:
-                df = df.drop(columns=null_cols)
-                cleaning_report.append(f"Removed {len(null_cols)} empty columns")
-            
-            # 2. Drop rows where more than 50% of values are null
-            threshold = len(df.columns) * 0.5
-            df = df.dropna(thresh=threshold)
-            
-            # 3. Handle remaining nulls by column type
-            for col in df.columns:
-                null_count = df[col].isnull().sum()
-                if null_count > 0:
-                    # For numeric columns, fill with median
-                    if pd.api.types.is_numeric_dtype(df[col]):
-                        median_val = df[col].median()
-                        df[col] = df[col].fillna(median_val)
-                        cleaning_report.append(f"Filled {null_count} nulls in '{col}' with median ({median_val})")
-                    
-                    # For categorical/text columns, fill with mode or 'Unknown'
-                    else:
-                        if df[col].mode().empty:
-                            df[col] = df[col].fillna('Unknown')
-                            cleaning_report.append(f"Filled {null_count} nulls in '{col}' with 'Unknown'")
-                        else:
-                            mode_val = df[col].mode()[0]
-                            df[col] = df[col].fillna(mode_val)
-                            cleaning_report.append(f"Filled {null_count} nulls in '{col}' with mode ('{mode_val}')")
-            
-            return df, cleaning_report
-        
-        # Apply cleaning
-        df, cleaning_report = clean_dataframe(df)
+        # Apply cleaning in threadpool
+        df, cleaning_report = await run_in_threadpool(clean_dataframe, df)
         cleaned_rows = len(df)
         
         # Clean col names for SQL
@@ -516,8 +575,8 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         temp_db_path = f"file_db_{org.api_key}.sqlite"
         db_manager = DatabaseManager(connection_string=f"sqlite:///{temp_db_path}")
         
-        # Load into table named 'uploaded_data'
-        success = db_manager.load_dataframe(df, "uploaded_data", if_exists='replace')
+        # Load into table named 'uploaded_data' in threadpool
+        success = await run_in_threadpool(db_manager.load_dataframe, df, "uploaded_data", if_exists='replace')
         db_manager.close()
         
         if success:
@@ -553,18 +612,26 @@ async def get_tables(org=Depends(get_current_org)):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
     
-    from main import AnalyticsAgent
-    agent = AnalyticsAgent(connection_string=conn_str)
+    def _get_tables_sync(conn_str):
+        from main import AnalyticsAgent
+        agent = AnalyticsAgent(connection_string=conn_str)
+        try:
+            tables = agent.db.list_tables()
+            schemas = {}
+            for table in tables:
+                schemas[table] = agent.db.describe_table(table)
+            return tables, schemas
+        finally:
+            agent.close()
+
     try:
-        tables = agent.db.list_tables()
-        schemas = {}
-        for table in tables:
-            schemas[table] = agent.db.describe_table(table)
+        tables, schemas = await run_in_threadpool(_get_tables_sync, conn_str)
         with FILE_DB_CACHE_LOCK:
             is_file = org.api_key in FILE_DB_CACHE
         return {"tables": tables, "schemas": schemas, "is_file": is_file}
-    finally:
-        agent.close()
+    except Exception as e:
+        logger.error(f"Error fetching tables: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch tables")
 
 
 @router.get("/tables/{table_name}/profile")
@@ -575,7 +642,7 @@ async def get_table_profile(table_name: str, force: bool = False, org=Depends(ge
         raise HTTPException(status_code=400, detail="No database configured.")
     
     try:
-        raw_profile = profile_table(conn_str, table_name, force=force)
+        raw_profile = await run_in_threadpool(profile_table, conn_str, table_name, force=force)
         
         # Transform for frontend compatibility (matches DataProfiler.tsx expectations)
         row_count = raw_profile.get("total_rows", 0)
@@ -1062,52 +1129,54 @@ async def preview_table(table_name: str, org=Depends(get_current_org)):
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
     
-    from main import AnalyticsAgent
-    agent = AnalyticsAgent(connection_string=conn_str)
-    try:
-        # Sanitize table name to prevent SQL injection (basic check)
-        # In production, use parameterized queries or SQLAlchemy introspection
-        if not table_name.isidentifier():
-             raise HTTPException(status_code=400, detail="Invalid table name")
+    def _preview_table_sync(conn_str, table_name):
+        from main import AnalyticsAgent
+        agent = AnalyticsAgent(connection_string=conn_str)
+        try:
+            # Sanitize table name to prevent SQL injection (basic check)
+            if not table_name.isidentifier():
+                 raise ValueError("Invalid table name")
 
-        # Get columns
-        schema = agent.db.describe_table(table_name)
-        columns = [{"name": col[0], "type": col[1]} for col in schema]
-        
-        # Get data (limit 50)
-        # using SQLAlchemy logic internally from the agent's db wrapper if available, 
-        # but here accessing the engine directly for a quick select
-        import sqlalchemy
-        from sqlalchemy import text
-        
-        with agent.db.engine.connect() as conn:
-            # Try to get rowid (SQLite) or ctid (Postgres) to enable editing
-            try:
-                # SQLite
-                result = conn.execute(text(f"SELECT rowid as _id, * FROM {table_name} LIMIT 50"))
-            except Exception:
-                conn.rollback() # Rollback aborted transaction
+            # Get columns
+            schema = agent.db.describe_table(table_name)
+            columns = [{"name": col[0], "type": col[1]} for col in schema]
+            
+            # Get data (limit 50)
+            import sqlalchemy
+            from sqlalchemy import text
+            
+            with agent.db.engine.connect() as conn:
                 try:
-                    # Postgres - cast ctid to text
-                    result = conn.execute(text(f"SELECT ctid::text as _id, * FROM {table_name} LIMIT 50"))
+                    # SQLite
+                    result = conn.execute(text(f"SELECT rowid as _id, * FROM {table_name} LIMIT 50"))
                 except Exception:
-                    conn.rollback() # Rollback aborted transaction
-                    # Fallback (no editing supported for this table)
-                    result = conn.execute(text(f"SELECT * FROM {table_name} LIMIT 50"))
-            
-            rows = [dict(row._mapping) for row in result]
-            
-        return {
-            "table": table_name,
-            "columns": columns,
-            "rows": rows,
-            "total_rows": len(rows) # In a real app, do a count(*) query too
-        }
+                    conn.rollback() 
+                    try:
+                        # Postgres - cast ctid to text
+                        result = conn.execute(text(f"SELECT ctid::text as _id, * FROM {table_name} LIMIT 50"))
+                    except Exception:
+                        conn.rollback() 
+                        # Fallback
+                        result = conn.execute(text(f"SELECT * FROM {table_name} LIMIT 50"))
+                
+                rows = [dict(row._mapping) for row in result]
+                
+            return {
+                "table": table_name,
+                "columns": columns,
+                "rows": rows,
+                "total_rows": len(rows)
+            }
+        finally:
+            agent.close()
+
+    try:
+        return await run_in_threadpool(_preview_table_sync, conn_str, table_name)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        print(f"Preview error: {e}")
+        logger.error(f"Preview error for {table_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        agent.close()
 
 
 @router.post("/analyze-file")
@@ -1125,15 +1194,8 @@ async def analyze_file(file: UploadFile = File(...), org=Depends(get_current_org
         
         # Determine file type and read
         # Determine file type and read
-        def read_df_sync(content, filename):
-            if filename.endswith('.csv'):
-                return pd.read_csv(io.BytesIO(content))
-            elif filename.endswith(('.xls', '.xlsx')):
-                return pd.read_excel(io.BytesIO(content))
-            return None
-
         # Run blocking pandas read in a threadpool
-        df = await run_in_threadpool(read_df_sync, content, filename)
+        df = await run_in_threadpool(_read_df_from_content, content, filename)
 
         if df is None:
             raise HTTPException(status_code=400, detail="Unsupported file format")
@@ -1141,20 +1203,23 @@ async def analyze_file(file: UploadFile = File(...), org=Depends(get_current_org
         if df.empty:
             raise HTTPException(status_code=400, detail="File is empty")
             
-        # Get preview data
-        preview_rows = df.head(5).fillna("").to_dict(orient='records')
-        
-        columns = []
-        missing_values = {}
-        
-        for col in df.columns:
-            dtype = str(df[col].dtype)
-            null_count = int(df[col].isnull().sum())
+        def _analyze_df_sync(df):
+            import pandas as pd
+            preview_rows = df.head(5).fillna("").to_dict(orient='records')
+            columns = []
+            missing_values = {}
+            # Vectorized null counting is much faster than looping df[col].isnull().sum()
+            null_counts = df.isnull().sum()
             
-            columns.append({"name": col, "type": dtype})
-            
-            if null_count > 0:
-                missing_values[col] = null_count
+            for col in df.columns:
+                dtype = str(df[col].dtype)
+                null_count = int(null_counts[col])
+                columns.append({"name": col, "type": dtype})
+                if null_count > 0:
+                    missing_values[col] = null_count
+            return preview_rows, columns, missing_values
+
+        preview_rows, columns, missing_values = await run_in_threadpool(_analyze_df_sync, df)
         
         return {
             "filename": filename,
@@ -1355,18 +1420,21 @@ async def get_stats(org=Depends(get_current_org)):
         # If DB not configured, return empty list instead of error for overview
         return {"tables": []}
         
-    db_manager = None
-    try:
+    def _get_stats_sync(conn_str):
         db_manager = DatabaseManager(connection_string=conn_str)
-        tables = db_manager.list_tables()
-        stats_list = []
-        for table in tables:
-            stats = db_manager.get_table_stats(table)
-            stats_list.append(stats)
+        try:
+            tables = db_manager.list_tables()
+            stats_list = []
+            for table in tables:
+                stats = db_manager.get_table_stats(table)
+                stats_list.append(stats)
+            return stats_list
+        finally:
+            db_manager.close()
+
+    try:
+        stats_list = await run_in_threadpool(_get_stats_sync, conn_str)
         return {"tables": stats_list, "org_name": org.name}
     except Exception as e:
         logger.error(f"Error fetching stats: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if db_manager:
-            db_manager.close()
+        raise HTTPException(status_code=500, detail="Failed to fetch statistics")

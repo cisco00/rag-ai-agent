@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Database, Copy, Trash2, Edit2, Zap, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -42,7 +42,7 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
         }
     }, [selectedTable]);
 
-    const fetchTables = async () => {
+    const fetchTables = useCallback(async () => {
         try {
             const resp = await api.get<any>('/tables');
             setTables(resp.tables || []);
@@ -53,9 +53,9 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
             console.error(err);
             setError('Failed to fetch tables');
         }
-    };
+    }, [selectedTable]);
 
-    const fetchTablePreview = async (tableName: string) => {
+    const fetchTablePreview = useCallback(async (tableName: string) => {
         setIsLoading(true);
         setError(null);
         try {
@@ -68,7 +68,7 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
         } finally {
             setIsLoading(false);
         }
-    };
+    }, []);
 
     const handleDuplicate = async () => {
         if (!selectedTable) return;

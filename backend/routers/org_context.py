@@ -7,6 +7,7 @@ import time
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 
 from models import (
     get_org_history, create_feedback, create_query_history,
@@ -115,7 +116,9 @@ async def process_corrections(org=Depends(get_current_org),
     agent = AnalyticsAgent(connection_string=db_conn_str)
     
     async def llm_caller(prompt: str) -> str:
-        response = agent.client.chat_completion(
+        # Offload blocking LLM call
+        response = await run_in_threadpool(
+            agent.client.chat_completion,
             model=config.model_name,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000
@@ -161,7 +164,9 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
              db_messages = get_chat_history(request.session_id)
              history = [{"role": m.role, "content": m.content} for m in db_messages]
 
-        result = agent.run_query(
+        # Offload blocking agent run_query
+        result = await run_in_threadpool(
+            agent.run_query,
             request.query, 
             history, 
             tables=request.tables, 
@@ -181,6 +186,12 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
                 )
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
+             # Track AI query activity
+             try:
+                 from auth import log_activity
+                 log_activity(user["id"], org.id, "AI Query", {"query": request.query[:200], "sql": (result.get("sql_query") or "")[:200]})
+             except Exception:
+                 pass
         elif request.confirmed_sql and result.get("status") == "success":
              try:
                 create_query_history(
@@ -212,18 +223,6 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
             sql_query=result.get("sql_query"),
             thinking_process=result.get("thinking_process")
         )
-    except RAGAgentError as e:
-        logger.error(f"RAG Agent Error: {e}", exc_info=True)
-        # Use a more appropriate status code if it's a known error
-        status_code = 400
-        if isinstance(e, ModelAPIError):
-            status_code = 503 # Service Unavailable (temporary)
-        
-        detail_msg = getattr(e, "user_message", str(e))
-        raise HTTPException(status_code=status_code, detail=detail_msg)
-    except Exception as e:
-        logger.error(f"Unexpected query failure: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred during analysis. Please try again.")
     finally:
         agent.close()
 
@@ -239,7 +238,8 @@ async def share_report(request: QueryRequest, org=Depends(get_current_org)):
     agent = AnalyticsAgent(connection_string=conn_str)
     
     try:
-        result = agent.run_query(request.query, request.history)
+        # Offload blocking agent run_query
+        result = await run_in_threadpool(agent.run_query, request.query, request.history)
         shared_report = create_shared_report(
             org_id=org.id,
             query=request.query,
@@ -386,45 +386,33 @@ async def list_scheduled_reports(org=Depends(get_current_org)):
 async def delete_scheduled_report(report_id: int, org=Depends(get_current_org),
                                   user=Depends(require_permission("VIEW_REPORTS"))):
     """Delete a scheduled report permanently."""
-    try:
-        with get_db() as db:
-            report = db.query(ScheduledReport).filter(
-                ScheduledReport.id == report_id,
-                ScheduledReport.org_id == org.id
-            ).first()
-            if not report:
-                raise HTTPException(status_code=404, detail="Report not found")
-            db.delete(report)
-            db.commit()
-            return {"message": "Report deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete report: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db() as db:
+        report = db.query(ScheduledReport).filter(
+            ScheduledReport.id == report_id,
+            ScheduledReport.org_id == org.id
+        ).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        db.delete(report)
+        db.commit()
+        return {"message": "Report deleted successfully"}
 
 
 @router.patch("/scheduled-reports/{report_id}/toggle")
 async def toggle_scheduled_report(report_id: int, org=Depends(get_current_org),
                                   user=Depends(require_permission("VIEW_REPORTS"))):
     """Toggle a scheduled report (Pause/Resume)."""
-    try:
-        with get_db() as db:
-            report = db.query(ScheduledReport).filter(
-                ScheduledReport.id == report_id,
-                ScheduledReport.org_id == org.id
-            ).first()
-            if not report:
-                raise HTTPException(status_code=404, detail="Report not found")
-            report.is_active = 1 if report.is_active == 0 else 0
-            db.commit()
-            db.refresh(report)
-            return {"status": "success", "is_active": report.is_active}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to toggle report: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db() as db:
+        report = db.query(ScheduledReport).filter(
+            ScheduledReport.id == report_id,
+            ScheduledReport.org_id == org.id
+        ).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        report.is_active = 1 if report.is_active == 0 else 0
+        db.commit()
+        db.refresh(report)
+        return {"status": "success", "is_active": report.is_active}
 
 
 @router.put("/scheduled-reports/{report_id}")
@@ -432,23 +420,17 @@ async def update_scheduled_report(report_id: int, request: ScheduledReportReques
                                   org=Depends(get_current_org),
                                   user=Depends(require_permission("VIEW_REPORTS"))):
     """Update a scheduled report configuration."""
-    try:
-        with get_db() as db:
-            report = db.query(ScheduledReport).filter(
-                ScheduledReport.id == report_id,
-                ScheduledReport.org_id == org.id
-            ).first()
-            if not report:
-                raise HTTPException(status_code=404, detail="Report not found")
-            
-            report.query = request.query
-            report.frequency = request.frequency
-            report.recipients = request.recipients
-            db.commit()
-            db.refresh(report)
-            return {"message": "Report updated successfully", "id": report.id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to update report: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    with get_db() as db:
+        report = db.query(ScheduledReport).filter(
+            ScheduledReport.id == report_id,
+            ScheduledReport.org_id == org.id
+        ).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        report.query = request.query
+        report.frequency = request.frequency
+        report.recipients = request.recipients
+        db.commit()
+        db.refresh(report)
+        return {"message": "Report updated successfully", "id": report.id}

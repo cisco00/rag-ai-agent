@@ -320,7 +320,13 @@ class FileUploader:
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
             elif file_extension == '.csv':
                 logger.debug(f"Reading CSV file: {file_path}")
-                df = pd.read_csv(file_path)
+                try:
+                    df = pd.read_csv(file_path, encoding='utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        df = pd.read_csv(file_path, encoding='latin1')
+                    except Exception:
+                        df = pd.read_csv(file_path, encoding='cp1252', errors='replace')
             else:
                 # This should have been caught by validation, but just in case
                 raise FileUploadError(

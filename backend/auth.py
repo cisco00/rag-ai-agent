@@ -16,6 +16,7 @@ Bug #11 — change_password no longer touches last_login_at. Password changes
 import os
 import secrets
 import string
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -89,6 +90,7 @@ def ensure_auth_tables():
                 password_hash TEXT NOT NULL,
                 role          TEXT NOT NULL DEFAULT 'analyst',
                 is_active     INTEGER NOT NULL DEFAULT 1,
+                is_superuser  INTEGER NOT NULL DEFAULT 0,
                 last_login_at TEXT,
                 created_at    TEXT NOT NULL,
                 UNIQUE (org_id, email)
@@ -126,6 +128,15 @@ def ensure_auth_tables():
                 used       INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id         SERIAL PRIMARY KEY,
+                user_id    INTEGER,
+                org_id     INTEGER,
+                action     TEXT NOT NULL,
+                details    TEXT,
+                created_at TEXT NOT NULL
+            );
         """
     else:
         ddl = """
@@ -137,6 +148,7 @@ def ensure_auth_tables():
                 password_hash TEXT NOT NULL,
                 role          TEXT NOT NULL DEFAULT 'analyst',
                 is_active     INTEGER NOT NULL DEFAULT 1,
+                is_superuser  INTEGER NOT NULL DEFAULT 0,
                 last_login_at TEXT,
                 created_at    TEXT NOT NULL,
                 UNIQUE (org_id, email)
@@ -170,12 +182,69 @@ def ensure_auth_tables():
                 used       INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER,
+                org_id     INTEGER,
+                action     TEXT NOT NULL,
+                details    TEXT,
+                created_at TEXT NOT NULL
+            );
         """
 
     with admin_engine.connect() as conn:
         with conn.begin():
             for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
+        
+        try:
+            # Migration: Add is_superuser column if missing
+            if dialect == "postgresql":
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser INTEGER DEFAULT 0"))
+            else:
+                # SQLite doesn't support IF NOT EXISTS in ALTER TABLE
+                try:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN is_superuser INTEGER DEFAULT 0"))
+                except Exception:
+                    pass
+            conn.commit()
+
+            # Bootstrap: if no superuser exists, promote the oldest owner
+            super_count = conn.execute(text("SELECT COUNT(*) FROM users WHERE is_superuser = 1")).scalar()
+            if super_count == 0:
+                conn.execute(text("""
+                    UPDATE users SET is_superuser = 1 
+                    WHERE id = (SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1)
+                """))
+                conn.commit()
+        except Exception:
+            pass
+
+
+# ─── Activity Tracking ────────────────────────────────────────────────────────
+
+def log_activity(user_id: Optional[int], org_id: Optional[int], action: str, details: Optional[dict] = None) -> None:
+    """Safely log an activity to the central `activity_logs` table."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        details_str = json.dumps(details) if details else None
+        query = text(
+            "INSERT INTO activity_logs (user_id, org_id, action, details, created_at) "
+            "VALUES (:usr, :org, :act, :det, :now)"
+        )
+        with admin_engine.connect() as conn:
+            with conn.begin():
+                conn.execute(query, {
+                    "usr": user_id,
+                    "org": org_id,
+                    "act": action,
+                    "det": details_str,
+                    "now": now
+                })
+    except Exception as e:
+        logger.error(f"Failed to log activity '{action}': {e}")
+
 
 
 # ─── Password helpers ─────────────────────────────────────────────────────────
@@ -204,10 +273,10 @@ def validate_password_strength(password: str):
 
 # ─── Token helpers ────────────────────────────────────────────────────────────
 
-def _make_access_token(user_id: int, org_id: int, role: str) -> str:
+def _make_access_token(user_id: int, org_id: int, role: str, is_superuser: int = 0) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_TTL)
     return jwt.encode(
-        {"sub": str(user_id), "org_id": org_id, "role": role,
+        {"sub": str(user_id), "org_id": org_id, "role": role, "is_superuser": is_superuser,
          "exp": expire, "type": "access"},
         JWT_SECRET, algorithm=JWT_ALGORITHM,
     )
@@ -276,6 +345,7 @@ def create_user(org_id: int, email: str, password: str,
                     text("SELECT id FROM users WHERE org_id=:o AND email=:e"),
                     {"o": org_id, "e": email.lower().strip()},
                 ).scalar()
+    log_activity(user_id, org_id, "User Registered", {"email": email, "role": role})
     return get_user_by_id(user_id)
 
 
@@ -283,7 +353,7 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
     """Return user dict WITHOUT password_hash (safe for HTTP responses)."""
     with admin_engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, org_id, email, display_name, role, is_active, "
+            text("SELECT id, org_id, email, display_name, role, is_active, is_superuser, "
                  "last_login_at, created_at FROM users WHERE id = :id"),
             {"id": user_id},
         ).mappings().first()
@@ -327,7 +397,7 @@ def get_user_by_email_global(email: str) -> Optional[dict]:
 def list_org_users(org_id: int) -> list[dict]:
     with admin_engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT id, org_id, email, display_name, role, is_active, "
+            text("SELECT id, org_id, email, display_name, role, is_active, is_superuser, "
                  "last_login_at, created_at FROM users "
                  "WHERE org_id = :org_id ORDER BY created_at DESC"),
             {"org_id": org_id},
@@ -403,11 +473,11 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
     user  = get_user_by_email(org_id, email) if org_id else get_user_by_email_global(email)
     if not user:
         logger.error(f"Login failed: User {email} not found.")
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="email does not exist")
     
     if not verify_password(password, user["password_hash"]):
         logger.error(f"Login failed: Password mismatch for user {email}.")
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="Incorrect password")
 
     effective_org_id = user["org_id"]
     with admin_engine.connect() as conn:
@@ -417,7 +487,7 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
         ).mappings().first()
     api_key = org_row["api_key"] if org_row else None
 
-    access_token          = _make_access_token(user["id"], effective_org_id, user["role"])
+    access_token          = _make_access_token(user["id"], effective_org_id, user["role"], user.get("is_superuser", 0))
     raw_refresh, ref_hash = _make_refresh_token()
     expires_at            = (datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL)).isoformat()
     now                   = datetime.now(timezone.utc).isoformat()
@@ -434,6 +504,8 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
                 {"now": now, "id": user["id"]},
             )
 
+    log_activity(user["id"], effective_org_id, "User Logged In", {"email": user["email"]})
+
     return {
         "access_token":  access_token,
         "refresh_token": raw_refresh,
@@ -445,6 +517,7 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
             "email":        user["email"],
             "display_name": user["display_name"],
             "role":         user["role"],
+            "is_superuser": bool(user.get("is_superuser")),
             "permissions":  get_role_permissions(user["role"]),
         },
     }
@@ -468,7 +541,7 @@ def refresh_access_token(raw_refresh_token: str) -> dict:
     if not row:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
     return {
-        "access_token": _make_access_token(row["user_id"], row["org_id"], row["role"]),
+        "access_token": _make_access_token(row["user_id"], row["org_id"], row["role"], row.get("is_superuser", 0)),
         "token_type":   "bearer",
         "expires_in":   ACCESS_TOKEN_TTL * 60,
     }

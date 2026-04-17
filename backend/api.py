@@ -45,12 +45,15 @@ from job_queue import start_job_queue, stop_job_queue
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
-from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context
+from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+from exceptions import RAGAgentError
+from fastapi.responses import JSONResponse
 
 insight_scheduler: Optional[InsightScheduler] = None
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -99,23 +102,22 @@ async def lifespan(app: FastAPI):
         # ── Organizational Learning via APScheduler ─────────────────────────────
         _LEARNING_INTERVAL_MINUTES = 30
         _scheduler.add_job(
-            run_organizational_learning,
+            run_organiziational_learning if 'run_organiziational_learning' in globals() else run_organizational_learning,
             trigger=IntervalTrigger(minutes=_LEARNING_INTERVAL_MINUTES),
-            id="org_learning_job",
+            id="org_learning",
             replace_existing=True,
         )
-        logger.info(f"Organizational learning job registered (interval={_LEARNING_INTERVAL_MINUTES}m)")
-    except Exception as _e:
-        logger.warning(f"Could not register alert evaluator: {_e}")
+        logger.info(f"Organizational learning registered (interval={_LEARNING_INTERVAL_MINUTES}m)")
 
-    # ── Proactive Insight Scheduler ───────────────────────────────────────────
-    # Fix #9: Restore the working engine factory instead of the dummy one that
-    # always returned None, which silently disabled all proactive insights.
+    except Exception as e:
+        logger.error(f"Failed to register background jobs in lifespan: {e}")
+
+    # ── Main Loop ────────────────────────────────────────────────────────────
+    # Start the job queue worker
+    await start_job_queue()
+    
+    # Initialize the InsightScheduler (Fix #9)
     def make_insight_engine(org_id: int):
-        """
-        Build an InsightEngine for the given org.
-        Called by InsightScheduler on each tick for every org.
-        """
         try:
             from main import AnalyticsAgent
             from insight_engine import InsightEngine
@@ -135,29 +137,67 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"[Insights] Could not create engine for org {org_id}: {exc}")
             return None
-
-    insight_scheduler = InsightScheduler(make_insight_engine, interval_minutes=60)
+        
+    insight_scheduler = InsightScheduler(
+        engine_factory=make_insight_engine,
+        interval_minutes=60
+    )
     await insight_scheduler.start()
 
-    await start_job_queue()
-    logger.info("Async job queue started")
-
     yield
-
-    shutdown_scheduler()
+    
+    # ── Cleanup ──────────────────────────────────────────────────────────────
     if insight_scheduler:
-        await insight_scheduler.stop()
-    await stop_job_queue()
-    logger.info("Async job queue stopped")
+        insight_scheduler.stop()
+    stop_job_queue()
+    shutdown_scheduler()
+    logger.info("Application shutdown complete.")
 
 
 app = FastAPI(
-    title="Vantage AI",
-    description="A multi-tenant RAG-powered analytics tool for organizations.",
+    title="Vantage AI Agent API",
+    description="Production-ready RAG AI Agent platform API",
     version="2.0.0",
     lifespan=lifespan,
-    redirect_slashes=False
 )
+
+
+@app.exception_handler(RAGAgentError)
+async def rag_agent_exception_handler(request: Request, exc: RAGAgentError):
+    """Global handler for custom application errors."""
+    logger.error(f"RAG Agent Error: {exc.message}", exc_info=True)
+    
+    status_code = 400
+    if "Authentication" in exc.__class__.__name__:
+        status_code = 401
+    elif "Permission" in exc.__class__.__name__:
+        status_code = 403
+    elif "NotFound" in exc.__class__.__name__:
+        status_code = 404
+    elif "Connection" in exc.__class__.__name__:
+        status_code = 503
+        
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": exc.user_message,
+            "error_type": exc.__class__.__name__
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """Fail-safe handler for any unhandled exceptions."""
+    logger.error(f"Unhandled Exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An unexpected system error occurred. Our team has been notified.",
+            "error_type": "InternalServerError"
+        },
+    )
+
 
 Instrumentator().instrument(app).expose(app)
 
@@ -282,6 +322,7 @@ app.include_router(alerts.router,                                    tags=["Aler
 app.include_router(dashboards.router,                                tags=["Dashboards"])
 app.include_router(insights.router,                                  tags=["Insights"])
 app.include_router(org_context.router,                               tags=["Organization Context"])
+app.include_router(admin.router,                                     tags=["Admin"])
 
 
 @app.get("/")
@@ -319,7 +360,8 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
             last_sent_id = None
             while True:
                 query   = f"SELECT *, {id_col} as _stream_id FROM {table_name} ORDER BY {id_col} DESC LIMIT 1"
-                results = db.execute_query(query)
+                # Offload blocking query to threadpool
+                results = await run_in_threadpool(db.execute_query, query)
                 if results:
                     point      = results[0]
                     current_id = point.get("_stream_id")

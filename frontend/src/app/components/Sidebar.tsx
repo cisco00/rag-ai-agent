@@ -18,6 +18,7 @@ import {
   LogOut,
   User as UserIcon,
   UserPlus,
+  Shield,
   X
 } from 'lucide-react';
 
@@ -87,6 +88,7 @@ export function Sidebar({
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'branding', label: 'Branding', icon: Settings, hide: !hasPerm('MANAGE_ORG') },
     { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') },
+    { id: 'admin', label: 'Admin Console', icon: Shield, hide: !user?.is_superuser },
   ].filter(item => !item.hide);
 
   return (

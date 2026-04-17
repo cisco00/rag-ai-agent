@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BarChart3, RefreshCw, ChevronDown, ChevronUp, Table, AlertCircle } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -48,22 +48,22 @@ export function DataProfiler({ apiKey: _apiKey }: { apiKey: string }) {
     const [loading, setLoading] = useState(false);
     const [expandedCols, setExpandedCols] = useState<Set<string>>(new Set());
 
-    const fetchTables = async () => {
+    const fetchTables = useCallback(async () => {
         try {
             const d = await api.get<{ tables: string[] }>('/tables');
             setTables(d.tables || []);
         } catch (e) { console.error(e); }
-    };
+    }, []);
 
     useEffect(() => { fetchTables(); }, []);
 
-    const profileTable = async (tableName: string, force = false) => {
+    const profileTable = useCallback(async (tableName: string, force = false) => {
         setSelectedTable(tableName);
         setLoading(true);
         try {
             const d = await api.get<ProfileResponse>(`/tables/${tableName}/profile${force ? '?force=true' : ''}`);
             const raw = d.profile;
-            
+
             // Convert dictionary of columns to array for frontend
             const formatted: TableProfile = {
                 table: raw.table,
@@ -80,7 +80,7 @@ export function DataProfiler({ apiKey: _apiKey }: { apiKey: string }) {
             setProfiles(prev => ({ ...prev, [tableName]: formatted }));
         } catch (e: any) { alert(e.message || 'Failed to profile table'); setProfile(null); }
         setLoading(false);
-    };
+    }, []);
 
     const toggleCol = (col: string) => {
         setExpandedCols(prev => {

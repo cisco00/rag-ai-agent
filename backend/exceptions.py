@@ -8,7 +8,10 @@ and more informative error messages throughout the application.
 
 class RAGAgentError(Exception):
     """Base exception for all RAG Agent errors."""
-    pass
+    def __init__(self, message: str, user_message: str = "An unexpected error occurred. Please try again later."):
+        self.message = message
+        self.user_message = user_message
+        super().__init__(message)
 
 
 # ============================================================================
@@ -17,7 +20,8 @@ class RAGAgentError(Exception):
 
 class DatabaseError(RAGAgentError):
     """Base exception for database-related errors."""
-    pass
+    def __init__(self, message: str, user_message: str = "Database operation failed. Please check your data or connection."):
+        super().__init__(message, user_message=user_message)
 
 
 class ConnectionError(DatabaseError):
@@ -25,7 +29,8 @@ class ConnectionError(DatabaseError):
     
     def __init__(self, message: str, connection_string: str = None):
         self.connection_string = connection_string
-        super().__init__(message)
+        msg = "We couldn't connect to the database. Please verify your credentials and host availability."
+        super().__init__(message, user_message=msg)
 
 
 class QueryExecutionError(DatabaseError):
@@ -33,7 +38,14 @@ class QueryExecutionError(DatabaseError):
     
     def __init__(self, message: str, query: str = None):
         self.query = query
-        super().__init__(message)
+        msg = "The query failed to execute. Check for syntax errors or permission issues."
+        # If it's a specific constraint violation, we can make it prettier
+        if "UNIQUE constraint failed" in str(message):
+            msg = "This record already exists in the database."
+        elif "FOREIGN KEY constraint failed" in str(message):
+            msg = "This operation would break data relationships. Check dependent records."
+            
+        super().__init__(message, user_message=msg)
 
 
 class TableNotFoundError(DatabaseError):
@@ -112,7 +124,8 @@ class EmptyFileError(FileValidationError):
 
 class InvalidDataFrameError(FileUploadError):
     """Raised when DataFrame validation fails."""
-    pass
+    def __init__(self, message: str):
+        super().__init__(message, user_message=f"The data format is invalid: {message}")
 
 
 # ============================================================================
@@ -207,7 +220,8 @@ class RateLimitError(APIError):
 
 class InvalidRequestError(APIError):
     """Raised when API request is invalid."""
-    pass
+    def __init__(self, message: str):
+        super().__init__(message, user_message=message)
 
 
 # ============================================================================

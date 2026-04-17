@@ -32,7 +32,8 @@ if config.config_file_name is not None:
 
 # Set the sqlalchemy.url from our application config
 db_config = get_db_config()
-config.set_main_option("sqlalchemy.url", db_config.default_connection_string)
+url = db_config.default_connection_string.replace("%", "%%")
+config.set_main_option("sqlalchemy.url", url)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

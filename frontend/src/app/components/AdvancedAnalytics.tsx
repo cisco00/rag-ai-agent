@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
 import { TrendingUp, Activity, Grid3x3, Play, Loader2 } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -104,7 +104,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     fetchCorrCols();
   }, [correlationConfig.table]);
 
-  const fetchTables = async () => {
+  const fetchTables = useCallback(async () => {
     try {
       const resp = await api.get<{ tables: string[] }>('/tables');
       if (resp.tables) {
@@ -119,9 +119,9 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     } catch (err) {
       console.error('Failed to fetch tables:', err);
     }
-  };
+  }, [setForecastConfig, setAnomalyConfig, setCorrelationConfig]);
 
-  const handleRunForecast = async () => {
+  const handleRunForecast = useCallback(async () => {
     if (!forecastConfig.table || !forecastConfig.dateColumn || !forecastConfig.valueColumn) return;
     setIsProcessing(true);
 
@@ -137,17 +137,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       // Handle multiple server response formats
       let chartData: any[] = [];
       if (Array.isArray(resp)) {
-        // Format: [{date, actual, forecast}, ...]
         chartData = resp;
       } else if (resp && resp.historical && resp.forecast) {
-        // Format: {historical: {dates, values}, forecast: {dates, values}}
         const hist = resp.historical;
         const fcast = resp.forecast;
         const histDates: string[] = hist.dates || [];
         const histVals: number[] = hist.values || [];
         const fcastDates: string[] = fcast.dates || [];
         const fcastVals: number[] = fcast.values || [];
-        // Build merged map
         const merged: Record<string, any> = {};
         histDates.forEach((d, i) => {
           merged[d] = { date: d, actual: histVals[i] };
@@ -159,7 +156,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
             merged[d] = { date: d, forecast: fcastVals[i] };
           }
         });
-        chartData = Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+        chartData = Object.values(merged).sort((a: any, b: any) => a.date.localeCompare(b.date));
       }
 
       setForecastData(chartData);
@@ -169,7 +166,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [forecastConfig, setForecastData]);
 
   const handleRunAnomalyDetection = async () => {
     if (!anomalyConfig.table || !anomalyConfig.valueColumn) return;
@@ -246,11 +243,11 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     return 'bg-gray-100';
   };
 
-  const tabs = [
+  const tabs = useMemo(() => [
     { id: 'forecast', label: 'Time Series Forecast', icon: TrendingUp },
     { id: 'anomaly', label: 'Anomaly Detection', icon: Activity },
     { id: 'correlation', label: 'Correlation Analysis', icon: Grid3x3 },
-  ];
+  ], []);
 
   return (
     <div className="p-8">

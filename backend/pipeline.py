@@ -188,7 +188,13 @@ def process_upload(
     Returns a summary dict suitable for the HTTP response.
     """
     if filename.endswith(".csv"):
-        df = pd.read_csv(io.BytesIO(content))
+        try:
+            df = pd.read_csv(io.BytesIO(content), encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(io.BytesIO(content), encoding='latin1')
+            except Exception:
+                df = pd.read_csv(io.BytesIO(content), encoding='cp1252', errors='replace')
     elif filename.endswith((".xls", ".xlsx")):
         df = pd.read_excel(io.BytesIO(content))
     else:
@@ -246,7 +252,13 @@ def process_upload_to_db(
     from file_uploader import FileUploader
 
     if filename.endswith(".csv"):
-        df = pd.read_csv(io.BytesIO(content))
+        try:
+            df = pd.read_csv(io.BytesIO(content), encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(io.BytesIO(content), encoding='latin1')
+            except Exception:
+                df = pd.read_csv(io.BytesIO(content), encoding='cp1252', errors='replace')
     elif filename.endswith((".xls", ".xlsx")):
         df = pd.read_excel(io.BytesIO(content))
     else:

@@ -36,11 +36,20 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org),
         db_manager = DatabaseManager(connection_string=db_conn)
         
         query = f"SELECT {request.date_column}, {request.value_column} FROM {request.table_name} LIMIT 10000"
-        df = pd.read_sql(query, db_manager.get_engine())
+        # Offload blocking SQL read
+        df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
         
         from analytics import perform_forecast
-        result = perform_forecast(df, request.date_column, request.value_column, request.periods, request.freq)
+        # Offload heavy forecasting computation
+        result = await run_in_threadpool(
+            perform_forecast, 
+            df, 
+            request.date_column, 
+            request.value_column, 
+            request.periods, 
+            request.freq
+        )
         
         if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
@@ -65,11 +74,18 @@ async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org),
         db_manager = DatabaseManager(connection_string=db_conn)
         
         query = f"SELECT {request.value_column} FROM {request.table_name} LIMIT 10000"
-        df = pd.read_sql(query, db_manager.get_engine())
+        # Offload blocking SQL read
+        df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
         
         from analytics import detect_anomalies
-        result = detect_anomalies(df, request.value_column, request.contamination)
+        # Offload heavy anomaly detection computation
+        result = await run_in_threadpool(
+            detect_anomalies, 
+            df, 
+            request.value_column, 
+            request.contamination
+        )
         
         if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
@@ -98,7 +114,9 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
             
         import pandas as pd
         col_list = ", ".join(request.columns) if request.columns else "*"
-        df = pd.read_sql(f"SELECT {col_list} FROM {request.table_name} LIMIT 10000", db_manager.get_engine())
+        query = f"SELECT {col_list} FROM {request.table_name} LIMIT 10000"
+        # Offload blocking SQL read
+        df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
         
         from analytics import calculate_correlation
@@ -154,7 +172,9 @@ async def get_suggested_queries(org=Depends(get_current_org)):
         )
 
         messages = [{"role": "user", "content": prompt}]
-        response = client.chat_completion(
+        # Offload blocking LLM network call
+        response = await run_in_threadpool(
+            client.chat_completion,
             model=config.model_name,
             messages=messages,
             max_tokens=300

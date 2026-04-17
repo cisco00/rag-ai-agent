@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 /**
  * A custom hook that behaves like useState, but also syncs its value with sessionStorage.
@@ -22,16 +22,27 @@ export function useSessionStorage<T>(key: string, initialValue: T): [T, React.Di
         }
     });
 
-    // Sync state changes to session storage whenever it updates
+    // Use a ref to track the last saved value to avoid redundant writes
+    const lastSavedValue = useRef(JSON.stringify(storedValue));
+
+    // Debounce the actual write to sessionStorage
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            try {
-                window.sessionStorage.setItem(key, JSON.stringify(storedValue));
-            } catch (error) {
-                console.warn(`Error setting sessionStorage key "${key}":`, error);
+        const handler = setTimeout(() => {
+            if (typeof window !== 'undefined') {
+                try {
+                    const valueToStore = JSON.stringify(storedValue);
+                    if (valueToStore !== lastSavedValue.current) {
+                        window.sessionStorage.setItem(key, valueToStore);
+                        lastSavedValue.current = valueToStore;
+                    }
+                } catch (error) {
+                    console.warn(`Error saving to sessionStorage: ${error}`);
+                }
             }
-        }
+        }, 500); // 500ms debounce
+
+        return () => clearTimeout(handler);
     }, [key, storedValue]);
 
-    return [storedValue, setStoredValue];
+    return [storedValue, setStoredValue] as const;
 }
