@@ -24,6 +24,7 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
                          user=Depends(require_permission("MUTATE_TABLES"))):
     """Apply transformations to a table."""
     try:
+        from fastapi.concurrency import run_in_threadpool
         db_conn = get_org_connection_string(org)
         if not db_conn:
             raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
@@ -33,25 +34,39 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
         
         db_manager = DatabaseManager(connection_string=db_conn)
         
-        # Load table
-        query = f"SELECT * FROM {request.table_name}"
-        df = pd.read_sql(query, db_manager.get_engine())
+        # Determine target table
+        source_table = request.table_name
+        target_table = request.target_table
         
-        # Apply operations using DataTransformer
+        # If no target specified, default to creating a new one as requested by user
+        if not target_table:
+            target_table = f"transformed_{source_table}"
+            logger.info(f"Auto-assigning target table: {target_table}")
+        
+        # Load table using threadpool
+        def _load_df():
+            query = f"SELECT * FROM {source_table}"
+            return pd.read_sql(query, db_manager.get_engine())
+            
+        df = await run_in_threadpool(_load_df)
+        
+        # Apply operations using DataTransformer (CPU intensive, also good for threadpool if large)
         try:
-             df = DataTransformer.apply_transformations(df, request.operations)
+             df = await run_in_threadpool(DataTransformer.apply_transformations, df, request.operations)
         except Exception as e:
              logger.error(f"Error applying transformations: {e}")
+             db_manager.close()
              raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
                 
-        # Save or Return
-        if request.target_table:
-            success = db_manager.load_dataframe(df, request.target_table, if_exists="replace")
-            db_manager.close()
-            return {"status": "success", "message": f"Transformed data saved to '{request.target_table}'", "rows": len(df)}
-        else:
-            db_manager.close()
-            # Return preview
+        # Save changes to the target table
+        def _save_df(dataframe, table):
+            return db_manager.load_dataframe(dataframe, table, if_exists="replace")
+            
+        success = await run_in_threadpool(_save_df, df, target_table)
+        db_manager.close()
+        
+        if success:
+            # Return preview and success info
             preview_data = df.head(10).to_dict(orient="records")
             import math
             import numpy as np
@@ -68,10 +83,21 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
                     else:
                          cleaned_row[k] = v
                 cleaned_preview.append(cleaned_row)
-            return {"status": "success", "preview": cleaned_preview}
+                
+            return {
+                "status": "success", 
+                "message": f"Transformed data saved to '{target_table}'", 
+                "rows_affected": len(df),
+                "target_table": target_table,
+                "preview": cleaned_preview
+            }
+        else:
+            raise Exception("Failed to save transformed data to database")
             
     except Exception as e:
         logger.error(f"Transformation failed: {e}", exc_info=True)
+        if 'db_manager' in locals() and db_manager:
+            db_manager.close()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -101,20 +127,21 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
         operations_spec = (
             "You are a translation layer between natural language and a pandas-backed data transformation pipeline.\n"
             "Based on the user's intent, respond exclusively with a JSON list of operation objects.\n\n"
+            "Each operation MUST include a 'friendly_description' field with a human-readable sentence explaining what it does.\n\n"
             "SUPPORTED OPERATIONS (type field):\n"
-            "1. clean_text: {{\"type\": \"clean_text\", \"column\": \"col_name\", \"clean_type\": \"lower|upper|trim|title|remove_special\"}}\n"
-            "2. filter: {{\"type\": \"filter\", \"column\": \"col_name\", \"op\": \">|<|==|!=|>=|<=\", \"value\": \"any\"}}\n"
-            "3. rename_col: {{\"type\": \"rename_col\", \"column\": \"old_name\", \"new_name\": \"new_name\"}}\n"
-            "4. drop_col: {{\"type\": \"drop_col\", \"column\": \"col_name\"}}\n"
-            "5. change_type: {{\"type\": \"change_type\", \"column\": \"col_name\", \"new_type\": \"int|float|str|datetime|bool\"}}\n"
-            "6. fill_na: {{\"type\": \"fill_na\", \"column\": \"col_name\", \"method\": \"value|mean|median|mode\", \"value\": \"any\"}}\n"
-            "7. drop_duplicates: {{\"type\": \"clean\", \"method\": \"drop_duplicates\", \"subset\": \"col_name\"}}\n"
-            "8. remove_outliers: {{\"type\": \"clean\", \"method\": \"remove_outliers\", \"column\": \"col_name\", \"outlier_method\": \"z-score\", \"threshold\": 3.0}}\n\n"
+            "1. clean_text: {{\"type\": \"clean_text\", \"column\": \"col_name\", \"clean_type\": \"lower|upper|trim|title|remove_special\", \"friendly_description\": \"...\"}}\n"
+            "2. filter: {{\"type\": \"filter\", \"column\": \"col_name\", \"op\": \">|<|==|!=|>=|<=\", \"value\": \"any\", \"friendly_description\": \"...\"}}\n"
+            "3. rename_col: {{\"type\": \"rename_col\", \"column\": \"old_name\", \"new_name\": \"new_name\", \"friendly_description\": \"...\"}}\n"
+            "4. drop_col: {{\"type\": \"drop_col\", \"column\": \"col_name\", \"friendly_description\": \"...\"}}\n"
+            "5. change_type: {{\"type\": \"change_type\", \"column\": \"col_name\", \"new_type\": \"int|float|str|datetime|bool\", \"friendly_description\": \"...\"}}\n"
+            "6. fill_na: {{\"type\": \"fill_na\", \"column\": \"col_name\", \"method\": \"value|mean|median|mode\", \"value\": \"any\", \"friendly_description\": \"...\"}}\n"
+            "7. drop_duplicates: {{\"type\": \"clean\", \"method\": \"drop_duplicates\", \"subset\": \"col_name\", \"friendly_description\": \"...\"}}\n"
+            "8. remove_outliers: {{\"type\": \"clean\", \"method\": \"remove_outliers\", \"column\": \"col_name\", \"outlier_method\": \"z-score\", \"threshold\": 3.0, \"friendly_description\": \"...\"}}\n\n"
             "SCHEMA OF DATABASE:\n"
             "{schema_summary}\n\n"
             "Analyze the user prompt carefully against the schema for table '{table_name}'.\n"
             "Output ONLY valid JSON. Do not use Markdown code fences.\n"
-            "Example: [{{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\"}}]"
+            "Example: [{{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\", \"friendly_description\": \"Capitalize first names\"}}]"
         )
 
         user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"

@@ -76,7 +76,8 @@ class LLMClient(ABC):
         messages: List[Dict[str, Any]], 
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto", 
-        max_tokens: int = 1024
+        max_tokens: int = 1024,
+        observability_tags: Optional[List[str]] = None
     ) -> CompletionResponse:
         pass
 
@@ -93,7 +94,8 @@ class HuggingFaceClientWrapper(LLMClient):
         messages: List[Dict[str, Any]], 
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto", 
-        max_tokens: int = 1024
+        max_tokens: int = 1024,
+        observability_tags: Optional[List[str]] = None
     ) -> CompletionResponse:
         
         # HF InferenceClient uses OpenAI-compatible format directly
@@ -104,7 +106,8 @@ class HuggingFaceClientWrapper(LLMClient):
                 as_type="generation",
                 model=model,
                 input=messages,
-                metadata={"provider": "huggingface"}
+                metadata={"provider": "huggingface"},
+                tags=observability_tags
             )
 
         response = self.client.chat_completion(
@@ -296,7 +299,8 @@ class GoogleGeminiClient(LLMClient):
         messages: List[Dict[str, Any]], 
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto", 
-        max_tokens: int = 1024
+        max_tokens: int = 1024,
+        observability_tags: Optional[List[str]] = None
     ) -> CompletionResponse:
         
         system_instruction, history = self._convert_messages(messages)
@@ -338,7 +342,8 @@ class GoogleGeminiClient(LLMClient):
                 as_type="generation",
                 model=model,
                 input=messages,
-                metadata={"provider": "google"}
+                metadata={"provider": "google"},
+                tags=observability_tags
             )
         
         import time

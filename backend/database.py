@@ -189,7 +189,7 @@ class DatabaseManager:
         self,
         sql: str,
         validate: bool = True,
-        allow_modifications: bool = True,
+        allow_modifications: bool = False,
         max_rows: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """

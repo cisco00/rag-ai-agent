@@ -196,7 +196,7 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
     def execute_query_with_logging(sql: str):
         logger.info(f"Tool called: execute_query(sql={sql[:100]}...)")
         try:
-            result = db.execute_query(sql, max_rows=200)
+            result = db.execute_query(sql, max_rows=200, allow_modifications=False)
             logger.debug(f"execute_query returned {len(result)} rows")
             return result
         except Exception as e:
@@ -357,6 +357,8 @@ def validate_tool_call(tool_name: str, arguments: Dict[str, Any]) -> None:
             raise ValueError("sql must be a string")
         if not arguments["sql"].strip():
             raise ValueError("sql cannot be empty")
+        if arguments.get("allow_modifications", False) is True:
+            raise ValueError("LLM is not permitted to execute structural changes or modifications.")
 
     elif tool_name == "list_tables":
         pass  # no required arguments

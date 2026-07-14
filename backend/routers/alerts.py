@@ -19,7 +19,10 @@ router = APIRouter()
 @router.get("/alerts")
 async def list_alerts(org=Depends(get_current_org)):
     """List all alert rules for the org."""
-    return {"alerts": get_alert_rules(org.id)}
+    try:
+        return {"alerts": get_alert_rules(org.id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/alerts")

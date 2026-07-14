@@ -1,5 +1,5 @@
 
-const BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const getApiKey = () => localStorage.getItem('vantage_api_key');
 export const getAccessToken = () => localStorage.getItem('vantage_access_token');

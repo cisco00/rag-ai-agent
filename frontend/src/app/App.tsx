@@ -21,11 +21,13 @@ import { DataProfiler } from './components/DataProfiler';
 import { LandingPage } from './components/LandingPage';
 import { AdminPanel } from './components/AdminPanel';
 import { AboutPage } from './components/AboutPage';
+import { Integrations } from './components/Integrations';
+import { UsageAnalytics } from './components/UsageAnalytics';
 import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
 
 const langfuse = new LangfuseWeb({
-  publicKey: (import.meta as any).env?.VITE_LANGFUSE_PUBLIC_KEY || "pk-lf-vantage-dev",
-  baseUrl: (import.meta as any).env?.VITE_LANGFUSE_HOST || "http://localhost:3000",
+  publicKey: import.meta.env.VITE_LANGFUSE_PUBLIC_KEY || "pk-lf-vantage-dev",
+  baseUrl: import.meta.env.VITE_LANGFUSE_HOST || "http://localhost:3000",
 });
 
 /** Decode JWT payload without verifying signature (client-side only) */
@@ -46,7 +48,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
-  'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin';
+  'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -109,7 +111,7 @@ export default function App() {
     if (!refreshToken) return;
 
     console.log('[App] Access token expired on startup — proactively refreshing...');
-    fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:8000'}/auth/refresh?refresh_token=${encodeURIComponent(refreshToken)}`, {
+    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/auth/refresh?refresh_token=${encodeURIComponent(refreshToken)}`, {
       method: 'POST',
     })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
@@ -345,6 +347,8 @@ export default function App() {
               user={user}
             />
           )}
+          {currentView === 'integrations' && <Integrations />}
+          {currentView === 'billing' && <UsageAnalytics />}
         </main>
       </div>
     </div>

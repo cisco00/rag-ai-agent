@@ -17,7 +17,7 @@ Bug #15 — Removed @router.get("/register") and @router.get("/login") SPA
 import os
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Header, Response
+from fastapi import APIRouter, HTTPException, Depends, Header, Response, Request
 from fastapi.concurrency import run_in_threadpool
 
 import auth as auth_module
@@ -25,7 +25,7 @@ from models import (
     get_org_by_api_key, create_org, update_org_db
 )
 from database import DatabaseManager
-from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission
+from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission, limiter
 from email_service import send_welcome_email
 from schemas import (
     RegisterRequest, ConfigRequest, LoginRequest, RegisterUserRequest,
@@ -39,13 +39,14 @@ router = APIRouter()
 # ── Organization Registration ────────────────────────────────────────────────
 
 @router.post("/register")
-async def register(request: RegisterRequest):
+@limiter.limit("5/minute")
+async def register(request: Request, payload: RegisterRequest):
     """Register a new organization and optionally provision a DB."""
-    if auth_module.get_user_by_email_global(request.email):
+    if payload.email and auth_module.get_user_by_email_global(payload.email):
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
         
     try:
-        org = create_org(request.name, request.email)
+        org = create_org(payload.name, payload.email)
         try:
             db_conn_str = await provision_org_database(org.name, org.api_key)
             if db_conn_str:
@@ -53,7 +54,7 @@ async def register(request: RegisterRequest):
                 org.db_connection_string = db_conn_str
                 logger.info(f"Auto-provisioned database for org: {org.name}")
 
-                send_welcome_email(request.email, org.name, org.api_key)
+                send_welcome_email(payload.email, org.name, org.api_key)
         except Exception as e:
             logger.error(f"Failed to auto-provision database: {e}")
 
@@ -143,7 +144,9 @@ async def provision_org_database(org_name: str, api_key: str) -> Optional[str]:
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/register-first-user")
-async def register_first_user_route(request: RegisterUserRequest,
+@limiter.limit("5/minute")
+async def register_first_user_route(request: Request,
+                                    payload: RegisterUserRequest,
                                     response: Response,
                                     x_api_key: str = Header(...)):
     """Create the first owner user for an organization."""
@@ -153,9 +156,9 @@ async def register_first_user_route(request: RegisterUserRequest,
             raise HTTPException(status_code=401, detail="Invalid API key")
 
         res = auth_module.register_first_user(
-            email=request.email,
-            password=request.password,
-            display_name=request.display_name,
+            email=payload.email,
+            password=payload.password,
+            display_name=payload.display_name,
             org_id=org.id
         )
         auth_module._set_auth_cookies(response, res["refresh_token"], res["api_key"])
@@ -166,10 +169,11 @@ async def register_first_user_route(request: RegisterUserRequest,
 
 
 @router.post("/login")
-async def login_route(request: LoginRequest, response: Response):
+@limiter.limit("5/minute")
+async def login_route(request: Request, payload: LoginRequest, response: Response):
     """Authenticate a user and set cookies."""
     try:
-        res = auth_module.login_user(email=request.email, password=request.password)
+        res = auth_module.login_user(email=payload.email, password=payload.password)
         auth_module._set_auth_cookies(response, res["refresh_token"], res["api_key"])
         return res
     except Exception as e:
@@ -194,17 +198,18 @@ async def refresh_route(refresh_token: str):
 
 
 @router.post("/forgot-password")
-async def forgot_password_route(request: ForgotPasswordRequest):
+@limiter.limit("5/minute")
+async def forgot_password_route(request: Request, payload: ForgotPasswordRequest):
     """Generate a password reset token and send an email."""
     try:
-        token = auth_module.create_password_reset_token(request.email)
+        token = auth_module.create_password_reset_token(payload.email)
         if token:
             # We found a user, send the email
             # Build the reset URL (frontend should handle this route)
             reset_url = f"{auth_module.APP_URL}/auth?reset_token={token}"
             # Need to import send_password_reset_email or similar
             from email_service import send_password_reset_email
-            send_password_reset_email(request.email, reset_url)
+            send_password_reset_email(payload.email, reset_url)
         
         # Always return success to prevent email enumeration
         return {"message": "If an account exists for that email, a reset link has been sent."}
@@ -215,10 +220,11 @@ async def forgot_password_route(request: ForgotPasswordRequest):
 
 
 @router.post("/reset-password")
-async def reset_password_route(request: ResetPasswordRequest):
+@limiter.limit("5/minute")
+async def reset_password_route(request: Request, payload: ResetPasswordRequest):
     """Reset a user's password using a valid token."""
     try:
-        success = auth_module.reset_password_with_token(request.token, request.password)
+        success = auth_module.reset_password_with_token(payload.token, payload.password)
         if not success:
             raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
         return {"message": "Password reset successfully. You can now login with your new password."}

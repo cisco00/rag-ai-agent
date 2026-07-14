@@ -302,6 +302,7 @@ class QueryProcessor:
         self.tool_map        = tool_map
         self.config          = config
         self.fallback_client = fallback_client
+        self.observability_tags = None
 
     def process(
         self,
@@ -334,6 +335,7 @@ class QueryProcessor:
                     tools=self.tools_schema,
                     tool_choice="auto",
                     max_tokens=self.config.max_tokens,
+                    observability_tags=self.observability_tags,
                 )
             except Exception as primary_err:
                 if self.fallback_client:
@@ -345,6 +347,7 @@ class QueryProcessor:
                             tools=self.tools_schema,
                             tool_choice="auto",
                             max_tokens=self.config.max_tokens,
+                            observability_tags=self.observability_tags,
                         )
                     except Exception as fb_err:
                         raise ModelAPIError(
@@ -568,6 +571,7 @@ class AnalyticsAgent:
         schema_summary:         Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         session_memory:         Optional[SessionMemory] = None,
+        observability_tags:     Optional[List[str]] = None,
     ) -> None:
         self.config = get_agent_config()
 
@@ -578,7 +582,8 @@ class AnalyticsAgent:
         self.schema_summary         = schema_summary
         self.system_prompt_override = system_prompt_override
         self.session_memory: SessionMemory = session_memory or SessionMemory()
-
+        
+        self.observability_tags = observability_tags
         self.tools_schema, self.tool_map = get_db_tools(self.db)
 
         try:
@@ -603,6 +608,7 @@ class AnalyticsAgent:
             self.config,
             fallback_client=self.fallback_client,
         )
+        self.query_processor.observability_tags = self.observability_tags
 
         self.query_log: List[Dict[str, Any]] = []
         logger.info("AnalyticsAgent initialised")
@@ -669,7 +675,7 @@ class AnalyticsAgent:
                     "visualization":        None,
                     "confidence":           confidence,
                     "confidence_reasoning": confidence_reasoning,
-                    "thinking_process":     thinking_process,
+                    "thinking_process":     [],
                 }
 
             except MaxIterationsError:
@@ -683,7 +689,7 @@ class AnalyticsAgent:
                     "status":               "error",
                     "confidence":           0.0,
                     "confidence_reasoning": "Query did not complete within iteration limit.",
-                    "thinking_process":     thinking_process,
+                    "thinking_process":     [],
                 }
 
             clean_text, viz_data = VisualizationParser.parse(result.text)

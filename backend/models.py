@@ -220,6 +220,25 @@ class DataSource(Base):
         return f"<DataSource(id={self.id}, name='{self.name}', type='{self.source_type}')>"
 
 
+class IntegrationCredential(Base):
+    """
+    Model for storing organization-specific CRM credentials (Client ID/Secret).
+    """
+    __tablename__ = 'integration_credentials'
+    
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    provider = Column(String(50), nullable=False) # 'hubspot', 'salesforce'
+    client_id = Column(EncryptedString, nullable=False)
+    client_secret = Column(EncryptedString, nullable=False)
+    redirect_uri = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<IntegrationCredential(org_id={self.org_id}, provider='{self.provider}')>"
+
+
 class ChatSession(Base):
     __tablename__ = 'chat_sessions'
     
@@ -327,6 +346,24 @@ def init_admin_db():
                 try:
                     conn.execute(text("ALTER TABLE data_sources ADD COLUMN is_active INTEGER DEFAULT 1"))
                 except Exception: pass
+                
+                # New migration for integration_credentials table (if create_all skipped it)
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS integration_credentials (
+                            id INTEGER PRIMARY KEY,
+                            org_id INTEGER NOT NULL,
+                            provider VARCHAR(50) NOT NULL,
+                            client_id TEXT NOT NULL,
+                            client_secret TEXT NOT NULL,
+                            redirect_uri VARCHAR(255),
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME
+                        )
+                    """))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_integration_credentials_org_id ON integration_credentials (org_id)"))
+                except Exception as e:
+                    logger.warning(f"Migration: integration_credentials error: {e}")
                     
         logger.info("Admin database tables created and migrations applied")
     except Exception as e:
@@ -618,6 +655,54 @@ def update_data_source_sync(source_id: int, last_synced_at: datetime):
                 db.flush()
     except Exception as e:
         logger.error(f"Failed to update data source sync: {e}")
+
+
+def get_integration_credential(org_id: int, provider: str) -> Optional[IntegrationCredential]:
+    """Fetch credentials for a specific org and provider."""
+    try:
+        with get_db() as db:
+            cred = db.query(IntegrationCredential).filter(
+                IntegrationCredential.org_id == org_id,
+                IntegrationCredential.provider == provider
+            ).first()
+            if cred:
+                db.expunge(cred)
+            return cred
+    except Exception as e:
+        logger.error(f"Failed to get integration credential: {e}")
+        return None
+
+
+def save_integration_credential(org_id: int, provider: str, client_id: str, client_secret: str, redirect_uri: Optional[str] = None) -> IntegrationCredential:
+    """Save or update integration credentials."""
+    try:
+        with get_db() as db:
+            cred = db.query(IntegrationCredential).filter(
+                IntegrationCredential.org_id == org_id,
+                IntegrationCredential.provider == provider
+            ).first()
+            
+            if cred:
+                cred.client_id = client_id
+                cred.client_secret = client_secret
+                cred.redirect_uri = redirect_uri
+            else:
+                cred = IntegrationCredential(
+                    org_id=org_id,
+                    provider=provider,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uri=redirect_uri
+                )
+                db.add(cred)
+            
+            db.flush()
+            db.refresh(cred)
+            db.expunge(cred)
+            return cred
+    except Exception as e:
+        logger.error(f"Failed to save integration credential: {e}", exc_info=True)
+        return None
 
 
 def get_org_connection_history(org_id: int) -> list[str]:

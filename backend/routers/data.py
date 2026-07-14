@@ -22,7 +22,7 @@ from models import (
     create_data_source
 )
 from database import DatabaseManager
-from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission
+from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission, invalidate_schema_cache
 from utils import clean_llm_json_content
 from email_service import send_email_mock
 from validators import sanitize_table_name
@@ -192,8 +192,9 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
         # 4. Formulate new connection string using NEW USER credentials
         new_conn_str = f"postgresql://{request.new_user}:{request.new_password}@{host}:{port}/{request.new_db_name}"
         
-        # 5. Update Org Config
+        # Update cache to point to the file instead of full DB
         update_org_db(org.api_key, new_conn_str)
+        invalidate_schema_cache(new_conn_str)
         # Log to connection history
         from models import log_connection
         log_connection(org.id, new_conn_str)
@@ -334,6 +335,7 @@ async def import_file_to_database(
             )
             
             if result['success']:
+                invalidate_schema_cache(org.db_connection_string)
                 res_data = {
                     "status": "success",
                     "message": f"File '{filename}' imported successfully",
@@ -506,6 +508,7 @@ async def import_multiple_files(
                     )
                     
                     if result['success']:
+                        invalidate_schema_cache(org.db_connection_string)
                         file_result["status"] = "success"
                         file_result["table_name"] = result['table_name']
                         file_result["rows_imported"] = result['rows_imported']
@@ -582,6 +585,7 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         if success:
             with FILE_DB_CACHE_LOCK:
                 FILE_DB_CACHE[org.api_key] = f"sqlite:///{temp_db_path}"
+            invalidate_schema_cache(f"sqlite:///{temp_db_path}")
             return {
                 "status": "success", 
                 "message": f"File '{filename}' uploaded and processed.", 
@@ -614,7 +618,7 @@ async def get_tables(org=Depends(get_current_org)):
     
     def _get_tables_sync(conn_str):
         from main import AnalyticsAgent
-        agent = AnalyticsAgent(connection_string=conn_str)
+        agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
         try:
             tables = agent.db.list_tables()
             schemas = {}
@@ -727,6 +731,8 @@ async def list_data_sources(org=Depends(get_current_org)):
     try:
         with get_db() as db:
             sources = db.query(DataSource).filter(DataSource.org_id == org.id).all()
+            for source in sources:
+                db.expunge(source)
             return sources
     except Exception as e:
         logger.error(f"Failed to list sources: {e}", exc_info=True)
@@ -786,6 +792,7 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
         db_manager.close()
         
         if success:
+            invalidate_schema_cache(org.db_connection_string)
             # Register DataSource using CRUD function
             source = create_data_source(
                 org_id=org.id,
@@ -1094,6 +1101,7 @@ async def clean_and_import_api(request: ApiCleanImportRequest, org=Depends(get_c
         db_manager.close()
 
         if success:
+            invalidate_schema_cache(org.db_connection_string)
             source = create_data_source(
                 org_id=org.id,
                 name=f"API: {request.url}",
@@ -1131,7 +1139,7 @@ async def preview_table(table_name: str, org=Depends(get_current_org)):
     
     def _preview_table_sync(conn_str, table_name):
         from main import AnalyticsAgent
-        agent = AnalyticsAgent(connection_string=conn_str)
+        agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
         try:
             # Sanitize table name to prevent SQL injection (basic check)
             if not table_name.isidentifier():
@@ -1250,6 +1258,7 @@ async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)
         db_manager = DatabaseManager(connection_string=conn_str)
         new_name = f"{table_name}_copy_{int(time.time())}"
         db_manager.duplicate_table(table_name, new_name)
+        invalidate_schema_cache(conn_str)
         return {"status": "success", "new_table": new_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1335,6 +1344,7 @@ async def delete_table_endpoint(table_name: str, org=Depends(get_current_org),
     try:
         db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.drop_table(table_name)
+        invalidate_schema_cache(conn_str)
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Error deleting table: {e}", exc_info=True)
@@ -1357,6 +1367,7 @@ async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, 
     try:
         db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.rename_column(table_name, request.old_column, request.new_column)
+        invalidate_schema_cache(conn_str)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1376,6 +1387,7 @@ async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(ge
     try:
         db_manager = DatabaseManager(connection_string=conn_str)
         db_manager.drop_column(table_name, column_name)
+        invalidate_schema_cache(conn_str)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

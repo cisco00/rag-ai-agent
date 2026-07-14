@@ -37,10 +37,31 @@ router = APIRouter()
 
 @router.get("/config")
 async def get_config(org=Depends(get_current_org)):
-    """Return the DB connection string for the current organization."""
+    """Return the structured DB config for the current organization."""
+    conn_str = org.db_connection_string or ""
+    config_data = {
+        "db_type": "sqlite",
+        "host": "",
+        "port": None,
+        "user": "",
+        "db_name": ""
+    }
+    
+    if conn_str.startswith("postgresql://") or conn_str.startswith("mysql://"):
+        import urllib.parse
+        parsed = urllib.parse.urlparse(conn_str)
+        config_data["db_type"] = parsed.scheme
+        config_data["host"] = parsed.hostname or ""
+        config_data["port"] = parsed.port
+        config_data["user"] = parsed.username or ""
+        config_data["db_name"] = parsed.path.lstrip('/') if parsed.path else ""
+    elif conn_str.startswith("sqlite:///"):
+        config_data["db_type"] = "sqlite"
+        config_data["db_name"] = conn_str.replace("sqlite:///", "")
+
     return {
         "status": "success",
-        "connection_string": org.db_connection_string
+        "config": config_data
     }
 
 @router.post("/config")
@@ -48,11 +69,30 @@ async def configure_db(request: ConfigRequest, org=Depends(get_current_org),
                       user=Depends(require_permission("MANAGE_ORG"))):
     """Update the DB connection string for the current organization."""
     try:
-        db_manager = DatabaseManager(connection_string=request.connection_string)
+        import os
+        import re
+        
+        # Construct the connection string safely based on db_type
+        if request.db_type == "sqlite":
+            safe_api_key = re.sub(r'[^a-zA-Z0-9_]', '', org.api_key)
+            db_path = f"/data/file_db_{safe_api_key}.sqlite"
+            connection_string = f"sqlite:///{db_path}"
+        elif request.db_type in ["postgresql", "mysql"]:
+            user_part = request.user or ""
+            pass_part = f":{request.password}" if request.password else ""
+            auth_part = f"{user_part}{pass_part}@" if user_part or pass_part else ""
+            port_part = f":{request.port}" if request.port else ""
+            host_part = request.host or "localhost"
+            db_name_part = request.db_name or ""
+            connection_string = f"{request.db_type}://{auth_part}{host_part}{port_part}/{db_name_part}"
+        else:
+            raise ValueError(f"Unsupported db_type: {request.db_type}")
+
+        db_manager = DatabaseManager(connection_string=connection_string)
         db_manager.list_tables()  # Validate connection
         db_manager.close()
 
-        update_org_db(org.api_key, request.connection_string)
+        update_org_db(org.api_key, connection_string)
 
         with FILE_DB_CACHE_LOCK:
             FILE_DB_CACHE.pop(org.api_key, None)
@@ -113,7 +153,7 @@ async def process_corrections(org=Depends(get_current_org),
     config = get_agent_config()
     db_conn_str = get_org_connection_string(org)
     
-    agent = AnalyticsAgent(connection_string=db_conn_str)
+    agent = AnalyticsAgent(connection_string=db_conn_str, observability_tags=[f"org:{org.id}"])
     
     async def llm_caller(prompt: str) -> str:
         # Offload blocking LLM call
@@ -149,7 +189,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
     agent = AnalyticsAgent(
         connection_string=conn_str, 
         schema_summary=schema_summary,
-        system_prompt_override=enriched_prompt
+        system_prompt_override=enriched_prompt,
+        observability_tags=[f"org:{org.id}"]
     )
     
     if request.session_id:
@@ -235,7 +276,7 @@ async def share_report(request: QueryRequest, org=Depends(get_current_org)):
         raise HTTPException(status_code=400, detail="No database configured.")
     
     from main import AnalyticsAgent
-    agent = AnalyticsAgent(connection_string=conn_str)
+    agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
     
     try:
         # Offload blocking agent run_query

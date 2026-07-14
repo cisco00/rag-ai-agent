@@ -10,8 +10,14 @@ interface DatabaseConfigProps {
 
 export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps) {
   const [configMode, setConfigMode] = useState<'existing' | 'create' | 'configured'>('existing');
-  const [dbType, setDbType] = useState('postgresql');
-  const [connectionString, setConnectionString] = useState('');
+  const [dbConfig, setDbConfig] = useState({
+    db_type: 'postgresql',
+    host: '',
+    port: '',
+    user: '',
+    password: '',
+    db_name: ''
+  });
   const [currentConnection, setCurrentConnection] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -39,10 +45,17 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
   useEffect(() => {
     const fetchCurrentConfig = async () => {
       try {
-        const res = await api.get<{ status: string; connection_string: string }>('/config');
-        if (res.connection_string) {
-          setCurrentConnection(res.connection_string);
-          setConnectionString(res.connection_string);
+        const res = await api.get<{ status: string; config: any }>('/config');
+        if (res.config && res.config.db_name) {
+          setCurrentConnection(`${res.config.db_type}://${res.config.host ? res.config.host + '/' : ''}${res.config.db_name}`);
+          setDbConfig({
+             db_type: res.config.db_type || 'postgresql',
+             host: res.config.host || '',
+             port: res.config.port?.toString() || '',
+             user: res.config.user || '',
+             password: '',
+             db_name: res.config.db_name || ''
+          });
           setConfigMode('configured');
           setStatus('success');
         }
@@ -70,13 +83,16 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
   }, [configMode]);
 
   const handleConnect = async () => {
-    if (!connectionString.trim()) return;
+    if (!dbConfig.db_type) return;
 
     setIsLoading(true);
     setStatus('idle');
 
     try {
-      await api.post('/config', { connection_string: connectionString });
+      await api.post('/config', {
+        ...dbConfig,
+        port: dbConfig.port ? parseInt(dbConfig.port.toString()) : null
+      });
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
       setStatus('success');
@@ -107,8 +123,15 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
       };
 
       await api.post<any>('/database/create-postgres', payload);
-      const mockConnectionString = `postgresql://${createForm.newUser}:[HIDDEN]@localhost:5435/${createForm.newDbName}`;
-      setConnectionString(mockConnectionString);
+      setCurrentConnection(`postgresql://${createForm.newUser}:[HIDDEN]@localhost:5435/${createForm.newDbName}`);
+      setDbConfig({
+         db_type: 'postgresql',
+         host: 'localhost',
+         port: '5435',
+         user: createForm.newUser,
+         password: '',
+         db_name: createForm.newDbName
+      });
 
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
@@ -141,11 +164,14 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
   };
 
   const handleTestConnection = async () => {
-    if (!connectionString.trim()) return;
+    if (!dbConfig.db_type) return;
 
     setIsLoading(true);
     try {
-      await api.post('/config', { connection_string: connectionString });
+      await api.post('/config', {
+        ...dbConfig,
+        port: dbConfig.port ? parseInt(dbConfig.port.toString()) : null
+      });
       const { tables } = await api.get<{ tables: string[] }>('/tables');
       setTables(tables || []);
       setStatus('success');
@@ -173,7 +199,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
           
           <div className="bg-gray-50 p-4 rounded-lg w-full mb-8 border border-gray-100 font-mono text-sm text-gray-700 truncate text-left break-all">
             <span className="font-semibold text-gray-500 mr-2 uppercase text-xs">Connection String</span><br/>
-            {currentConnection || connectionString || '••••••••'}
+            {currentConnection || '••••••••'}
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
@@ -201,7 +227,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
               onClick={() => {
                 setConfigMode('existing');
                 setStatus('idle');
-                setConnectionString(''); 
+                setDbConfig({...dbConfig, password: '', db_name: ''}); 
               }}
               className="text-sm text-gray-500 hover:text-blue-600 underline"
             >
@@ -227,7 +253,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
           
           <div className="bg-gray-50 p-4 rounded-lg w-full mb-8 border border-gray-100 font-mono text-sm text-gray-700 truncate text-left break-all">
             <span className="font-semibold text-gray-500 mr-2 uppercase text-xs">Connection String</span><br/>
-            {connectionString || '••••••••'}
+            {currentConnection || '••••••••'}
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
@@ -303,11 +329,10 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
                 <button
                   key={type.value}
                   onClick={() => {
-                    setDbType(type.value);
-                    setConnectionString(type.example);
+                    setDbConfig({ ...dbConfig, db_type: type.value });
                     setStatus('idle');
                   }}
-                  className={`p-3 md:p-4 rounded-xl border-2 transition-all ${dbType === type.value
+                  className={`p-3 md:p-4 rounded-xl border-2 transition-all ${dbConfig.db_type === type.value
                     ? 'border-blue-500 bg-blue-50'
                     : 'border-gray-200 hover:border-gray-300'
                     }`}
@@ -319,24 +344,62 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
             </div>
           </div>
 
-          {/* Connection String */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Connection String
-            </label>
-            <textarea
-              value={connectionString}
-              onChange={(e) => {
-                setConnectionString(e.target.value);
-                setStatus('idle');
-              }}
-              placeholder="Enter your database connection string..."
-              rows={3}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-            />
-            <p className="text-xs text-gray-500 mt-2">
-              Example: {dbTypes.find(t => t.value === dbType)?.example}
-            </p>
+          {/* Configuration Fields */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {dbConfig.db_type !== 'sqlite' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Host</label>
+                  <input
+                    type="text"
+                    value={dbConfig.host}
+                    onChange={(e) => setDbConfig({...dbConfig, host: e.target.value})}
+                    placeholder="localhost"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
+                  <input
+                    type="number"
+                    value={dbConfig.port}
+                    onChange={(e) => setDbConfig({...dbConfig, port: e.target.value})}
+                    placeholder="5432"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">User</label>
+                  <input
+                    type="text"
+                    value={dbConfig.user}
+                    onChange={(e) => setDbConfig({...dbConfig, user: e.target.value})}
+                    placeholder="postgres"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={dbConfig.password}
+                    onChange={(e) => setDbConfig({...dbConfig, password: e.target.value})}
+                    placeholder="••••••••"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  />
+                </div>
+              </>
+            )}
+            <div className={dbConfig.db_type === 'sqlite' ? 'md:col-span-2' : ''}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Database Name</label>
+              <input
+                type="text"
+                value={dbConfig.db_name}
+                onChange={(e) => setDbConfig({...dbConfig, db_name: e.target.value})}
+                placeholder={dbConfig.db_type === 'sqlite' ? 'database.db' : 'my_database'}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              />
+            </div>
           </div>
 
           {/* Available Databases / History */}
@@ -349,7 +412,44 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
                 {availableDatabases.map((db, idx) => (
                   <button
                     key={idx}
-                    onClick={() => setConnectionString(db)}
+                    onClick={() => {
+                        let db_type = 'postgresql';
+                        let host = '';
+                        let port = '';
+                        let user = '';
+                        let db_name = '';
+                        if (db.startsWith('sqlite:///')) {
+                            db_type = 'sqlite';
+                            db_name = db.replace('sqlite:///', '');
+                        } else if (db.includes('://')) {
+                            const [scheme, rest] = db.split('://');
+                            db_type = scheme;
+                            const atSplit = rest.split('@');
+                            const afterAt = atSplit.length > 1 ? atSplit[1] : atSplit[0];
+                            const auth = atSplit.length > 1 ? atSplit[0] : '';
+                            
+                            if (auth) {
+                                const authSplit = auth.split(':');
+                                user = authSplit[0];
+                            }
+                            
+                            const slashSplit = afterAt.split('/');
+                            db_name = slashSplit.length > 1 ? slashSplit[1] : '';
+                            const hostPort = slashSplit[0];
+                            
+                            if (hostPort.includes(':')) {
+                                const hpSplit = hostPort.split(':');
+                                host = hpSplit[0];
+                                port = hpSplit[1];
+                            } else {
+                                host = hostPort;
+                            }
+                        }
+                        setDbConfig({
+                            db_type, host, port, user, password: '', db_name
+                        });
+                        setStatus('idle');
+                    }}
                     className="px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-blue-50 hover:border-blue-300 transition-colors flex items-center gap-2"
                   >
                     <Database className="size-4 text-blue-500" />
@@ -375,7 +475,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
           <div className="flex gap-3">
             <button
               onClick={handleTestConnection}
-              disabled={isLoading || !connectionString.trim()}
+              disabled={isLoading || !dbConfig.db_type || (!dbConfig.db_name && dbConfig.db_type === 'sqlite')}
               className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors font-medium"
             >
               {isLoading ? (
@@ -389,7 +489,7 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
             </button>
             <button
               onClick={handleConnect}
-              disabled={isLoading || !connectionString.trim()}
+              disabled={isLoading || !dbConfig.db_type || (!dbConfig.db_name && dbConfig.db_type === 'sqlite')}
               className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
             >
               Connect Database

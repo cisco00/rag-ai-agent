@@ -3,8 +3,8 @@
 ## Executive Summary
 
 **Product Name:** Vantage AI: Commercial Analytics Portal  
-**Version:** 2.2  
-**Last Updated:** March 2026  
+**Version:** 2.5  
+**Last Updated:** April 2026  
 **Document Owner:** Product Team
 
 ### Vision
@@ -56,6 +56,7 @@ Vantage AI is a commercial SaaS platform that allows organizations to:
 - Complete data isolation between organizations
 - Separate admin database for organizational metadata
 - Enforce unique email addresses per organization during registration to prevent duplicate accounts
+- **Advanced User Management:** Support for inviting members, revoking pending invitations, removing active users, and ownership handover.
 
 #### User Stories
 - As a **new customer**, I want to register my organization so that I can start using the platform
@@ -358,13 +359,16 @@ POST /transform/suggest
 - Data downsampling for large tables (>10,000 rows) to prevent browser timeouts
 
 #### Features
-- **Time Series Forecast:** Select a date column and value column using dynamic dropdowns, choose forecast horizon (7–90 periods) and frequency (Daily, Hourly, Weekly, Monthly)
-- **Anomaly Detection:** Identify outliers in any numeric column with configurable contamination rate
-- **Correlation Matrix:** Heatmap-style correlation analysis for multiple numeric columns
+- **Time Series Forecast:** Select a date column and value column using dynamic dropdowns. Uses **Holt-Winters Exponential Smoothing** with configurable forecast horizons (7–90 periods) and frequencies (Daily, Hourly, Weekly, Monthly).
+- **Anomaly Detection:** Identify outliers in numeric columns using the **Isolation Forest** algorithm. Features a configurable contamination rate (default 0.05) to tune sensitivity.
+- **Correlation Matrix:** Heatmap-style correlation analysis (Pearson or Spearman) for multiple numeric columns to identify relationship strengths.
+- **Dynamic Selectors:** Automatic column type detection and dropdown-based selection in the UI to prevent manual syntax errors.
+- **Performance Optimization:** Automatic data downsampling for large tables (>10,000 rows) to ensure responsive browser interactions.
 
 #### User Stories
 - As a **data analyst**, I want to forecast future values of a metric without writing any code
 - As a **business analyst**, I want to see which columns are correlated to identify patterns
+- As a **manager**, I want to detect unusual spikes or drops in data using AI anomaly detection.
 
 ---
 
@@ -381,8 +385,10 @@ POST /transform/suggest
 - Connection status indicator
 
 #### Features
-- **Live Streaming:** WebSocket connection to `/ws/stream/{table}` for genuinely live tables
-- **Replay Mode (HTTP Polling):** For static historical tables, automatically falls back to HTTP polling, cycling through rows at 1.5-second intervals
+- **Live Streaming:** True real-time monitoring via WebSocket (`/ws/stream/{table}`) for tables with active data writers.
+- **Replay Mode (HTTP Polling):** For historical or static tables, the system simulates a live stream via HTTP polling at 1.5-second intervals, cycling through rows to visualize patterns.
+- **Cloud-Ready UI:** Real-time line chart with a sliding window (configurable buffer) and a live connection status indicator (Connected/Disconnected).
+- **Dynamic Mapping:** On-the-fly column mapping for the streaming axis (X=Time, Y=Value).
 
 ---
 
@@ -523,6 +529,156 @@ GET /tables/{table_name}/profile?force=true → force re-profile
 
 ---
 
+---
+
+### 17. White-labeling & Custom Branding
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Customize the platform UI to match organizational brand identity.
+- Persist branding settings per organization.
+- Support for logos, themes, and localized messaging.
+
+#### Features
+- **Logo Management:** Upload custom PNG/JPG/SVG logos with automatic server-side storage and static serving.
+- **Theme Customization:** Define primary brand colors and UI accent colors.
+- **Localized Messaging:** Custom organization name and tagline displayed throughout the application.
+
+#### API Endpoints
+```
+GET  /branding      → fetch current settings
+PUT  /branding      → update name, colors, tagline
+POST /logo          → upload and link brand logo
+```
+
+---
+
+### 18. External Data Ingestion (REST APIs)
+
+**Priority:** P2 (Medium)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Ingest data from external JSON/REST endpoints into the organization's database.
+- Support for various authentication headers and query parameters.
+- Automatic tabular parsing of API responses.
+
+#### Features
+- **API Connector:** Configure URL, Method (GET/POST), Headers, and Params.
+- **Tabular Mapping:** Heuristic-based parsing of nested JSON objects into flat database tables.
+- **Metadata Persistence:** Track API sources as registered data sources.
+
+#### API Endpoints
+```
+GET  /data/sources   → list all registered APIs/databases
+POST /import/api     → fetch, parse, and import API data to a table
+```
+
+---
+
+### 19. Context-Aware Organizational Learning
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Capture user feedback on AI-generated queries and insights.
+- Record corrections to improve the RAG performance for specific organizations.
+- Create an organization-specific "knowledge layer" over time.
+
+#### Features
+- **Feedback Loop:** Inline voting (Up/Down) and text-based corrections on every AI response.
+- **Correction Recording:** Automatically persists the original query, response, and user correction to a dedicated organizational context manager.
+- **Refinement Engine:** Uses past corrections to weight future SQL generation and reasoning steps.
+
+---
+
+### 20. AI Transparency & "Thinking Process"
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Expose the AI agent's internal reasoning and tool-calling steps to the user.
+- Improve user trust and debugging of complex multi-step queries.
+
+#### Features
+- **Thinking Process Logs:** Real-time visibility into the steps the agent takes (e.g., "Scanning schema...", "Generating SQL...", "Executing query...").
+- **Multi-Session History:** Persistent storage of chat logs including full thinking steps and visualization data.
+
+---
+
+### 21. Remote Database Auto-Provisioning
+
+**Priority:** P2 (Medium)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Automatically provision new databases and users for organizations right from the portal.
+- Onboard new customers with "Instant-DB" capabilities without manual DBA intervention.
+
+#### Features
+- **Instant PostgreSQL:** Logic to create new Postgres databases and dedicated owner-users with secure credentials.
+- **Automated Onboarding:** Automatically sends connection details to the organization administrator via email.
+- **Auto-Switching:** Instantly configures the AI agent's connection string to the new provisioned database.
+
+---
+
+### 22. CRM Integration Suite & Provisioning
+
+**Priority:** P0 (Critical)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- One-click native connectivity for HubSpot and Salesforce.
+- **Organization Provisioning:** Allow organizations to securely provide their own `Client ID` and `Client Secret` to use their private Developer Apps.
+- **Deduplicated Sync:** Automated background synchronization with intelligent cleaning and deduplication.
+- **Integrated UX:** Popup-based OAuth flow to keep users within the Vantage dashboard.
+
+#### Features
+- **HubSpot Connector:** Automated sync of Contacts, Companies, and Deals using HubSpot CRM API v3.
+- **Salesforce Connector:** Automated sync of Leads, Contacts, and Opportunities via SOQL and REST API.
+- **Provisioning UI:** A dedicated tab in the integration settings to manage custom app credentials (encrypted at rest).
+- **Data Landing:** CRM data is automatically normalized and landed into organization-specific SQL tables (e.g., `hubspot_contacts`), making it immediately queryable via natural language.
+
+#### User Stories
+- As a **Sales Manager**, I want to connect my Salesforce account and ask "Who are my top leads from the last 7 days?" in plain English.
+- As an **IT Admin**, I want to use my own HubSpot Developer App so that I have full control over API scopes and data access.
+
+#### API Endpoints
+```
+GET  /integrations/available         → list CRM providers
+GET  /integrations/{p}/auth-url      → get OAuth initiation URL
+POST /integrations/{p}/credentials   → save Client ID/Secret
+POST /integrations/import/{p}        → trigger manual data sync
+```
+
+---
+
+### 16. Observability & Monitoring (Langfuse)
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Trace LLM generations, tool calls, and agent reasoning steps
+- Monitor API latency, token usage, and costs
+- Enable debugging of complex RAG chains
+- Persist traces for audit and performance tuning
+
+#### Features
+- **Langfuse Integration:** Deep integration with the AnalyticsAgent via the Langfuse SDK.
+- **Trace Visualization:** Capture prompt templates, variable injections, and multi-step tool execution.
+- **Cost Tracking:** Automatic token counting and provider-specific pricing integration.
+- **Session Linking:** Group traces by organization and chat session for easier troubleshooting.
+
+#### Technical Specifications
+- **Provider:** Langfuse (Cloud or Self-Hosted via Docker)
+- **SDK:** `langfuse-python`
+- **Instrumentation Points:** `AnalyticsAgent`, `LLMClient`, and key router endpoints.
+
 ## Technical Architecture
 
 ### Technology Stack
@@ -548,75 +704,72 @@ GET /tables/{table_name}/profile?force=true → force re-profile
 │                     FastAPI Server                       │
 │                        (api.py)                          │
 └─────────────────────────────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   Models     │   │ Analytics    │   │  Database    │
-│  (models.py) │   │   Agent      │   │   Manager    │
-│              │   │  (main.py)   │   │(database.py) │
-└──────────────┘   └──────────────┘   └──────────────┘
-        │                   │                   │
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  Admin DB    │   │ HuggingFace  │   │  Customer    │
-│ (admin.db)   │   │     API      │   │  Databases   │
-└──────────────┘   └──────────────┘   └──────────────┘
+          │                   │                   │
+          ▼                   ▼                   ▼
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │   Models     │    │ Analytics    │    │  Database    │
+  │  (models.py) │    │   Agent      │    │   Manager    │
+  │              │    │  (main.py)   │    │(database.py) │
+  └──────────────┘    └──────────────┘    └──────────────┘
+          │                   │                   │
+          ▼                   ▼                   ▼
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │  Admin DB    │    │ CRM Sync &   │    │  Customer    │
+  │ (admin.db)   │    │ Connectors   │    │  Databases   │
+  │              │    │ (crm_sync.py)│    │              │
+  └──────────────┘    └──────────────┘    └──────────────┘
+          │                   │                   │
+          ▼                   ▼                   ▼
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │   LLMs &     │    │ External CRM │    │   Internal   │
+  │ Observability│    │ (HubSpot/SF) │    │   Scheduler  │
+  │ (Langfuse)   │    │     APIs     │    │ (scheduler.py)│
+  └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
 ---
 
 ## Security & Compliance
 
-### Authentication
-- ✅ API Key-based authentication
-- ✅ Header validation on all protected endpoints (`x-api-key`)
-- ✅ Secure token generation (256-bit random)
-- ✅ Prevent duplicate email accounts at Org level
+### Authentication & RBAC
+- ✅ **API Key-based auth** for machine-to-machine.
+- ✅ **JWT-based auth** with secure cookies for web access.
+- ✅ **Role-Based Access Control (RBAC):**
+  - **Owner**: Full system access, organization billing, and ownership handover.
+  - **Admin**: User management (excluding owners), database configuration, and data modification.
+  - **Analyst**: Natural language querying, advanced analytics, and dashboard viewing.
+- ✅ **Secure Password Hashing** (bcrypt with 12 rounds).
+- ✅ **Prevent duplicate accounts** globally and per-org.
 
-### Data Isolation
-- ✅ Separate databases per organization
-- ✅ Connection string encryption
-- ✅ No cross-tenant data access
-
-### Input Validation
-- ✅ File size limits (50MB)
-- ✅ File type validation
-- ✅ SQL injection prevention via parameterized queries
+### Audit & Compliance
+- ✅ **Global Activity Logs:** Centralized `activity_logs` table tracking critical actions (logins, imports, db changes, role updates) with user/org context.
+- ✅ **Data Isolation:** Enforced separate databases (PostgreSQL schemas or SQLite files) per tenant.
+- ✅ **Connection Encryption:** All database credentials stored encrypted at rest.
+- ✅ **Input Sanitization:** Parameterized SQL and regex-based table/column name validation.
 
 ---
 
 ## Future Roadmap
 
-### Phase 2 — Completed (Q1 2026)
-- ✅ Web-based dashboard UI (React + Vite)
-- ✅ Query history and chat session management
-- ✅ Scheduled reports
-- ✅ Advanced analytics (forecasting, anomaly detection, correlation)
-- ✅ Real-time data streaming (WebSocket + HTTP polling fallback)
-- ✅ Data management UI (inline edit, row add/delete, AI missing value fill)
-- ✅ File analysis before import ("Analyze Before Import")
-- ✅ PDF and PowerPoint export
-- ✅ Proactive Insight Engine and Detection Pipeline
-- ✅ AI Transformation Wizard
-- ✅ Dashboards / Pinned Boards with public sharing
-- ✅ Alerts Manager with email and webhook notifications
-- ✅ Data Profiler with column-level statistics
+### Phase 3 — High-Performance Analytics (Completed Q2 2026)
+- ✅ Advanced visualizations (heatmaps, treemaps, candlestick)
+- ✅ Custom branding per organization (White-labeling)
+- ✅ Organization-level RBAC & User Management
+- ✅ Langfuse Observability & Monitoring
+- ✅ AI Thinking Process Transparency
+- ✅ External API Data Ingestion
+- ✅ Email notifications for critical alerts and onboarding
+- ✅ Holt-Winters Time-Series Forecasting
+- ✅ Real-time Data Streaming (WebSocket + HTTP fallback)
+- ✅ **CRM Integration Suite** (HubSpot & Salesforce)
+- ✅ **CRM Provisioning Protocol** (Custom Credentials)
 
-### Phase 3 (Q2 2026)
-- 🔲 Advanced visualizations (heatmaps, treemaps, candlestick)
-- ✅ Custom branding per organization
-- 🔲 Webhook integrations
-- 🔲 User management and RBAC within organizations
-- 🔲 Email notifications and report delivery
-
-### Phase 4 (Q3–Q4 2026)
-- 🔲 Mobile app (iOS/Android)
-- 🔲 Slack / Microsoft Teams integration
-- 🔲 Multi-language support
-- 🔲 On-premise deployment option
-- 🔲 Rate limiting and API key rotation
+### Phase 4 — Enterprise Scaling (Q3–Q4 2026)
+- 🔲 Mobile app (iOS/Android) for proactive alerts
+- 🔲 Slack / Microsoft Teams integration (AI Query via Chat)
+- 🔲 Multi-language support (LLM localization)
+- 🔲 On-premise deployment option (Air-gapped)
+- 🔲 Organization-wide usage analytics and cost reporting
 
 ---
 
@@ -653,6 +806,6 @@ GET /tables/{table_name}/profile?force=true → force re-profile
 - [FILE_IMPORT_GUIDE.md](FILE_IMPORT_GUIDE.md) - File import documentation
 - [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md) - Code quality guidelines
 
-**Document Version:** 2.2  
-**Last Updated:** March 2026  
+**Document Version:** 2.5  
+**Last Updated:** April 2026  
 **Next Review:** June 2026

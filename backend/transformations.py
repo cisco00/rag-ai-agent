@@ -376,11 +376,16 @@ class DataTransformer:
              if method != "value":
                   logger.warning(f"Fill method {method} requires a column")
                   return df
-             return df.fillna(op["value"])
+             val = op.get("value")
+             if val is not None:
+                 return df.fillna(val)
+             return df
              
         # Column specific fill
         if method == "value":
-             df[col] = df[col].fillna(op["value"])
+             val = op.get("value")
+             if val is not None:
+                 df[col] = df[col].fillna(val)
              
         elif method == "mean":
              if pd.api.types.is_numeric_dtype(df[col]):

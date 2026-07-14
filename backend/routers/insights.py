@@ -26,7 +26,7 @@ async def get_org_insights(limit: int = 20, org=Depends(get_current_org)):
             return {"status": "success", "insights": []}
             
         db_manager = DatabaseManager(connection_string=conn_str)
-        agent = AnalyticsAgent(connection_string=conn_str)
+        agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
         engine = InsightEngine(db_manager=db_manager, agent=agent, org_id=org.id)
             
         insights = engine.get_all_insights(limit=limit)

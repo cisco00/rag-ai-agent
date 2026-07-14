@@ -81,11 +81,13 @@ export function Sidebar({
     { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
     { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured, hide: !hasPerm('VIEW_ADVANCED') },
     { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') },
+    { id: 'integrations', label: 'Integrations', icon: Box, hide: !hasPerm('MANAGE_ORG') },
   ].filter(item => !item.hide);
 
   const adminItems = [
     { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
+    { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },
     { id: 'branding', label: 'Branding', icon: Settings, hide: !hasPerm('MANAGE_ORG') },
     { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') },
     { id: 'admin', label: 'Admin Console', icon: Shield, hide: !user?.is_superuser },

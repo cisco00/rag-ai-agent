@@ -25,6 +25,8 @@ from typing import Optional
 
 from fastapi import Header, HTTPException, Depends
 from jose import JWTError, jwt
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from models import get_org_by_api_key
 from database import DatabaseManager
@@ -46,6 +48,9 @@ except ImportError:
     def invalidate_schema_cache(*args, **kwargs):
         pass
 
+# ── Rate Limiter ──────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+
 # ── Caches ────────────────────────────────────────────────────────────────────
 FILE_DB_CACHE: dict = {}
 FILE_DB_CACHE_LOCK = threading.Lock()
@@ -62,9 +67,12 @@ def get_org_connection_string(org, prefer_file_db: bool = True) -> Optional[str]
             if org.api_key in FILE_DB_CACHE:
                 return FILE_DB_CACHE[org.api_key]
 
-        # Fallback: check disk for the default file database
-        backend_dir  = os.path.dirname(os.path.abspath(__file__))
-        temp_db_path = os.path.join(backend_dir, f"file_db_{org.api_key}.sqlite")
+        # Sanitize api_key to prevent directory traversal
+        import re
+        safe_api_key = re.sub(r'[^a-zA-Z0-9_]', '', org.api_key)
+
+        # Fallback: check /data/ directory for the default file database
+        temp_db_path = f"/data/file_db_{safe_api_key}.sqlite"
 
         if os.path.exists(temp_db_path):
             conn_str = f"sqlite:///{temp_db_path}"
@@ -130,8 +138,8 @@ _P: dict[str, frozenset] = {
     "MANAGE_ALERTS":     frozenset({"owner", "admin", "operation_manager", "analyst"}),
     "MANAGE_DASHBOARDS": frozenset({"owner", "admin", "business_owner", "product_manager",
                                     "operation_manager", "analyst"}),
-    "MANAGE_ORG":        frozenset({"owner", "admin"}),
-    "MANAGE_USERS":      frozenset({"owner", "admin"}),
+    "MANAGE_ORG":        frozenset({"owner", "admin", "business_owner"}),
+    "MANAGE_USERS":      frozenset({"owner", "admin", "business_owner"}),
     "EXPORT":            frozenset({"owner", "admin", "business_owner", "product_manager",
                                     "operation_manager", "analyst", "sales_team", "marketing_team"}),
     "VIEW_ADVANCED":     frozenset({"owner", "admin", "business_owner", "product_manager",

@@ -14,7 +14,12 @@ class RegisterRequest(BaseModel):
     email: Optional[str] = None
 
 class ConfigRequest(BaseModel):
-    connection_string: str
+    db_type: str = "sqlite"
+    host: Optional[str] = None
+    port: Optional[int] = None
+    user: Optional[str] = None
+    password: Optional[str] = None
+    db_name: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: str
@@ -299,3 +304,12 @@ class ScheduledReportRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+# ── CRM Integrations ──
+
+class CRMAuthRequest(BaseModel):
+    provider: str # 'salesforce', 'hubspot'
+
+class CRMSyncRequest(BaseModel):
+    source_id: int
+    objects: Optional[List[str]] = None # ['Contacts', 'Deals', etc.]

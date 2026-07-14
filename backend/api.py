@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,7 +46,7 @@ from job_queue import start_job_queue, stop_job_queue
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
-from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin
+from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing
 
 load_dotenv()
 
@@ -102,7 +103,7 @@ async def lifespan(app: FastAPI):
         # ── Organizational Learning via APScheduler ─────────────────────────────
         _LEARNING_INTERVAL_MINUTES = 30
         _scheduler.add_job(
-            run_organiziational_learning if 'run_organiziational_learning' in globals() else run_organizational_learning,
+            run_organizational_learning,
             trigger=IntervalTrigger(minutes=_LEARNING_INTERVAL_MINUTES),
             id="org_learning",
             replace_existing=True,
@@ -132,7 +133,7 @@ async def lifespan(app: FastAPI):
                 return None
 
             db_manager = DatabaseManager(connection_string=conn_str)
-            agent      = AnalyticsAgent(connection_string=conn_str)
+            agent      = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org_id}"])
             return InsightEngine(db_manager=db_manager, agent=agent, org_id=org_id)
         except Exception as exc:
             logger.warning(f"[Insights] Could not create engine for org {org_id}: {exc}")
@@ -148,8 +149,8 @@ async def lifespan(app: FastAPI):
     
     # ── Cleanup ──────────────────────────────────────────────────────────────
     if insight_scheduler:
-        insight_scheduler.stop()
-    stop_job_queue()
+        await insight_scheduler.stop()
+    await stop_job_queue()
     shutdown_scheduler()
     logger.info("Application shutdown complete.")
 
@@ -160,6 +161,13 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+from dependencies import limiter
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.exception_handler(RAGAgentError)
@@ -201,7 +209,16 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 Instrumentator().instrument(app).expose(app)
 
-# ── Request Logging Middleware ───────────────────────────────────────────────
+# ── Security & Logging Middlewares ───────────────────────────────────────────
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' ws: wss: https:;"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log every request method, path, headers, and response status code."""
@@ -216,19 +233,20 @@ async def log_requests(request: Request, call_next):
     )
     return response
 
-@app.get("/debug/routes")
-async def get_all_routes():
-    """Return a list of all registered routes and their methods."""
-    routes = []
-    for r in app.routes:
-        if hasattr(r, "path"):
-            methods = list(getattr(r, "methods", []))
-            routes.append({"path": r.path, "methods": methods, "name": getattr(r, "name", "")})
-    return {"total": len(routes), "routes": routes}
+if os.getenv("ENVIRONMENT", "development").lower() != "production":
+    @app.get("/debug/routes")
+    async def get_all_routes():
+        """Return a list of all registered routes and their methods."""
+        routes = []
+        for r in app.routes:
+            if hasattr(r, "path"):
+                methods = list(getattr(r, "methods", []))
+                routes.append({"path": r.path, "methods": methods, "name": getattr(r, "name", "")})
+        return {"total": len(routes), "routes": routes}
 
-@app.post("/app-level-post-test")
-async def app_level_post_test():
-    return {"message": "App-level POST works"}
+    @app.post("/app-level-post-test")
+    async def app_level_post_test():
+        return {"message": "App-level POST works"}
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _DEV_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
@@ -312,6 +330,7 @@ def get_static_dir():
 static_dir = get_static_dir()
 logger.info(f"Using static directory: {static_dir} (exists: {os.path.exists(static_dir)})")
 
+app.include_router(integrations.router, prefix="/integrations", tags=["Integrations"])
 app.include_router(auth.router,            prefix="/auth",           tags=["Authentication"])
 app.include_router(data.router,                                      tags=["Data Management"])
 app.include_router(analytics.router,                                 tags=["Analytics"])
@@ -323,6 +342,7 @@ app.include_router(dashboards.router,                                tags=["Dash
 app.include_router(insights.router,                                  tags=["Insights"])
 app.include_router(org_context.router,                               tags=["Organization Context"])
 app.include_router(admin.router,                                     tags=["Admin"])
+app.include_router(billing.router,         prefix="/billing",        tags=["Billing Analytics"])
 
 
 @app.get("/")
@@ -398,6 +418,10 @@ app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 
 @app.get("/{full_path:path}")
 async def serve_spa(request: Request, full_path: str):
+    # API Guard: Never serve HTML for paths that should be handled by API routers
+    if any(full_path.startswith(p) for p in ["auth", "data", "integrations", "analytics", "branding", "sessions", "transformations", "alerts", "dashboards", "insights", "org_context", "admin"]):
+        return JSONResponse(status_code=404, content={"detail": f"Route '{full_path}' not found in API."})
+
     file_path = os.path.join(static_dir, full_path)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)

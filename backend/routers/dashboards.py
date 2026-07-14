@@ -158,7 +158,7 @@ async def refresh_dashboard_card(
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
     from main import AnalyticsAgent
-    agent  = AnalyticsAgent(connection_string=conn_str)
+    agent  = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
     result = await refresh_card(card_id, org.id, conn_str, agent)
     return result
 

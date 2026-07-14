@@ -86,8 +86,22 @@ def execute_data_source_sync(source_id: int):
                 if success:
                     update_data_source_sync(source.id, datetime.utcnow())
                     logger.info(f"Successfully synced DataSource {source_id} to table '{source.table_name}'")
+            
+            elif source.source_type.startswith('crm_'):
+                from crm_sync import run_crm_sync
+                # For background sync, we sync default objects
+                async def _sync():
+                    return await run_crm_sync(source, org)
+                
+                # Run async in current thread but use run_in_executor if needed
+                # Actually, APScheduler is running this in a thread, so we can use asyncio.run
+                sync_results = asyncio.run(_sync())
+                
+                if any(res["status"] == "success" for res in sync_results.values()):
+                    update_data_source_sync(source.id, datetime.utcnow())
+                    logger.info(f"Successfully synced CRM DataSource {source_id}")
                 else:
-                    logger.error(f"Failed to load synced data for Source {source_id}")
+                    logger.error(f"Failed to sync CRM DataSource {source_id}")
 
             # Schedule next run
             if source.refresh_interval:
@@ -137,7 +151,7 @@ def execute_scheduled_report(report_id: int):
                 return
 
             from main import AnalyticsAgent
-            with AnalyticsAgent(connection_string=org.db_connection_string) as agent:
+            with AnalyticsAgent(connection_string=org.db_connection_string, observability_tags=[f"org:{org.id}"]) as agent:
                 # Run the query
                 # AnalyticsAgent.run_query is synchronous
                 result = agent.run_query(report.query)
@@ -259,7 +273,7 @@ def run_organizational_learning():
                         # Use a dedicated AnalyticsAgent to get a configured LLM client
                         # We don't necessarily need a database connection for just LLM calls,
                         # but AnalyticsAgent requires it. We'll use the org's connection if available.
-                        with AnalyticsAgent(connection_string=org.db_connection_string) as agent:
+                        with AnalyticsAgent(connection_string=org.db_connection_string, observability_tags=[f"org:{org.id}"]) as agent:
                             response = agent.client.chat_completion(
                                 model=agent.config.model_name,
                                 messages=[{"role": "user", "content": prompt}]

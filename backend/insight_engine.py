@@ -197,7 +197,7 @@ class InsightEngine:
                     f'SELECT AVG("{column}") AS val FROM "{table}" '
                     f'WHERE "{column}" IS NOT NULL'
                 )
-            result = self.db.execute_query(sql)
+            result = self.db.execute_query(sql, allow_modifications=False)
 
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
@@ -230,7 +230,7 @@ class InsightEngine:
                     f'SELECT AVG("{column}") AS val FROM "{table}" '
                     f'WHERE "{column}" IS NOT NULL'
                 )
-            result = self.db.execute_query(sql)
+            result = self.db.execute_query(sql, allow_modifications=False)
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
         except Exception as exc:

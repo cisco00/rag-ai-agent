@@ -24,3 +24,4 @@ bcrypt
 python-jose[cryptography]
 pydantic[email]
 langfuse
+slowapi==0.1.9

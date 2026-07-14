@@ -17,6 +17,7 @@ import os
 import secrets
 import string
 import json
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -538,7 +539,7 @@ def refresh_access_token(raw_refresh_token: str) -> dict:
                  "WHERE rt.token_hash = :hash AND rt.expires_at > :now"),
             {"hash": ref_hash, "now": now},
         ).mappings().first()
-    if not row:
+    if not row or not hmac.compare_digest(row["token_hash"], ref_hash):
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
     return {
         "access_token": _make_access_token(row["user_id"], row["org_id"], row["role"], row.get("is_superuser", 0)),
@@ -608,25 +609,28 @@ def accept_invite(raw_token: str, password: str,
     import hashlib
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now        = datetime.now(timezone.utc).isoformat()
+    
     with admin_engine.connect() as conn:
-        invite = conn.execute(
-            text("SELECT * FROM invite_tokens "
-                 "WHERE token_hash=:h AND used=0 AND expires_at>:now"),
-            {"h": token_hash, "now": now},
-        ).mappings().first()
-    if not invite:
+        with conn.begin():
+            invite = conn.execute(
+                text("""
+                    UPDATE invite_tokens 
+                    SET used = 1 
+                    WHERE token_hash = :h AND used = 0 AND expires_at > :now 
+                    RETURNING org_id, email, role, token_hash
+                """),
+                {"h": token_hash, "now": now},
+            ).mappings().first()
+            
+    if not invite or not hmac.compare_digest(invite["token_hash"], token_hash):
         raise HTTPException(status_code=400, detail="Invite token is invalid or has expired.")
+        
     create_user(
         org_id=invite["org_id"], email=invite["email"],
         password=password, role=invite["role"],
         display_name=display_name,
     )
-    with admin_engine.connect() as conn:
-        with conn.begin():
-            conn.execute(
-                text("UPDATE invite_tokens SET used=1 WHERE token_hash=:h"),
-                {"h": token_hash},
-            )
+    
     return login_user(email=invite["email"], password=password, org_id=invite["org_id"])
 
 
@@ -814,27 +818,26 @@ def reset_password_with_token(raw_token: str, new_password: str) -> bool:
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
     
+    validate_password_strength(new_password)
+    new_hash = hash_password(new_password)
+    
     with admin_engine.connect() as conn:
-        row = conn.execute(text("""
-            SELECT user_id FROM password_reset_tokens 
-            WHERE token_hash = :h AND used = 0 AND expires_at > :now
-        """), {"h": token_hash, "now": now}).mappings().first()
-        
-        if not row:
-            return False
-        
-        user_id = row["user_id"]
-        validate_password_strength(new_password)
-        new_hash = hash_password(new_password)
-        
         with conn.begin():
+            row = conn.execute(text("""
+                UPDATE password_reset_tokens 
+                SET used = 1 
+                WHERE token_hash = :h AND used = 0 AND expires_at > :now
+                RETURNING user_id, token_hash
+            """), {"h": token_hash, "now": now}).mappings().first()
+            
+            if not row or not hmac.compare_digest(row["token_hash"], token_hash):
+                return False
+            
+            user_id = row["user_id"]
+            
             conn.execute(
                 text("UPDATE users SET password_hash = :h WHERE id = :uid"), 
                 {"h": new_hash, "uid": user_id}
-            )
-            conn.execute(
-                text("UPDATE password_reset_tokens SET used = 1 WHERE token_hash = :h"), 
-                {"h": token_hash}
             )
     return True
 

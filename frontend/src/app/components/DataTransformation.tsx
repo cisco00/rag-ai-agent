@@ -87,17 +87,17 @@ export function DataTransformation({ }: DataTransformationProps) {
     { value: 'drop_duplicates', label: 'Drop Duplicates', category: 'Cleaning' },
     { value: 'clean_text', label: 'Clean Text', category: 'Cleaning' },
     { value: 'remove_outliers', label: 'Remove Outliers', category: 'Cleaning' },
-    { value: 'filter', label: 'Filter Rows', category: 'Transform' },
-    { value: 'rename_col', label: 'Rename Column', category: 'Transform' },
-    { value: 'drop_col', label: 'Drop Column', category: 'Transform' },
-    { value: 'change_type', label: 'Change Type', category: 'Transform' },
-    { value: 'fill_na', label: 'Fill Missing Values', category: 'Transform' },
-    { value: 'normalize', label: 'Normalize', category: 'Advanced' },
-    { value: 'encode', label: 'Encode', category: 'Advanced' },
-    { value: 'feature_engineering', label: 'Feature Engineering', category: 'Advanced' },
-    { value: 'text_feature', label: 'Text Features', category: 'Advanced' },
-    { value: 'groupby', label: 'Group By', category: 'Aggregation' },
-    { value: 'resample', label: 'Resample Time Series', category: 'Aggregation' },
+    { value: 'filter', label: 'Filter Rows', category: 'Select' },
+    { value: 'rename_col', label: 'Rename Column', category: 'Select' },
+    { value: 'drop_col', label: 'Drop Column', category: 'Select' },
+    { value: 'change_type', label: 'Change Type', category: 'Select' },
+    { value: 'fill_na', label: 'Fill Missing Values', category: 'Select' },
+    { value: 'normalize', label: 'Normalize', category: 'Smart Prep' },
+    { value: 'encode', label: 'Encode', category: 'Smart Prep' },
+    { value: 'feature_engineering', label: 'Feature Engineering', category: 'Smart Prep' },
+    { value: 'text_feature', label: 'Text Features', category: 'Smart Prep' },
+    { value: 'groupby', label: 'Summarize', category: 'Summarize' },
+    { value: 'resample', label: 'Time Series Summary', category: 'Summarize' },
   ];
 
   const addOperation = (type: string) => {
@@ -177,10 +177,25 @@ export function DataTransformation({ }: DataTransformationProps) {
         })
       };
 
-      await api.post('/transform', payload);
+      const response = await api.post<any>('/transform', payload);
 
       setSuccess(true);
-      await handlePreview(); // auto-refresh preview from backend
+      
+      // Fix Preview: Update focused table and set preview data from response
+      if (response && response.target_table) {
+          // Add the new table to the list if not there
+          if (!tables.includes(response.target_table)) {
+              setTables([...tables, response.target_table]);
+          }
+          setSelectedTable(response.target_table);
+      }
+      
+      if (response && response.preview) {
+          setPreviewData(response.preview);
+          setShowPreview(true);
+      } else {
+          await handlePreview(); 
+      }
 
       setTimeout(() => {
         setSuccess(false);
@@ -209,14 +224,16 @@ export function DataTransformation({ }: DataTransformationProps) {
         const newOps = response.operations.map(op => {
           let type = op.type;
           let params = { ...op };
-          // Map backend 'clean' type back to frontend types for UI matching
           if (type === 'clean') {
             type = params.method === 'remove_outliers' ? 'remove_outliers' : 'drop_duplicates';
           }
           return {
             id: Math.random().toString(36).substr(2, 9),
             type,
-            params
+            params: {
+                ...params,
+                friendly_description: op.friendly_description
+            }
           };
         });
         setOperations([...operations, ...newOps]);
@@ -469,10 +486,10 @@ export function DataTransformation({ }: DataTransformationProps) {
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-3">
           <Wrench className="size-8 text-blue-600" />
-          <h1 className="text-3xl font-bold text-gray-900">Data Transformation</h1>
+          <h1 className="text-3xl font-bold text-gray-900">Data Prep</h1>
         </div>
         <p className="text-gray-600">
-          Apply advanced transformations to your data with instant preview.
+          Prepare and refine your data with AI-powered suggestions and instant preview.
         </p>
       </div>
 
@@ -504,9 +521,9 @@ export function DataTransformation({ }: DataTransformationProps) {
                 <Wrench className="size-6 text-white" />
               </div>
               <div className="flex-1">
-                <h3 className="text-lg font-bold text-blue-900 mb-1">AI Transformation Wizard</h3>
+                <h3 className="text-lg font-bold text-blue-900 mb-1">AI Data Prep Wizard</h3>
                 <p className="text-blue-800 text-sm mb-4">
-                  Describe what you want to do in plain English, and the AI will automatically build the transformation steps for you!
+                  Describe how you want to prepare your data, and I'll handle the technical bits for you!
                 </p>
                 <div className="flex gap-3">
                   <input
@@ -534,7 +551,7 @@ export function DataTransformation({ }: DataTransformationProps) {
           {/* Operations Pipeline */}
           <div className="bg-white rounded-xl border border-gray-200">
             <div className="p-6 border-b border-gray-200">
-              <h2 className="text-xl font-bold text-gray-900">Transformation Pipeline</h2>
+              <h2 className="text-xl font-bold text-gray-900">Data Prep Pipeline</h2>
               <p className="text-sm text-gray-600 mt-1">
                 {operations.length} operation(s) configured
               </p>
@@ -559,7 +576,7 @@ export function DataTransformation({ }: DataTransformationProps) {
                           #{index + 1}
                         </span>
                         <h3 className="font-bold text-gray-900">
-                          {operationTypes.find((t) => t.value === op.type)?.label}
+                          {op.params.friendly_description || operationTypes.find((t) => t.value === op.type)?.label}
                         </h3>
                       </div>
                       <button
@@ -591,7 +608,7 @@ export function DataTransformation({ }: DataTransformationProps) {
                   className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors font-medium"
                 >
                   <Play className="size-5" />
-                  Apply Transformations
+                  Run Data Prep
                 </button>
               </div>
             )}
