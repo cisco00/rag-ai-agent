@@ -2,13 +2,24 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+# Secrets — never commit
 .env
+backend/.env
+*.secrets.tfvars
+infra/on-prem/.env
+
+# Python environments
 .venv
 venv/
 env/
+
+# Databases
 *.sqlite.db
 *.db
-.DS_Store
+*.sqlite
+*.db-shm
+*.db-wal
 
 # Logs
 logs/
@@ -18,11 +29,30 @@ logs/
 node_modules/
 node-v*/
 
-# Data
-*.sqlite
-*.db-shm
-*.db-wal
+# Build artifacts
+dist/
+build/
 
 # Misc
+.DS_Store
 *.tar.xz
 email_out.txt
+
+# -----------------------------------------------------------------------
+# Terraform
+# -----------------------------------------------------------------------
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/terraform.tfstate.*.backup
+**/crash.log
+**/crash.*.log
+# Secrets tfvars (create a .gitignore-safe copy without secrets)
+**/secrets.tfvars
+**/secrets.auto.tfvars
+# Override files
+**/override.tf
+**/override.tf.json
+**/*_override.tf
+**/*_override.tf.json

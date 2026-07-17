@@ -25,3 +25,6 @@ python-jose[cryptography]
 pydantic[email]
 langfuse
 slowapi==0.1.9
+# Multi-LLM provider support
+openai>=1.30.0
+anthropic>=0.28.0

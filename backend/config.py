@@ -149,10 +149,11 @@ class AgentConfig:
     """Analytics agent configuration settings."""
     
     # Model settings
-    model_name: str = "gemini-2.0-flash"
-    model_provider: str = "google" # "huggingface" or "google"
-    fallback_model_name: str = "gemini-2.0-flash"
-    fallback_model_provider: str = "google"
+    model_name: str = field(default_factory=lambda: os.getenv("LLM_MODEL_NAME", "gpt-4o"))
+    model_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "openai"))
+    # Supported: openai | azure_openai | anthropic | google | huggingface
+    fallback_model_name: str = field(default_factory=lambda: os.getenv("LLM_FALLBACK_MODEL", ""))
+    fallback_model_provider: str = field(default_factory=lambda: os.getenv("LLM_FALLBACK_PROVIDER", ""))
     max_tokens: int = 1024
     temperature: float = 0.7
     
@@ -366,23 +367,48 @@ Score the recommendation using this rubric:
    entire recommendation rests on]"
 """
     
-    # Tokens
+    # ---------------------------------------------------------------------------
+    # API Keys — resolved in priority order:
+    #   1. LLM_API_KEY  (universal — injected by Secrets Manager in AWS deployments)
+    #   2. Provider-specific key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, HF_TOKEN)
+    # ---------------------------------------------------------------------------
+    llm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("LLM_API_KEY"))
     hf_token: Optional[str] = field(default_factory=lambda: os.getenv("HF_TOKEN"))
     google_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY"))
-    
+
+    # Azure OpenAI — required only when model_provider == "azure_openai"
+    azure_openai_endpoint: Optional[str] = field(default_factory=lambda: os.getenv("AZURE_OPENAI_ENDPOINT"))
+    azure_openai_api_version: str = field(default_factory=lambda: os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"))
+
     def validate(self) -> None:
         """Validate agent configuration."""
-        if self.model_provider == "huggingface" and not self.hf_token:
-            raise MissingConfigurationError("HF_TOKEN")
-        
-        # Only strict check Google key if it is the primary provider
-        # but allow skipping validation via env var (for migrations/builds)
-        if self.model_provider == "google" and not self.google_api_key:
-            if not os.getenv("SKIP_KEY_VALIDATION"):
-                raise MissingConfigurationError("GOOGLE_API_KEY")
-        
-        # Checking fallback keys is done at runtime during init to allow graceful degradation
-            
+        skip = bool(os.getenv("SKIP_KEY_VALIDATION"))
+        universal_key = self.llm_api_key
+
+        if self.model_provider == "huggingface":
+            if not self.hf_token:
+                raise MissingConfigurationError("HF_TOKEN")
+
+        elif self.model_provider == "openai":
+            if not skip and not (universal_key or os.getenv("OPENAI_API_KEY")):
+                raise MissingConfigurationError("LLM_API_KEY or OPENAI_API_KEY")
+
+        elif self.model_provider == "azure_openai":
+            if not skip and not (universal_key or os.getenv("AZURE_OPENAI_API_KEY")):
+                raise MissingConfigurationError("LLM_API_KEY or AZURE_OPENAI_API_KEY")
+            if not skip and not self.azure_openai_endpoint:
+                raise MissingConfigurationError("AZURE_OPENAI_ENDPOINT")
+
+        elif self.model_provider == "anthropic":
+            if not skip and not (universal_key or os.getenv("ANTHROPIC_API_KEY")):
+                raise MissingConfigurationError("LLM_API_KEY or ANTHROPIC_API_KEY")
+
+        elif self.model_provider == "google":
+            if not skip and not (universal_key or self.google_api_key):
+                raise MissingConfigurationError("LLM_API_KEY or GOOGLE_API_KEY")
+
+        # Fallback keys are checked at runtime to allow graceful degradation
+
         if self.max_iterations < 1:
             raise InvalidConfigurationError("max_iterations", "Must be at least 1")
         if self.timeout < 1:
