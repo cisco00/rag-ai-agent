@@ -111,7 +111,67 @@ terraform destroy -var-file="my-org.tfvars" -var-file="secrets.tfvars"
 
 ## Option B — On-Prem / Docker Compose
 
-Coming soon — see `infra/on-prem/`.
+Self-hosted deployment on any Linux server with Docker. All traffic goes through a Traefik reverse proxy with automatic Let's Encrypt TLS. No ports are directly exposed except 80/443.
+
+### Prerequisites
+- Docker 24.0+ and Docker Compose v2.20+
+- A domain with DNS pointing to your server
+- Ports 80 and 443 open
+
+### Step 1 — Bootstrap
+
+```bash
+cd infra/on-prem
+bash setup.sh
+```
+
+On the first run, the script copies `.env.template` → `.env` and stops so you can fill in your secrets.
+
+### Step 2 — Configure
+
+Edit `infra/on-prem/.env` and set at minimum:
+
+| Variable | How to generate |
+|---|---|
+| `DOMAIN_NAME` | Your domain (e.g. `vantage.acme.com`) |
+| `LLM_PROVIDER` | `openai`, `azure_openai`, `anthropic`, `google`, or `huggingface` |
+| `LLM_API_KEY` | Your LLM provider's API key |
+| `POSTGRES_SYS_ADMIN_PASSWORD` | `openssl rand -base64 24` |
+| `JWT_SECRET` | `openssl rand -base64 32` |
+| `ENCRYPTION_KEY` | `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+
+### Step 3 — Deploy
+
+```bash
+bash setup.sh
+```
+
+The script builds images, starts all services, and runs health checks. Once healthy, access Vantage AI at `https://your-domain.com`.
+
+### Step 4 — Enable Monitoring (optional)
+
+```bash
+bash setup.sh --monitoring
+```
+
+This adds Prometheus, Grafana, and Node Exporter. Grafana is available at `https://your-domain.com/grafana`.
+
+### Updating
+
+```bash
+git pull origin main
+docker compose -f docker-compose.prod.yml build --parallel
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Database Backup
+
+```bash
+docker compose -f docker-compose.prod.yml exec vantage-db \
+  pg_dump -U postgres vantage_admin > backup_$(date +%Y%m%d).sql
+```
+
+For the full operations guide, see [`infra/on-prem/README.md`](infra/on-prem/README.md).
 
 ---
 

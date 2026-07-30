@@ -657,6 +657,50 @@ POST /integrations/import/{p}        → trigger manual data sync
 
 ---
 
+### 23. On-Premise & Cloud Deployment
+
+**Priority:** P0 (Critical)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Fully self-hosted, isolated deployment — all data stays within the customer's network boundary
+- One-command bootstrap for on-premise Linux servers
+- Infrastructure-as-Code cloud deployment (AWS) via Terraform
+- Automatic TLS certificate provisioning (Let's Encrypt)
+- Optional monitoring stack (Prometheus + Grafana)
+- Provider-agnostic LLM configuration (OpenAI, Azure OpenAI, Anthropic, Google Gemini, HuggingFace)
+
+#### Features
+- **On-Prem (Docker Compose):** Production-hardened `docker-compose.prod.yml` with Traefik reverse proxy, PostgreSQL admin DB, backend, and frontend — no ports exposed except 80/443. Automated `setup.sh` script handles prerequisite checks, `.env` templating, secret validation, image builds, service startup, and health checks.
+- **AWS (Terraform):** Modular Terraform configuration with dedicated modules for networking (VPC, subnets, ALB), compute (ECS Fargate), database (RDS PostgreSQL), secrets (Secrets Manager), and monitoring (CloudWatch). Supports ECR-hosted container images and zero-downtime rolling deployments.
+- **Security Hardening:** All inter-service communication on an internal Docker bridge network, database credentials never exposed to the host, rate limiting and security headers via Traefik middleware, HTTP→HTTPS redirect enforced.
+- **Monitoring (opt-in):** Prometheus, Grafana, and Node Exporter enabled via `--profile monitoring` with Grafana served at `/grafana`.
+
+#### User Stories
+- As an **IT administrator**, I want to deploy Vantage AI on our own servers with a single script so that no data leaves our infrastructure
+- As a **DevOps engineer**, I want a Terraform module for AWS so I can provision production infrastructure reproducibly
+- As a **security officer**, I want all traffic encrypted with automatic TLS and no internal ports exposed to the host
+
+#### Deployment Options
+| Option | Method | Prerequisites |
+|---|---|---|
+| On-Premise | `bash infra/on-prem/setup.sh` | Docker 24.0+, Docker Compose v2.20+, domain with DNS |
+| AWS Cloud | `terraform apply` in `infra/terraform/aws/` | Terraform ≥ 1.6, AWS CLI, ECR repos, domain |
+
+#### Key Files
+```
+infra/on-prem/docker-compose.prod.yml   — production Docker Compose
+infra/on-prem/setup.sh                  — one-command bootstrap script
+infra/on-prem/.env.template             — environment template (secrets)
+infra/on-prem/README.md                 — operations & troubleshooting guide
+infra/terraform/aws/main.tf             — Terraform root module
+infra/terraform/aws/variables.tf        — configurable deployment variables
+infra/terraform/aws/modules/            — networking, compute, database, secrets, monitoring
+DEPLOYMENT.md                           — unified deployment guide (both options)
+```
+
+---
+
 ### 16. Observability & Monitoring (Langfuse)
 
 **Priority:** P1 (High)  
@@ -768,7 +812,7 @@ POST /integrations/import/{p}        → trigger manual data sync
 - 🔲 Mobile app (iOS/Android) for proactive alerts
 - 🔲 Slack / Microsoft Teams integration (AI Query via Chat)
 - 🔲 Multi-language support (LLM localization)
-- 🔲 On-premise deployment option (Air-gapped)
+- ✅ **On-Premise & Cloud Deployment** (Docker Compose + AWS Terraform)
 - 🔲 Organization-wide usage analytics and cost reporting
 
 ---
@@ -805,7 +849,8 @@ POST /integrations/import/{p}        → trigger manual data sync
 - [README.md](README.md) - Quick start guide
 - [FILE_IMPORT_GUIDE.md](FILE_IMPORT_GUIDE.md) - File import documentation
 - [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md) - Code quality guidelines
+- [DEPLOYMENT.md](DEPLOYMENT.md) - On-premise & AWS deployment guide
 
-**Document Version:** 2.5  
-**Last Updated:** April 2026  
-**Next Review:** June 2026
+**Document Version:** 2.6  
+**Last Updated:** July 2026  
+**Next Review:** September 2026
