@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Activity, BarChart, Server, Search, Calendar, Shield, ExternalLink, RefreshCw } from 'lucide-react';
+import { Users, Activity, BarChart, Server, Search, Calendar, Shield, ExternalLink, RefreshCw, ArrowUpCircle, Terminal, Copy, Check, Clock } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface AdminStats {
@@ -29,13 +29,27 @@ interface ActivityRecord {
   org_name: string;
 }
 
+interface UpdateStatus {
+  update_available: boolean;
+  current_version: string;
+  latest_version: string;
+  changelog_url: string;
+  checked_at: string;
+  update_command: string;
+  error: string | null;
+  dismissed_version: string | null;
+}
+
 export function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'activities' | 'stats'>('stats');
+  const [activeTab, setActiveTab] = useState<'users' | 'activities' | 'stats' | 'system'>('stats');
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [activities, setActivities] = useState<ActivityRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const fetchStats = async () => {
     try {
@@ -76,6 +90,35 @@ export function AdminPanel() {
     if (activeTab === 'activities') fetchActivities();
   }, [activeTab]);
 
+  const fetchUpdateStatus = async (force = false) => {
+    setCheckingUpdate(true);
+    try {
+      if (force) {
+        const data = await api.post<UpdateStatus>('/admin/updates/check');
+        setUpdateStatus(data as UpdateStatus);
+      } else {
+        const data = await api.get<UpdateStatus>('/admin/updates/status');
+        setUpdateStatus(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch update status', e);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'system') fetchUpdateStatus();
+  }, [activeTab]);
+
+  const copyCommand = () => {
+    if (updateStatus?.update_command) {
+      navigator.clipboard.writeText(updateStatus.update_command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   const filteredUsers = users.filter(u => 
     u.email?.toLowerCase().includes(search.toLowerCase()) || 
     u.org_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -109,6 +152,7 @@ export function AdminPanel() {
           { id: 'stats', label: 'Overview', icon: BarChart },
           { id: 'users', label: 'Global Users', icon: Users },
           { id: 'activities', label: 'Activity Feed', icon: Activity },
+          { id: 'system', label: 'System', icon: Server },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -230,6 +274,140 @@ export function AdminPanel() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'system' && (
+        <div className="space-y-6">
+          {/* Version Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Current Version */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="size-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shadow-inner">
+                  <Server size={24} />
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500 font-medium">Current Version</p>
+                  <p className="text-2xl font-black text-slate-900">v{updateStatus?.current_version || '...'}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="size-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-sm text-emerald-600 font-bold">Running</span>
+              </div>
+            </div>
+
+            {/* Latest Version */}
+            <div className={`bg-white p-6 rounded-3xl border shadow-sm ${
+              updateStatus?.update_available
+                ? 'border-amber-200 bg-gradient-to-br from-white to-amber-50/30'
+                : 'border-slate-200'
+            }`}>
+              <div className="flex items-center gap-4 mb-4">
+                <div className={`size-12 rounded-2xl flex items-center justify-center shadow-inner ${
+                  updateStatus?.update_available
+                    ? 'bg-amber-50 text-amber-600'
+                    : 'bg-slate-50 text-slate-400'
+                }`}>
+                  <ArrowUpCircle size={24} />
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500 font-medium">Latest Available</p>
+                  <p className="text-2xl font-black text-slate-900">
+                    {updateStatus?.latest_version ? `v${updateStatus.latest_version}` : 'Unknown'}
+                  </p>
+                </div>
+              </div>
+              {updateStatus?.update_available ? (
+                <div className="flex items-center gap-2">
+                  <span className="size-2.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="text-sm text-amber-600 font-bold">Update Available</span>
+                </div>
+              ) : updateStatus?.latest_version ? (
+                <div className="flex items-center gap-2">
+                  <span className="size-2.5 rounded-full bg-emerald-500" />
+                  <span className="text-sm text-emerald-600 font-bold">Up to date</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Last Checked + Check Now */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Clock size={20} className="text-slate-400" />
+                <div>
+                  <p className="text-sm font-bold text-slate-700">Last Checked</p>
+                  <p className="text-sm text-slate-500">
+                    {updateStatus?.checked_at
+                      ? new Date(updateStatus.checked_at).toLocaleString()
+                      : 'Never checked'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => fetchUpdateStatus(true)}
+                disabled={checkingUpdate}
+                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-sm font-bold rounded-xl transition-all shadow-sm"
+              >
+                <RefreshCw size={16} className={checkingUpdate ? 'animate-spin' : ''} />
+                {checkingUpdate ? 'Checking...' : 'Check Now'}
+              </button>
+            </div>
+            {updateStatus?.error && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                <strong>Error:</strong> {updateStatus.error}
+              </div>
+            )}
+          </div>
+
+          {/* Update Instructions */}
+          {updateStatus?.update_available && (
+            <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm">
+              <h3 className="text-lg font-black text-slate-900 mb-4 flex items-center gap-2">
+                <Terminal size={20} className="text-amber-600" />
+                Update Instructions
+              </h3>
+              <p className="text-sm text-slate-600 mb-4">
+                Run the following command on your server to update:
+              </p>
+              <div className="relative">
+                <pre className="bg-slate-900 text-emerald-400 p-4 rounded-2xl text-sm font-mono overflow-x-auto">
+                  {updateStatus.update_command}
+                </pre>
+                <button
+                  onClick={copyCommand}
+                  className="absolute top-3 right-3 p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
+                  title="Copy command"
+                >
+                  {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Changelog Link */}
+          {updateStatus?.changelog_url && (
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900">Full Changelog</h3>
+                  <p className="text-sm text-slate-500 mt-1">View all release notes and breaking changes</p>
+                </div>
+                <a
+                  href={updateStatus.changelog_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition-all"
+                >
+                  <ExternalLink size={16} />
+                  View Changelog
+                </a>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

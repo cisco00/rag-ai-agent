@@ -111,4 +111,31 @@ async def admin_stats(user: dict = Depends(_require_superuser)):
         "total_organizations": total_orgs,
         "total_activities": total_activities,
     }
-""" TargetFile """
+
+# ── Update Status Endpoints ──────────────────────────────────────────────────
+
+@router.get("/admin/updates/status")
+async def update_status(user: dict = Depends(_require_superuser)):
+    """Return the cached update check result (no network call)."""
+    from update_checker import get_update_status
+    return get_update_status()
+
+
+@router.post("/admin/updates/check")
+async def force_update_check(user: dict = Depends(_require_superuser)):
+    """Force an immediate version check against the remote repository."""
+    from update_checker import check_for_updates
+    result = await check_for_updates()
+    return result
+
+
+@router.post("/admin/updates/dismiss")
+async def dismiss_update(
+    version: str = Query(..., description="Version string to dismiss"),
+    user: dict = Depends(_require_superuser),
+):
+    """Dismiss the update notification for a given version."""
+    from update_checker import dismiss_version
+    dismiss_version(version)
+    return {"dismissed": version}
+

@@ -42,6 +42,7 @@ from alerts import ensure_alert_tables, evaluate_all_alerts, ALERT_CHECK_INTERVA
 from dashboards import ensure_dashboard_tables
 from dependencies import get_org_connection_string
 from job_queue import start_job_queue, stop_job_queue
+from update_checker import check_for_updates, get_current_version, UPDATE_CHECK_ENABLED, UPDATE_CHECK_INTERVAL_HOURS
 
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -113,6 +114,35 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to register background jobs in lifespan: {e}")
 
+    # ── Update Checker via APScheduler ────────────────────────────────────────
+    if UPDATE_CHECK_ENABLED:
+        def _run_update_check():
+            future = asyncio.run_coroutine_threadsafe(check_for_updates(), _main_loop)
+            try:
+                future.result(timeout=30)
+            except Exception as _exc:
+                logger.error(f"[UpdateChecker] Scheduled check failed: {_exc}", exc_info=True)
+
+        try:
+            _scheduler.add_job(
+                _run_update_check,
+                trigger=IntervalTrigger(hours=UPDATE_CHECK_INTERVAL_HOURS),
+                id="update_version_check",
+                replace_existing=True,
+            )
+            logger.info(f"Update checker registered (interval={UPDATE_CHECK_INTERVAL_HOURS}h)")
+
+            # Run initial check after a 30-second delay so the app boots fast
+            async def _delayed_initial_check():
+                await asyncio.sleep(30)
+                await check_for_updates()
+
+            asyncio.create_task(_delayed_initial_check())
+        except Exception as e:
+            logger.error(f"Failed to register update checker: {e}")
+    else:
+        logger.info("Update checker disabled via UPDATE_CHECK_ENABLED=false")
+
     # ── Main Loop ────────────────────────────────────────────────────────────
     # Start the job queue worker
     await start_job_queue()
@@ -158,7 +188,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Vantage AI Agent API",
     description="Production-ready RAG AI Agent platform API",
-    version="2.0.0",
+    version=get_current_version(),
     lifespan=lifespan,
 )
 
@@ -351,7 +381,7 @@ async def root():
     return {
         "status": "online",
         "message": "Vantage AI API is running",
-        "version": "2.0.0",
+        "version": get_current_version(),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

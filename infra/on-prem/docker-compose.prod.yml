@@ -98,6 +98,12 @@ services:
       - POSTGRES_PORT=5432
       - ENVIRONMENT=production
       - BACKEND_URL=http://vantage-backend:8000
+      # Update Checker (in-app notifications for on-prem admins)
+      - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-true}
+      - UPDATE_CHECK_URL=${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/VERSION}
+      - UPDATE_CHECK_INTERVAL_HOURS=${UPDATE_CHECK_INTERVAL_HOURS:-6}
+      - CHANGELOG_URL=${CHANGELOG_URL:-https://github.com/cisco00/rag-ai-agent/blob/main/CHANGELOG.md}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     depends_on:
       vantage-db:
         condition: service_healthy

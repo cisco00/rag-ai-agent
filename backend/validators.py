@@ -274,6 +274,7 @@ class SQLQueryValidator:
     # Dangerous SQL keywords that should be restricted
     DANGEROUS_KEYWORDS = [
         'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
+        'INSERT', 'UPDATE', 'MERGE', 'REPLACE',
         'GRANT', 'REVOKE', 'EXEC', 'EXECUTE'
     ]
     

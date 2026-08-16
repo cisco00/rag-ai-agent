@@ -38,9 +38,12 @@ interface SidebarProps {
     role: string;
     email: string;
     permissions?: string[];
+    is_superuser?: boolean;
   };
   onLogout?: () => void;
   onClose?: () => void;
+  updateAvailable?: boolean;
+  currentVersion?: string;
 }
 
 export function Sidebar({
@@ -51,7 +54,9 @@ export function Sidebar({
   unseenInsights = 0,
   user,
   onLogout,
-  onClose
+  onClose,
+  updateAvailable = false,
+  currentVersion,
 }: SidebarProps) {
   const primaryColor = branding.primary_color || '#2563eb';
 
@@ -90,7 +95,7 @@ export function Sidebar({
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },
     { id: 'branding', label: 'Branding', icon: Settings, hide: !hasPerm('MANAGE_ORG') },
     { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') },
-    { id: 'admin', label: 'Admin Console', icon: Shield, hide: !user?.is_superuser },
+    { id: 'admin', label: 'Admin Console', icon: Shield, hide: !user?.is_superuser, badge: updateAvailable ? '!' : undefined },
   ].filter(item => !item.hide);
 
   return (
@@ -207,6 +212,11 @@ export function Sidebar({
                 )}
                 <item.icon size={20} className={currentView === item.id ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
                 <span className="text-[13px]">{item.label}</span>
+                {item.badge && (
+                  <span className="ml-auto size-5 bg-amber-500 text-[10px] text-white font-black rounded-full flex items-center justify-center shadow-lg animate-pulse">
+                    {item.badge}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -247,6 +257,16 @@ export function Sidebar({
             <Settings size={18} />
             Workspace Settings
           </button>
+        )}
+
+        {/* Version label */}
+        {currentVersion && (
+          <div className="flex items-center justify-center gap-2 pt-2">
+            <span className="text-[11px] text-slate-600 font-mono">v{currentVersion}</span>
+            {updateAvailable && (
+              <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider animate-pulse">Update</span>
+            )}
+          </div>
         )}
       </div>
     </aside>

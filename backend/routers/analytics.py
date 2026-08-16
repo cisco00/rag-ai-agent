@@ -6,6 +6,18 @@ import json
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.concurrency import run_in_threadpool
+import re
+
+_SAFE_IDENT_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+def _safe_identifier(name: str) -> str:
+    """Validate and quote a SQL identifier to prevent injection."""
+    if not _SAFE_IDENT_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid identifier: '{name}'. Only letters, numbers, and underscores are allowed."
+        )
+    return f'"{name}"'
 
 from database import DatabaseManager
 from dependencies import (
@@ -35,7 +47,10 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org),
         import pandas as pd
         db_manager = DatabaseManager(connection_string=db_conn)
         
-        query = f"SELECT {request.date_column}, {request.value_column} FROM {request.table_name} LIMIT 10000"
+        tbl = _safe_identifier(request.table_name)
+        date_col = _safe_identifier(request.date_column)
+        val_col = _safe_identifier(request.value_column)
+        query = f"SELECT {date_col}, {val_col} FROM {tbl} LIMIT 10000"
         # Offload blocking SQL read
         df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
@@ -73,7 +88,9 @@ async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org),
         import pandas as pd
         db_manager = DatabaseManager(connection_string=db_conn)
         
-        query = f"SELECT {request.value_column} FROM {request.table_name} LIMIT 10000"
+        tbl = _safe_identifier(request.table_name)
+        val_col = _safe_identifier(request.value_column)
+        query = f"SELECT {val_col} FROM {tbl} LIMIT 10000"
         # Offload blocking SQL read
         df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
@@ -113,8 +130,12 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
             raise HTTPException(status_code=404, detail=f"Table '{request.table_name}' not found")
             
         import pandas as pd
-        col_list = ", ".join(request.columns) if request.columns else "*"
-        query = f"SELECT {col_list} FROM {request.table_name} LIMIT 10000"
+        if request.columns:
+            col_list = ", ".join(_safe_identifier(c) for c in request.columns)
+        else:
+            col_list = "*"
+        tbl = _safe_identifier(request.table_name)
+        query = f"SELECT {col_list} FROM {tbl} LIMIT 10000"
         # Offload blocking SQL read
         df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()

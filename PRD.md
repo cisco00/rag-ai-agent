@@ -3,8 +3,8 @@
 ## Executive Summary
 
 **Product Name:** Vantage AI: Commercial Analytics Portal  
-**Version:** 2.5  
-**Last Updated:** April 2026  
+**Version:** 2.6  
+**Last Updated:** August 2026  
 **Document Owner:** Product Team
 
 ### Vision
@@ -701,6 +701,59 @@ DEPLOYMENT.md                           — unified deployment guide (both optio
 
 ---
 
+### 24. In-App Update Notifications (On-Premise)
+
+**Priority:** P1 (High)  
+**Status:** ✅ Implemented
+
+#### Requirements
+- Automatically detect when a newer version of Vantage AI is available for on-premise deployments
+- Notify superuser administrators via a non-intrusive in-app banner
+- Provide version details, changelog link, and upgrade command in the admin panel
+- Allow administrators to dismiss notifications per version
+- Run checks on a configurable schedule without impacting application performance
+
+#### Features
+- **Background Version Checker:** APScheduler job runs every N hours (default 6), fetching the latest `VERSION` file from the configured URL (default: GitHub raw). Compares remote semver against local `VERSION` using tuple-based comparison.
+- **Update Banner:** Animated amber-gradient banner shown only to superusers. Displays latest vs. current version, a link to the changelog, a one-click copy button for the upgrade command (`bash update.sh`), and a dismiss button.
+- **Admin Panel System Tab:** Dedicated "System" tab showing current version, latest available version with status pill ("Update Available" / "Up to date"), last-checked timestamp, "Check Now" button for on-demand checks, upgrade command block, and full changelog link.
+- **Sidebar Indicator:** Pulsing `UPDATE` pill in the sidebar footer and a `!` badge on the Admin Console menu item when an update is available.
+- **Version Dismissal:** Server-side and client-side (`sessionStorage`) dismissal prevents repeated notifications for a version the admin has already acknowledged.
+- **Configurable:** All behaviour controlled via environment variables — can be fully disabled for air-gapped environments.
+
+#### User Stories
+- As an **on-premise admin**, I want to be notified when a new version of Vantage AI is available so I can plan an upgrade window
+- As a **security officer**, I want to ensure we are running the latest version with security patches
+- As an **IT administrator**, I want to disable update checks in air-gapped environments where outbound internet is not available
+
+#### Environment Variables
+| Variable | Default | Description |
+|---|---|---|
+| `UPDATE_CHECK_ENABLED` | `true` | Enable/disable automatic version checking |
+| `UPDATE_CHECK_URL` | GitHub raw `VERSION` URL | URL returning the latest version string (plain text) |
+| `UPDATE_CHECK_INTERVAL_HOURS` | `6` | Hours between automatic checks |
+| `CHANGELOG_URL` | GitHub `CHANGELOG.md` URL | URL shown in admin UI to view release notes |
+| `GITHUB_TOKEN` | *(empty)* | Optional token for private repository access |
+
+#### API Endpoints
+```
+GET  /admin/updates/status   → cached update status (version, available, timestamp)
+POST /admin/updates/check    → trigger immediate version check
+POST /admin/updates/dismiss  → dismiss notification for a specific version
+```
+
+#### Key Files
+```
+backend/update_checker.py              — version check logic & in-memory cache
+backend/routers/admin.py               — /admin/updates/* endpoints (superuser-only)
+backend/api.py                         — lifespan integration (APScheduler job)
+frontend/src/app/components/UpdateBanner.tsx  — dismissible notification banner
+frontend/src/app/components/AdminPanel.tsx    — System tab with version details
+frontend/src/app/components/Sidebar.tsx       — version label + update dot
+```
+
+---
+
 ### 16. Observability & Monitoring (Langfuse)
 
 **Priority:** P1 (High)  
@@ -769,6 +822,14 @@ DEPLOYMENT.md                           — unified deployment guide (both optio
   │ Observability│    │ (HubSpot/SF) │    │   Scheduler  │
   │ (Langfuse)   │    │     APIs     │    │ (scheduler.py)│
   └──────────────┘    └──────────────┘    └──────────────┘
+          │
+          ▼
+  ┌──────────────┐
+  │ Update       │
+  │ Checker      │
+  │(update_      │
+  │ checker.py)  │
+  └──────────────┘
 ```
 
 ---
@@ -813,6 +874,7 @@ DEPLOYMENT.md                           — unified deployment guide (both optio
 - 🔲 Slack / Microsoft Teams integration (AI Query via Chat)
 - 🔲 Multi-language support (LLM localization)
 - ✅ **On-Premise & Cloud Deployment** (Docker Compose + AWS Terraform)
+- ✅ **In-App Update Notifications** (On-Premise version checker with admin banner)
 - 🔲 Organization-wide usage analytics and cost reporting
 
 ---
@@ -851,6 +913,6 @@ DEPLOYMENT.md                           — unified deployment guide (both optio
 - [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md) - Code quality guidelines
 - [DEPLOYMENT.md](DEPLOYMENT.md) - On-premise & AWS deployment guide
 
-**Document Version:** 2.6  
-**Last Updated:** July 2026  
-**Next Review:** September 2026
+**Document Version:** 2.7  
+**Last Updated:** August 2026  
+**Next Review:** October 2026

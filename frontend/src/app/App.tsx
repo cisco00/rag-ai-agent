@@ -23,6 +23,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { AboutPage } from './components/AboutPage';
 import { Integrations } from './components/Integrations';
 import { UsageAnalytics } from './components/UsageAnalytics';
+import { UpdateBanner } from './components/UpdateBanner';
 import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
 
 const langfuse = new LangfuseWeb({
@@ -91,6 +92,9 @@ export default function App() {
     } catch { /* ignore */ }
     return DEFAULT_BRANDING;
   });
+
+  // Update status for sidebar version label
+  const [updateStatus, setUpdateStatus] = useState<{ update_available: boolean; current_version: string } | null>(null);
 
   // Check for invite_token on load and route to AuthPage if necessary
   useEffect(() => {
@@ -180,6 +184,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
+  // Fetch update status for sidebar version label (superuser only)
+  useEffect(() => {
+    if (!isAuthenticated || !user?.is_superuser) return;
+    const fetchUpdate = () =>
+      api.get<{ update_available: boolean; current_version: string }>('/admin/updates/status')
+        .then(setUpdateStatus)
+        .catch(() => { });
+    fetchUpdate();
+    const interval = setInterval(fetchUpdate, 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, user?.is_superuser]);
+
   const handleLoginSuccess = (key: string, access: string, refresh: string, userData: any) => {
     setApiKey(key);
     setAccessToken(access);
@@ -250,6 +266,8 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           onClose={() => setIsSidebarOpen(false)}
+          updateAvailable={updateStatus?.update_available}
+          currentVersion={updateStatus?.current_version}
         />
       </div>
 
@@ -286,6 +304,9 @@ export default function App() {
             </div>
           </div>
         </header>
+
+        {/* Update notification banner (superuser only) */}
+        <UpdateBanner user={user} />
 
         <main className="flex-1 overflow-auto">
           {currentView === 'dashboard' && (

@@ -61,6 +61,12 @@ services:
       - ADMIN_DB_URL=sqlite:////data/admin.db
       - ADMIN_DB_PATH=/data/admin.db
       - CORS_ORIGINS=http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1
+      # Update Checker (in-app notifications)
+      - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-true}
+      - UPDATE_CHECK_URL=${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/VERSION}
+      - UPDATE_CHECK_INTERVAL_HOURS=${UPDATE_CHECK_INTERVAL_HOURS:-6}
+      - CHANGELOG_URL=${CHANGELOG_URL:-https://github.com/cisco00/rag-ai-agent/blob/main/CHANGELOG.md}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     env_file:
       - ./backend/.env
     deploy:
