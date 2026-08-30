@@ -43,11 +43,11 @@ def main():
     ext = ".exe" if platform.system() == "Windows" else ""
     output_name = f"vantage-backend-{target_triple}{ext}"
 
-    print(f"┌─────────────────────────────────────────────────")
-    print(f"│ Building Vantage AI backend")
-    print(f"│ Target:  {target_triple}")
-    print(f"│ Output:  {os.path.join(output_dir, output_name)}")
-    print(f"└─────────────────────────────────────────────────")
+    print("=" * 50)
+    print(f"  Building Vantage AI backend")
+    print(f"  Target:  {target_triple}")
+    print(f"  Output:  {os.path.join(output_dir, output_name)}")
+    print("=" * 50)
 
     # Hidden imports PyInstaller can't detect automatically
     hidden_imports = [
@@ -114,15 +114,15 @@ def main():
     result = subprocess.run(cmd, cwd=backend_dir)
 
     if result.returncode != 0:
-        print("\n✗ PyInstaller build FAILED")
+        print("\nERROR: PyInstaller build FAILED")
         sys.exit(1)
 
     output_path = os.path.join(output_dir, output_name)
     if os.path.exists(output_path):
         size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        print(f"\n✓ Built {output_name} ({size_mb:.1f} MB)")
+        print(f"\nSUCCESS: Built {output_name} ({size_mb:.1f} MB)")
     else:
-        print(f"\n✗ Expected output not found: {output_path}")
+        print(f"\nERROR: Expected output not found: {output_path}")
         sys.exit(1)
 
 
