@@ -25,7 +25,7 @@ from database import DatabaseManager
 from dependencies import get_current_org, get_org_connection_string, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission, invalidate_schema_cache
 from utils import clean_llm_json_content
 from email_service import send_email_mock
-from validators import sanitize_table_name
+from validators import sanitize_table_name, URLValidator
 from export_manager import ExportManager
 from scheduler import schedule_job_for_report
 import pandas as pd
@@ -151,7 +151,7 @@ async def create_postgres_database(request: CreateDatabaseRequest, org=Depends(g
              ))
         
         # 3. Check if DB exists
-        cur.execute(f"SELECT 1 FROM pg_database WHERE datname = '{request.new_db_name}'")
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (request.new_db_name,))
         if cur.fetchone():
              pass 
         else:
@@ -641,6 +641,9 @@ async def get_tables(org=Depends(get_current_org)):
 @router.get("/tables/{table_name}/profile")
 async def get_table_profile(table_name: str, force: bool = False, org=Depends(get_current_org)):
     """Fetch column-level statistics for a table."""
+    from validators import TableNameValidator
+    TableNameValidator.validate(table_name)
+    
     conn_str = get_org_connection_string(org)
     if not conn_str:
         raise HTTPException(status_code=400, detail="No database configured.")
@@ -745,6 +748,9 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
     """Import data from an external API."""
     import httpx
     try:
+        # SSRF protection: validate URL before fetching
+        URLValidator.validate_url(request.url)
+
         # Fetch data
         async with httpx.AsyncClient() as client:
             response = await client.request(
@@ -827,6 +833,9 @@ async def preview_api_import(request: ApiPreviewRequest, org=Depends(get_current
     """Fetch data from an external API and return a preview without saving to the database."""
     import httpx
     try:
+        # SSRF protection: validate URL before fetching
+        URLValidator.validate_url(request.url)
+
         async with httpx.AsyncClient() as client:
             response = await client.request(
                 method=request.method,
@@ -1044,6 +1053,9 @@ async def clean_and_import_api(request: ApiCleanImportRequest, org=Depends(get_c
     """Fetch data from an API, apply cleaning rules, then save to the database."""
     import httpx
     try:
+        # SSRF protection: validate URL before fetching
+        URLValidator.validate_url(request.url)
+
         # Fetch data
         async with httpx.AsyncClient() as client:
             response = await client.request(

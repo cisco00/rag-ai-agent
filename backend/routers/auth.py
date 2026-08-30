@@ -29,7 +29,8 @@ from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, req
 from email_service import send_welcome_email
 from schemas import (
     RegisterRequest, ConfigRequest, LoginRequest, RegisterUserRequest,
-    AcceptInviteRequest, InviteRequest, ForgotPasswordRequest, ResetPasswordRequest
+    AcceptInviteRequest, InviteRequest, ForgotPasswordRequest, ResetPasswordRequest,
+    RefreshRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -189,10 +190,10 @@ async def logout_route(response: Response):
 
 
 @router.post("/refresh")
-async def refresh_route(refresh_token: str):
+async def refresh_route(payload: RefreshRequest):
     """Exchange a refresh token for a new access token."""
     try:
-        return auth_module.refresh_access_token(refresh_token)
+        return auth_module.refresh_access_token(payload.refresh_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 

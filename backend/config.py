@@ -99,6 +99,15 @@ class SecurityConfig:
     def validate(self) -> None:
         """Validate security configuration."""
         if not self.encryption_key:
+            environment = os.getenv("ENVIRONMENT", "development").lower()
+            if environment == "production":
+                raise InvalidConfigurationError(
+                    "encryption_key",
+                    "ENCRYPTION_KEY must be set in production. "
+                    "Without a persistent key, encrypted data (connection strings, "
+                    "client secrets) will be lost on restart. "
+                    "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                )
             # Generate a random 32-byte url-safe base64-encoded string, standard for Fernet
             self.encryption_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
             print("WARNING: ENCRYPTION_KEY not found in environment variables. "

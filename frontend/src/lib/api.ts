@@ -1,5 +1,13 @@
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// In Tauri desktop mode, the backend URL is injected by the Rust shell
+// via window.__VANTAGE_API_URL__ before the app loads.
+declare global {
+  interface Window {
+    __VANTAGE_API_URL__?: string;
+  }
+}
+
+const BASE_URL = window.__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const getApiKey = () => localStorage.getItem('vantage_api_key');
 export const getAccessToken = () => localStorage.getItem('vantage_access_token');
@@ -22,8 +30,12 @@ async function tryRefreshToken(): Promise<string | null> {
 
   try {
     const res = await fetch(
-      `${BASE_URL}/auth/refresh?refresh_token=${encodeURIComponent(refreshToken)}`,
-      { method: 'POST' }
+      `${BASE_URL}/auth/refresh`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      }
     );
 
     if (!res.ok) {

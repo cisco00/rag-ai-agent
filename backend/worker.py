@@ -269,58 +269,107 @@ class ConnectionStringValidator:
 class SQLQueryValidator:
     """
     Validates and sanitizes SQL queries.
+
+    Uses a dual-layer strategy:
+      1. **Allowlist (primary):** Read-only queries must begin with SELECT or WITH.
+      2. **Dangerous-function blocklist (secondary):** Even within a SELECT,
+         known exfiltration / file-access functions are blocked.
+
+    The legacy DANGEROUS_KEYWORDS list is still enforced when
+    ``allow_modifications=True`` to catch accidental DDL.
     """
-    
-    # Dangerous SQL keywords that should be restricted
+
+    # ── Legacy keyword blocklist (used when allow_modifications=True) ────────
     DANGEROUS_KEYWORDS = [
         'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
-        'GRANT', 'REVOKE', 'EXEC', 'EXECUTE'
+        'INSERT', 'UPDATE', 'MERGE', 'REPLACE',
+        'GRANT', 'REVOKE', 'EXEC', 'EXECUTE',
     ]
-    
+
+    # ── Allowed statement prefixes for read-only mode ────────────────────────
+    _ALLOWED_PREFIXES = ('SELECT', 'WITH')
+
+    # ── Dangerous functions / clauses blocked even inside SELECT ─────────────
+    _DANGEROUS_PATTERNS: List[re.Pattern] = [
+        re.compile(r'\b(PG_READ_FILE|PG_READ_BINARY_FILE|PG_WRITE_FILE)\b', re.I),
+        re.compile(r'\b(LO_IMPORT|LO_EXPORT)\b', re.I),
+        re.compile(r'\bDBLINK\s*\(', re.I),
+        re.compile(r'\bCOPY\b', re.I),
+        re.compile(r'\bLOAD_FILE\s*\(', re.I),
+        re.compile(r'\bINTO\s+(OUT|DUMP)FILE\b', re.I),
+        re.compile(r'\bLOAD\s+DATA\b', re.I),
+        re.compile(r'\bUTL_(HTTP|TCP|SMTP)\b', re.I),
+        re.compile(r'\bCALL\s+', re.I),
+        re.compile(r'\bXP_CMDSHELL\b', re.I),
+        re.compile(r';\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE|COPY|CALL)\b', re.I),
+    ]
+
+    _COMMENT_RE = re.compile(
+        r'--[^\r\n]*'
+        r'|/\*.*?\*/',
+        re.DOTALL,
+    )
+
     @staticmethod
     def validate_length(query: str, max_length: Optional[int] = None) -> None:
         """
         Validate query length.
-        
+
         Args:
             query: SQL query string
             max_length: Maximum allowed length
-        
+
         Raises:
             QueryExecutionError: If query exceeds maximum length
         """
         if max_length is None:
             max_length = get_db_config().max_query_length
-        
+
         if len(query) > max_length:
             raise QueryExecutionError(
                 f"Query length ({len(query)}) exceeds maximum ({max_length})",
                 query=query[:100]
             )
-    
+
     @staticmethod
     def validate_safe(query: str, allow_modifications: bool = False) -> None:
         """
         Validate query doesn't contain dangerous operations.
-        
+
         Args:
             query: SQL query string
             allow_modifications: Whether to allow modification queries
-        
+
         Raises:
             QueryExecutionError: If query contains dangerous operations
         """
+        stripped = SQLQueryValidator._COMMENT_RE.sub(' ', query).strip()
+
         if not allow_modifications:
-            query_upper = query.upper()
+            first_word = stripped.split()[0].upper() if stripped else ''
+            if first_word not in SQLQueryValidator._ALLOWED_PREFIXES:
+                raise QueryExecutionError(
+                    f"Only SELECT and WITH queries are allowed (got: {first_word})",
+                    query=query[:100]
+                )
+
+            for pattern in SQLQueryValidator._DANGEROUS_PATTERNS:
+                match = pattern.search(stripped)
+                if match:
+                    raise QueryExecutionError(
+                        f"Query contains blocked function/clause: {match.group()}",
+                        query=query[:100]
+                    )
+        else:
+            query_upper = stripped.upper()
             for keyword in SQLQueryValidator.DANGEROUS_KEYWORDS:
-                # Use word boundaries to avoid false positives
                 pattern = r'\b' + keyword + r'\b'
                 if re.search(pattern, query_upper):
                     raise QueryExecutionError(
                         f"Query contains restricted keyword: {keyword}",
                         query=query[:100]
                     )
-    
+
     @staticmethod
     def validate_all(
         query: str,
@@ -329,17 +378,18 @@ class SQLQueryValidator:
     ) -> None:
         """
         Run all query validations.
-        
+
         Args:
             query: SQL query string
             max_length: Maximum allowed length
             allow_modifications: Whether to allow modification queries
-        
+
         Raises:
             QueryExecutionError: If any validation fails
         """
         SQLQueryValidator.validate_length(query, max_length)
         SQLQueryValidator.validate_safe(query, allow_modifications)
+
 
 
 class TableNameValidator:

@@ -22,6 +22,7 @@ from sqlalchemy import text
 from models import engine as admin_engine
 from email_service import send_email_mock
 from logging_config import get_logger
+from validators import URLValidator
 
 logger = get_logger(__name__)
 
@@ -381,6 +382,9 @@ async def _deliver_alert(rule: dict, current_value: Optional[float], message: st
 
     if rule.get("notify_webhook"):
         try:
+            # SSRF protection: validate webhook URL before delivery
+            URLValidator.validate_url(rule["notify_webhook"])
+
             payload = {
                 "alert_name":    rule["name"],
                 "org_id":        rule["org_id"],

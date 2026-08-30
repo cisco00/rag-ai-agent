@@ -263,6 +263,53 @@ async def log_requests(request: Request, call_next):
     )
     return response
 
+# ── Health check (used by Tauri desktop sidecar to detect startup) ────────
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for desktop app sidecar management."""
+    return {"status": "ok", "version": os.getenv("APP_VERSION", "2.6.0")}
+
+
+# ── Desktop configuration endpoint ───────────────────────────────────────
+@app.post("/api/desktop/configure")
+async def desktop_configure(request: Request):
+    """Save LLM configuration from the desktop setup wizard."""
+    body = await request.json()
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+
+    lines_to_write = []
+    # Read existing .env and update/add keys
+    existing = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r") as f:
+            for line in f:
+                if "=" in line and not line.strip().startswith("#"):
+                    key = line.split("=", 1)[0].strip()
+                    existing[key] = line
+                lines_to_write.append(line)
+
+    updates = {}
+    if body.get("llm_provider"):
+        updates["LLM_PROVIDER"] = body["llm_provider"]
+    if body.get("llm_api_key"):
+        updates["LLM_API_KEY"] = body["llm_api_key"]
+    if body.get("azure_endpoint"):
+        updates["AZURE_OPENAI_ENDPOINT"] = body["azure_endpoint"]
+
+    # Update existing lines or append new ones
+    for key, value in updates.items():
+        new_line = f"{key}={value}\n"
+        if key in existing:
+            lines_to_write = [new_line if l.startswith(f"{key}=") else l for l in lines_to_write]
+        else:
+            lines_to_write.append(new_line)
+
+    with open(env_path, "w") as f:
+        f.writelines(lines_to_write)
+
+    return {"status": "ok", "message": "Configuration saved. Restart the app to apply changes."}
+
+
 if os.getenv("ENVIRONMENT", "development").lower() != "production":
     @app.get("/debug/routes")
     async def get_all_routes():
@@ -333,7 +380,7 @@ _PERMISSIVE_ORIGINS = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins + _PERMISSIVE_ORIGINS,
+    allow_origins=cors_origins + (_PERMISSIVE_ORIGINS if _ENVIRONMENT != "production" else []),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -401,10 +448,25 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
         await websocket.close(code=4000)
         return
 
+    # ── Fix #2: Validate table_name to prevent SQL injection ──────────────
+    from validators import TableNameValidator
+    try:
+        TableNameValidator.validate(table_name)
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid table name")
+        return
+
     await websocket.accept()
     try:
         db = DatabaseManager(connection_string=conn_str)
         try:
+            # Verify table actually exists in the org's database
+            available_tables = db.get_tables()
+            if table_name not in available_tables:
+                await websocket.send_text(json.dumps({"error": f"Table '{table_name}' not found"}))
+                await websocket.close(code=4001, reason="Table not found")
+                return
+
             dialect      = db.engine.dialect.name
             id_col       = "ctid" if dialect == "postgresql" else "rowid"
             last_sent_id = None
@@ -462,4 +524,6 @@ async def serve_spa(request: Request, full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)

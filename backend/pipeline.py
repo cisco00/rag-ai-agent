@@ -33,7 +33,7 @@ from sqlalchemy import text
 
 from database import DatabaseManager
 from models import DataSource, get_db, touch_table_freshness
-from validators import sanitize_table_name
+from validators import sanitize_table_name, URLValidator
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +331,8 @@ async def import_from_api_url(
 
     if if_exists not in ("replace", "append"):
         raise ValueError("if_exists must be 'replace' or 'append'")
+
+    URLValidator.validate_url(url)
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         response = await client.request(

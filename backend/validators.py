@@ -7,10 +7,16 @@ and other inputs to ensure data integrity and security.
 
 import os
 import re
+import socket
+import ipaddress
+import logging
 from pathlib import Path
 from typing import Optional, List, Callable
+from urllib.parse import urlparse
 import pandas as pd
 from functools import wraps
+
+logger = logging.getLogger(__name__)
 
 from exceptions import (
     FileNotFoundError,
@@ -269,59 +275,122 @@ class ConnectionStringValidator:
 class SQLQueryValidator:
     """
     Validates and sanitizes SQL queries.
+
+    Uses a dual-layer strategy:
+      1. **Allowlist (primary):** Read-only queries must begin with SELECT or WITH.
+      2. **Dangerous-function blocklist (secondary):** Even within a SELECT,
+         known exfiltration / file-access functions are blocked.
+
+    The legacy DANGEROUS_KEYWORDS list is still enforced when
+    ``allow_modifications=True`` to catch accidental DDL.
     """
-    
-    # Dangerous SQL keywords that should be restricted
+
+    # ── Legacy keyword blocklist (used when allow_modifications=True) ────────
     DANGEROUS_KEYWORDS = [
         'DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE',
         'INSERT', 'UPDATE', 'MERGE', 'REPLACE',
-        'GRANT', 'REVOKE', 'EXEC', 'EXECUTE'
+        'GRANT', 'REVOKE', 'EXEC', 'EXECUTE',
     ]
-    
+
+    # ── Allowed statement prefixes for read-only mode ────────────────────────
+    _ALLOWED_PREFIXES = ('SELECT', 'WITH')
+
+    # ── Dangerous functions / clauses blocked even inside SELECT ─────────────
+    _DANGEROUS_PATTERNS: List[re.Pattern] = [
+        # PostgreSQL file / network access
+        re.compile(r'\b(PG_READ_FILE|PG_READ_BINARY_FILE|PG_WRITE_FILE)\b', re.I),
+        re.compile(r'\b(LO_IMPORT|LO_EXPORT)\b', re.I),
+        re.compile(r'\bDBLINK\s*\(', re.I),
+        re.compile(r'\bCOPY\b', re.I),
+        # MySQL file access
+        re.compile(r'\bLOAD_FILE\s*\(', re.I),
+        re.compile(r'\bINTO\s+(OUT|DUMP)FILE\b', re.I),
+        re.compile(r'\bLOAD\s+DATA\b', re.I),
+        # Oracle network
+        re.compile(r'\bUTL_(HTTP|TCP|SMTP)\b', re.I),
+        # Stored-procedure execution
+        re.compile(r'\bCALL\s+', re.I),
+        re.compile(r'\bXP_CMDSHELL\b', re.I),
+        # Statement stacking (semicolons followed by new statements)
+        re.compile(r';\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE|COPY|CALL)\b', re.I),
+    ]
+
+    # ── Regex to strip SQL comments (line + block) for reliable parsing ──────
+    _COMMENT_RE = re.compile(
+        r'--[^\r\n]*'           # line comments
+        r'|/\*.*?\*/',          # block comments
+        re.DOTALL,
+    )
+
     @staticmethod
     def validate_length(query: str, max_length: Optional[int] = None) -> None:
         """
         Validate query length.
-        
+
         Args:
             query: SQL query string
             max_length: Maximum allowed length
-        
+
         Raises:
             QueryExecutionError: If query exceeds maximum length
         """
         if max_length is None:
             max_length = get_db_config().max_query_length
-        
+
         if len(query) > max_length:
             raise QueryExecutionError(
                 f"Query length ({len(query)}) exceeds maximum ({max_length})",
                 query=query[:100]
             )
-    
+
     @staticmethod
     def validate_safe(query: str, allow_modifications: bool = False) -> None:
         """
         Validate query doesn't contain dangerous operations.
-        
+
+        When *allow_modifications* is False (the default for all LLM-driven
+        queries), the validator enforces:
+          1. The query must start with SELECT or WITH.
+          2. No dangerous exfiltration functions/clauses may appear anywhere.
+
         Args:
             query: SQL query string
             allow_modifications: Whether to allow modification queries
-        
+
         Raises:
             QueryExecutionError: If query contains dangerous operations
         """
+        # Strip comments so attackers can't hide keywords inside them
+        stripped = SQLQueryValidator._COMMENT_RE.sub(' ', query).strip()
+
         if not allow_modifications:
-            query_upper = query.upper()
+            # ── Layer 1: statement-prefix allowlist ───────────────────────
+            first_word = stripped.split()[0].upper() if stripped else ''
+            if first_word not in SQLQueryValidator._ALLOWED_PREFIXES:
+                raise QueryExecutionError(
+                    f"Only SELECT and WITH queries are allowed (got: {first_word})",
+                    query=query[:100]
+                )
+
+            # ── Layer 2: dangerous function / clause blocklist ───────────
+            for pattern in SQLQueryValidator._DANGEROUS_PATTERNS:
+                match = pattern.search(stripped)
+                if match:
+                    raise QueryExecutionError(
+                        f"Query contains blocked function/clause: {match.group()}",
+                        query=query[:100]
+                    )
+        else:
+            # Even with modifications allowed, block DDL keywords
+            query_upper = stripped.upper()
             for keyword in SQLQueryValidator.DANGEROUS_KEYWORDS:
-                # Use word boundaries to avoid false positives
                 pattern = r'\b' + keyword + r'\b'
                 if re.search(pattern, query_upper):
                     raise QueryExecutionError(
                         f"Query contains restricted keyword: {keyword}",
                         query=query[:100]
                     )
-    
+
     @staticmethod
     def validate_all(
         query: str,
@@ -330,12 +399,12 @@ class SQLQueryValidator:
     ) -> None:
         """
         Run all query validations.
-        
+
         Args:
             query: SQL query string
             max_length: Maximum allowed length
             allow_modifications: Whether to allow modification queries
-        
+
         Raises:
             QueryExecutionError: If any validation fails
         """
@@ -377,6 +446,90 @@ class TableNameValidator:
                 f"Table name too long: {len(table_name)} characters. "
                 "Maximum is 64 characters."
             )
+
+
+class URLValidator:
+    """
+    Validates URLs to prevent Server-Side Request Forgery (SSRF).
+
+    Resolves hostnames to IPs and blocks requests to private, reserved,
+    loopback, link-local, and cloud-metadata address ranges.
+    """
+
+    _ALLOWED_SCHEMES = {'http', 'https'}
+
+    _BLOCKED_HOSTNAMES = {
+        'localhost',
+        'metadata.google.internal',         # GCP metadata
+        'metadata.internal',
+    }
+
+    @staticmethod
+    def _is_private_ip(ip_str: str) -> bool:
+        """Return True if the IP is private, reserved, loopback, or link-local."""
+        try:
+            addr = ipaddress.ip_address(ip_str)
+            return (
+                addr.is_private
+                or addr.is_reserved
+                or addr.is_loopback
+                or addr.is_link_local
+                or addr.is_multicast
+                # AWS / cloud metadata endpoint (169.254.169.254)
+                or ip_str == '169.254.169.254'
+            )
+        except ValueError:
+            return True  # If we can't parse it, block it
+
+    @staticmethod
+    def validate_url(url: str) -> None:
+        """
+        Validate a URL is safe to fetch (no SSRF).
+
+        Args:
+            url: The URL to validate
+
+        Raises:
+            InvalidRequestError: If the URL targets a private/blocked address
+        """
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            raise InvalidRequestError(f"Invalid URL: {url[:200]}")
+
+        # Scheme check
+        if parsed.scheme.lower() not in URLValidator._ALLOWED_SCHEMES:
+            raise InvalidRequestError(
+                f"URL scheme '{parsed.scheme}' is not allowed. "
+                f"Only {URLValidator._ALLOWED_SCHEMES} are permitted."
+            )
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise InvalidRequestError("URL must include a hostname.")
+
+        # Blocked hostname check
+        if hostname.lower() in URLValidator._BLOCKED_HOSTNAMES:
+            raise InvalidRequestError(
+                f"Requests to '{hostname}' are blocked for security reasons."
+            )
+
+        # Resolve hostname → IPs and check each
+        try:
+            resolved = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+        except socket.gaierror:
+            raise InvalidRequestError(f"Could not resolve hostname: {hostname}")
+
+        for family, _type, _proto, _canonname, sockaddr in resolved:
+            ip_str = sockaddr[0]
+            if URLValidator._is_private_ip(ip_str):
+                logger.warning(
+                    f"[SSRF] Blocked request to {url} — resolved to private IP {ip_str}"
+                )
+                raise InvalidRequestError(
+                    f"URL resolves to a private/reserved IP address ({ip_str}). "
+                    "Requests to internal networks are blocked."
+                )
 
 
 # Decorator for validating function arguments

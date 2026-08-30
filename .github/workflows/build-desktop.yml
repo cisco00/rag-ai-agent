@@ -1,0 +1,135 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 1: Build the Python backend into a standalone binary (per platform)
+  # ─────────────────────────────────────────────────────────────────────────
+  build-backend:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: .exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ''
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            ext: ''
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install backend dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build backend binary
+        run: python desktop/build-backend.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.target }}
+          path: desktop/src-tauri/binaries/vantage-backend-${{ matrix.target }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 2: Build the Tauri desktop app (per platform)
+  # ─────────────────────────────────────────────────────────────────────────
+  build-tauri:
+    needs: build-backend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend-target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: universal-apple-darwin
+            backend-target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            backend-target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Download backend binary
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ matrix.backend-target }}
+          path: desktop/src-tauri/binaries/
+
+      - name: Make backend binary executable
+        if: matrix.os != 'windows-latest'
+        run: chmod +x desktop/src-tauri/binaries/vantage-backend-*
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Vantage AI ${{ github.ref_name }}'
+          releaseBody: |
+            ## Vantage AI ${{ github.ref_name }} (Beta)
+
+            ⚠️ **This is a beta release for testing purposes.**
+
+            Download the installer for your platform:
+            - **Windows**: `.msi` installer
+            - **macOS**: `.dmg` disk image
+            - **Linux**: `.deb` package or `.AppImage`
+
+            ### What's new
+            See the [CHANGELOG](https://github.com/cisco00/rag-ai-agent/blob/main/CHANGELOG.md).
+          releaseDraft: true
+          prerelease: true

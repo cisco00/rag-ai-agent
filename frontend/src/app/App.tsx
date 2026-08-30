@@ -115,8 +115,10 @@ export default function App() {
     if (!refreshToken) return;
 
     console.log('[App] Access token expired on startup — proactively refreshing...');
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/auth/refresh?refresh_token=${encodeURIComponent(refreshToken)}`, {
+    fetch(`${window.__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000'}/auth/refresh`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
     })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => {
@@ -307,6 +309,13 @@ export default function App() {
 
         {/* Update notification banner (superuser only) */}
         <UpdateBanner user={user} />
+
+        {/* Beta version notice for unsigned desktop builds */}
+        {window.__VANTAGE_API_URL__ && (
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm text-amber-800 shrink-0">
+            <span className="font-medium">Beta Preview</span> — This is an unsigned beta version of Vantage AI Desktop for testing purposes.
+          </div>
+        )}
 
         <main className="flex-1 overflow-auto">
           {currentView === 'dashboard' && (

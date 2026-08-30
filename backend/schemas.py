@@ -54,6 +54,9 @@ class ResetPasswordRequest(BaseModel):
     token: str
     password: str
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
 # ── Analytics & Querying ──
 
 class QueryRequest(BaseModel):
