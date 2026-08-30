@@ -8,12 +8,12 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
+  # -----------------------------------------------------------------------
   # Step 1: Build the Python backend into a standalone binary (per platform)
-  # ─────────────────────────────────────────────────────────────────────────
+  # -----------------------------------------------------------------------
   build-backend:
     strategy:
       fail-fast: false
@@ -22,10 +22,10 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: .exe
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             ext: ''
-          - os: macos-latest
+          - os: macos-14
             target: aarch64-apple-darwin
             ext: ''
           - os: ubuntu-22.04
@@ -47,7 +47,7 @@ jobs:
           pip install pyinstaller
 
       - name: Build backend binary
-        run: python desktop/build-backend.py
+        run: python desktop/build-backend.py --target ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -55,9 +55,9 @@ jobs:
           path: desktop/src-tauri/binaries/vantage-backend-${{ matrix.target }}${{ matrix.ext }}
           if-no-files-found: error
 
-  # ─────────────────────────────────────────────────────────────────────────
+  # -----------------------------------------------------------------------
   # Step 2: Build the Tauri desktop app (per platform)
-  # ─────────────────────────────────────────────────────────────────────────
+  # -----------------------------------------------------------------------
   build-tauri:
     needs: build-backend
     strategy:
@@ -67,9 +67,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             backend-target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            target: universal-apple-darwin
-            backend-target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+            backend-target: aarch64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             backend-target: x86_64-unknown-linux-gnu
@@ -113,8 +113,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           projectPath: desktop
           tagName: ${{ github.ref_name }}
@@ -122,11 +120,11 @@ jobs:
           releaseBody: |
             ## Vantage AI ${{ github.ref_name }} (Beta)
 
-            ⚠️ **This is a beta release for testing purposes.**
+            This is a beta release for testing purposes.
 
             Download the installer for your platform:
             - **Windows**: `.msi` installer
-            - **macOS**: `.dmg` disk image
+            - **macOS (Apple Silicon)**: `.dmg` disk image
             - **Linux**: `.deb` package or `.AppImage`
 
             ### What's new

@@ -10,6 +10,7 @@ platform-specific name that Tauri expects (e.g. vantage-backend-x86_64-pc-window
 
 import os
 import sys
+import argparse
 import platform
 import subprocess
 
@@ -33,14 +34,22 @@ def get_tauri_target_triple():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Build Vantage AI backend binary")
+    parser.add_argument(
+        "--target",
+        help="Override the target triple (e.g. x86_64-apple-darwin). "
+             "Auto-detected from the current platform if not specified.",
+    )
+    args = parser.parse_args()
+
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     backend_dir = os.path.join(project_root, "backend")
     output_dir = os.path.join(project_root, "desktop", "src-tauri", "binaries")
 
     os.makedirs(output_dir, exist_ok=True)
 
-    target_triple = get_tauri_target_triple()
-    ext = ".exe" if platform.system() == "Windows" else ""
+    target_triple = args.target or get_tauri_target_triple()
+    ext = ".exe" if "windows" in target_triple else ""
     output_name = f"vantage-backend-{target_triple}{ext}"
 
     print("=" * 50)
