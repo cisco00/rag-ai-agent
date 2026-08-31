@@ -5,8 +5,8 @@
   "identifier": "com.vantageai.desktop",
   "build": {
     "frontendDist": "../../frontend/dist",
-    "beforeBuildCommand": "cd ../../frontend && npm run build",
-    "beforeDevCommand": "cd ../../frontend && npm run dev",
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "cd ../frontend && npm run dev",
     "devUrl": "http://localhost:5173"
   },
   "app": {
