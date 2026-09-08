@@ -107,7 +107,10 @@ jobs:
           python-version: '3.11'
 
       - name: Generate app icons
-        run: pip install Pillow && python desktop/generate-icons.py
+        run: |
+          pip install Pillow
+          python desktop/generate-icons.py
+          ls desktop/src-tauri/icons/
 
       - name: Download backend binary
         uses: actions/download-artifact@v4
