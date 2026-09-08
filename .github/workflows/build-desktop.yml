@@ -102,6 +102,13 @@ jobs:
       - name: Install desktop dependencies
         run: cd desktop && npm install
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate app icons
+        run: pip install Pillow && python desktop/generate-icons.py
+
       - name: Download backend binary
         uses: actions/download-artifact@v4
         with:
