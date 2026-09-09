@@ -4,10 +4,17 @@
 declare global {
   interface Window {
     __VANTAGE_API_URL__?: string;
+    __TAURI_INTERNALS__?: any;
   }
 }
 
-const BASE_URL = window.__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000';
+/** Check if running inside Tauri desktop wrapper */
+export const isDesktopMode = (): boolean =>
+  !!(window.__VANTAGE_API_URL__ || window.__TAURI_INTERNALS__);
+
+/** Always read the latest backend URL (may be injected after initial load) */
+const getBaseUrl = (): string =>
+  window.__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const getApiKey = () => localStorage.getItem('vantage_api_key');
 export const getAccessToken = () => localStorage.getItem('vantage_access_token');
@@ -30,7 +37,7 @@ async function tryRefreshToken(): Promise<string | null> {
 
   try {
     const res = await fetch(
-      `${BASE_URL}/auth/refresh`,
+      `${getBaseUrl()}/auth/refresh`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -58,10 +65,17 @@ async function tryRefreshToken(): Promise<string | null> {
   }
 }
 
+/** Sleep helper */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
-  const apiKey = getApiKey();
-  let token = getAccessToken();
+  const baseUrl = getBaseUrl();
+  const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
+
+  // In desktop mode, skip auth headers — no login required
+  const desktopMode = isDesktopMode();
+  const apiKey = desktopMode ? null : getApiKey();
+  let token = desktopMode ? null : getAccessToken();
 
   const buildHeaders = (tok: string | null) => {
     const h = new Headers(options.headers);
@@ -73,52 +87,75 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     return h;
   };
 
-  // First attempt
-  let response = await fetch(url, {
-    ...options,
-    headers: buildHeaders(token),
-  });
+  // In desktop mode, retry on network errors (backend may still be starting)
+  const maxRetries = desktopMode ? 15 : 1;
+  const retryDelay = 2000;
+  let lastError: Error | null = null;
 
-  // If 401 and not a login/refresh request, try to silently refresh
-  if (response.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/refresh')) {
-    console.warn(`[api] 401 on ${path} — attempting token refresh.`);
-
-    const newToken = await tryRefreshToken();
-    if (newToken) {
-      // Retry the original request with the new token
-      response = await fetch(url, {
-        ...options,
-        headers: buildHeaders(newToken),
-      });
-    } else {
-      // Refresh failed — clear session and force re-login
-      clearSession();
-      window.location.href = '/';
-      throw new Error('Your session has expired. Please log in again.');
-    }
-  }
-
-  if (!response.ok) {
-    let errorDetail = `Request failed (${response.status})`;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const data = await response.json();
-      if (Array.isArray(data.detail)) {
-        // FastAPI 422 validation errors: [{loc, msg, type}, ...]
-        errorDetail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
-      } else {
-        errorDetail = data.detail || data.message || errorDetail;
+      // Re-read base URL on retry (may have been injected since last attempt)
+      const retryUrl = attempt > 1
+        ? (path.startsWith('http') ? path : `${getBaseUrl()}${path}`)
+        : url;
+
+      let response = await fetch(retryUrl, {
+        ...options,
+        headers: buildHeaders(token),
+      });
+
+      // If 401 and not a login/refresh request, try to silently refresh
+      if (!desktopMode && response.status === 401 && !path.includes('/auth/login') && !path.includes('/auth/refresh')) {
+        console.warn(`[api] 401 on ${path} — attempting token refresh.`);
+
+        const newToken = await tryRefreshToken();
+        if (newToken) {
+          response = await fetch(retryUrl, {
+            ...options,
+            headers: buildHeaders(newToken),
+          });
+        } else {
+          clearSession();
+          window.location.href = '/';
+          throw new Error('Your session has expired. Please log in again.');
+        }
       }
-    } catch {
-      errorDetail = response.statusText || errorDetail;
+
+      if (!response.ok) {
+        let errorDetail = `Request failed (${response.status})`;
+        try {
+          const data = await response.json();
+          if (Array.isArray(data.detail)) {
+            errorDetail = data.detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
+          } else {
+            errorDetail = data.detail || data.message || errorDetail;
+          }
+        } catch {
+          errorDetail = response.statusText || errorDetail;
+        }
+        throw new Error(errorDetail);
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        return response.json();
+      }
+      return response.text() as unknown as T;
+
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      if (attempt < maxRetries && desktopMode) {
+        console.warn(`[api] Attempt ${attempt}/${maxRetries} failed for ${path}. Retrying in ${retryDelay}ms...`, lastError.message);
+        await sleep(retryDelay);
+        continue;
+      }
+
+      throw lastError;
     }
-    throw new Error(errorDetail);
   }
 
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('application/json')) {
-    return response.json();
-  }
-  return response.text() as unknown as T;
+  throw lastError || new Error('Request failed');
 }
 
 export const api = {
@@ -150,7 +187,7 @@ export const api = {
     request<T>(path, { ...options, method: 'DELETE' }),
 
   wsUrl: (path: string) => {
-    const wsBase = BASE_URL.replace(/^http/, 'ws');
+    const wsBase = getBaseUrl().replace(/^http/, 'ws');
     const apiKey = getApiKey();
     const separator = path.includes('?') ? '&' : '?';
     return `${wsBase}${path}${apiKey ? `${separator}api_key=${apiKey}` : ''}`;
@@ -159,7 +196,7 @@ export const api = {
   resolveUrl: (path: string | null | undefined) => {
     if (!path) return '';
     if (path.startsWith('http')) return path;
-    if (path.startsWith('/')) return `${BASE_URL}${path}`;
+    if (path.startsWith('/')) return `${getBaseUrl()}${path}`;
     return path;
   }
 };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Menu } from 'lucide-react';
+import { Menu, Loader2 } from 'lucide-react';
 import { LangfuseWeb } from 'langfuse';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
@@ -24,7 +24,9 @@ import { AboutPage } from './components/AboutPage';
 import { Integrations } from './components/Integrations';
 import { UsageAnalytics } from './components/UsageAnalytics';
 import { UpdateBanner } from './components/UpdateBanner';
-import { api, clearSession, getApiKey, getAccessToken } from '../lib/api';
+import { TrialBanner } from './components/TrialBanner';
+import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
+import { getLicenseManager, type LicenseManager } from '../lib/license';
 
 const langfuse = new LangfuseWeb({
   publicKey: import.meta.env.VITE_LANGFUSE_PUBLIC_KEY || "pk-lf-vantage-dev",
@@ -96,6 +98,49 @@ export default function App() {
   // Update status for sidebar version label
   const [updateStatus, setUpdateStatus] = useState<{ update_available: boolean; current_version: string } | null>(null);
 
+  // Desktop mode state
+  const desktop = isDesktopMode();
+  const [desktopReady, setDesktopReady] = useState(!desktop); // web mode is always ready
+  const [license, setLicense] = useState<LicenseManager | null>(desktop ? getLicenseManager() : null);
+
+  // Desktop mode: wait for backend to be ready, then auto-login
+  useEffect(() => {
+    if (!desktop) return;
+
+    let cancelled = false;
+    const checkBackend = async () => {
+      for (let i = 0; i < 30; i++) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(`${window.__VANTAGE_API_URL__ || 'http://127.0.0.1:8000'}/health`);
+          if (res.ok) {
+            // Auto-create desktop session (no login needed)
+            if (!getApiKey()) {
+              localStorage.setItem('vantage_api_key', 'desktop-local');
+              localStorage.setItem('vantage_access_token', 'desktop-local');
+              localStorage.setItem('vantage_user', JSON.stringify({
+                display_name: 'Desktop User',
+                email: 'desktop@local',
+                is_superuser: true,
+                role: 'superuser',
+              }));
+              setApiKey('desktop-local');
+              setAccessToken('desktop-local');
+              setUser({ display_name: 'Desktop User', email: 'desktop@local', is_superuser: true, role: 'superuser' });
+            }
+            setDesktopReady(true);
+            return;
+          }
+        } catch { /* backend not ready yet */ }
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      // Backend never came up
+      setDesktopReady(true);
+    };
+    checkBackend();
+    return () => { cancelled = true; };
+  }, [desktop]);
+
   // Check for invite_token on load and route to AuthPage if necessary
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -104,7 +149,7 @@ export default function App() {
     }
   }, []);
 
-  const isAuthenticated = !!(apiKey && accessToken);
+  const isAuthenticated = desktop ? desktopReady : !!(apiKey && accessToken);
 
   // Proactively refresh token on startup if it's expired or nearly expired
   useEffect(() => {
@@ -224,7 +269,20 @@ export default function App() {
     setPublicScreen('landing');
   };
 
-  // ── Unauthenticated routing ──────────────────────────────────────────────
+  // ── Desktop loading screen ──────────────────────────────────────────────
+  if (desktop && !desktopReady) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-slate-900">
+        <div className="text-center space-y-4">
+          <Loader2 size={48} className="animate-spin text-blue-500 mx-auto" />
+          <h2 className="text-xl font-semibold text-white">Vantage AI</h2>
+          <p className="text-slate-400">Connecting to backend...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Unauthenticated routing (web mode only) ────────────────────────────
   if (!isAuthenticated) {
     if (publicScreen === 'about') {
       return <AboutPage />;
@@ -307,11 +365,16 @@ export default function App() {
           </div>
         </header>
 
-        {/* Update notification banner (superuser only) */}
-        <UpdateBanner user={user} />
+        {/* Update notification banner (web mode, superuser only) */}
+        {!desktop && <UpdateBanner user={user} />}
+
+        {/* Desktop: trial/license banner */}
+        {desktop && license && (
+          <TrialBanner license={license} onLicenseChange={() => setLicense(getLicenseManager())} />
+        )}
 
         {/* Beta version notice for unsigned desktop builds */}
-        {window.__VANTAGE_API_URL__ && (
+        {desktop && (
           <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm text-amber-800 shrink-0">
             <span className="font-medium">Beta Preview</span> — This is an unsigned beta version of Vantage AI Desktop for testing purposes.
           </div>
@@ -356,16 +419,16 @@ export default function App() {
             />
           )}
           {currentView === 'reports' && <Reports apiKey={apiKey!} />}
-          {currentView === 'scheduled' && <ScheduledReports apiKey={apiKey!} />}
-          {currentView === 'transform' && <DataTransformation apiKey={apiKey!} />}
-          {currentView === 'analytics' && <AdvancedAnalytics apiKey={apiKey!} />}
+          {currentView === 'scheduled' && (!desktop || !license || license.hasFeature('scheduled_reports') ? <ScheduledReports apiKey={apiKey!} /> : <FeatureLockedMessage feature="Scheduled Reports" />)}
+          {currentView === 'transform' && (!desktop || !license || license.hasFeature('data_transformations') ? <DataTransformation apiKey={apiKey!} /> : <FeatureLockedMessage feature="Data Transformations" />)}
+          {currentView === 'analytics' && (!desktop || !license || license.hasFeature('advanced_analytics') ? <AdvancedAnalytics apiKey={apiKey!} /> : <FeatureLockedMessage feature="Advanced Analytics" />)}
           {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
-          {currentView === 'insights' && <Insights />}
+          {currentView === 'insights' && (!desktop || !license || license.hasFeature('insights') ? <Insights /> : <FeatureLockedMessage feature="Insights" />)}
           {currentView === 'alerts' && <AlertsManager apiKey={apiKey!} />}
           {currentView === 'boards' && <DashboardsView apiKey={apiKey!} user={user} />}
           {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
           {currentView === 'about' && <AboutPage />}
-          {currentView === 'admin' && <AdminPanel />}
+          {currentView === 'admin' && (!desktop || !license || license.hasFeature('admin_panel') ? <AdminPanel /> : <FeatureLockedMessage feature="Admin Panel" />)}
           {currentView === 'branding' && (
             <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
           )}
@@ -377,9 +440,29 @@ export default function App() {
               user={user}
             />
           )}
-          {currentView === 'integrations' && <Integrations />}
+          {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}
         </main>
+      </div>
+    </div>
+  );
+}
+
+// ── Feature locked placeholder for freemium tier ────────────────────────
+
+function FeatureLockedMessage({ feature }: { feature: string }) {
+  return (
+    <div className="flex items-center justify-center h-full bg-gray-50">
+      <div className="text-center space-y-4 max-w-md px-6">
+        <div className="mx-auto w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center">
+          <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-semibold text-slate-900">{feature} — Premium Feature</h3>
+        <p className="text-slate-500 text-sm">
+          This feature is available with a Premium license. Enter your license key to unlock all features.
+        </p>
       </div>
     </div>
   );
