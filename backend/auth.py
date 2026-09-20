@@ -877,6 +877,19 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     FastAPI dependency. Single authoritative definition (Bug #7).
     Routers should import this from auth.py, not from dependencies.py.
     """
+    # Desktop mode: bypass auth, return a virtual superuser
+    _env = os.getenv("ENVIRONMENT", "development").lower()
+    if _env == "desktop":
+        return {
+            "id": 1,
+            "email": "desktop@local",
+            "display_name": "Desktop User",
+            "role": "owner",
+            "is_superuser": True,
+            "is_active": True,
+            "org_id": 1,
+        }
+
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=401,

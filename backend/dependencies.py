@@ -83,8 +83,28 @@ def get_org_connection_string(org, prefer_file_db: bool = True) -> Optional[str]
     return org.db_connection_string
 
 
-async def get_current_org(x_api_key: str = Header(...)):
+async def get_current_org(x_api_key: str = Header(None)):
     """Dependency to get the current organization from the X-API-KEY header."""
+    # Desktop mode: bypass auth, return first org or create a default one
+    if _ENVIRONMENT == "desktop":
+        from database import get_db
+        db = get_db()
+        row = db.execute("SELECT * FROM organizations LIMIT 1").fetchone()
+        if row:
+            return dict(row)
+        # Create a default desktop org if none exists
+        import secrets as _sec
+        default_key = "desktop-" + _sec.token_hex(8)
+        db.execute(
+            "INSERT INTO organizations (name, api_key) VALUES (?, ?)",
+            ("Desktop User", default_key),
+        )
+        db.commit()
+        row = db.execute("SELECT * FROM organizations ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row)
+
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Valid X-API-KEY required")
     org = get_org_by_api_key(x_api_key)
     if not org:
         raise HTTPException(status_code=401, detail="Valid X-API-KEY required")
