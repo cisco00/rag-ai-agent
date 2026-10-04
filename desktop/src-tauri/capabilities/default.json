@@ -7,6 +7,16 @@
     "core:default",
     "shell:allow-spawn",
     "shell:allow-execute",
+    "shell:default",
+    {
+      "identifier": "shell:allow-sidecar",
+      "allow": [
+        {
+          "name": "vantage-backend",
+          "sidecar": true
+        }
+      ]
+    },
     "dialog:default",
     "updater:default"
   ]
