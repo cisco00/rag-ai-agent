@@ -37,6 +37,9 @@ from dependencies import (
     ROLES, ROLE_RANK, _P,
 )
 
+# ─── Application URL (used in password-reset emails) ─────────────────────────
+APP_URL: str = os.getenv("APP_URL", "http://localhost:5173")
+
 # ─── Cookie configuration ─────────────────────────────────────────────────────
 _SECURE_COOKIES: bool = os.getenv("SECURE_COOKIES", "true").lower() not in ("false", "0", "no")
 
@@ -211,14 +214,16 @@ def ensure_auth_tables():
                     pass
             conn.commit()
 
-            # Bootstrap: if no superuser exists, promote the oldest owner
-            super_count = conn.execute(text("SELECT COUNT(*) FROM users WHERE is_superuser = 1")).scalar()
-            if super_count == 0:
-                conn.execute(text("""
-                    UPDATE users SET is_superuser = 1 
-                    WHERE id = (SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1)
-                """))
-                conn.commit()
+            # Bootstrap: if no superuser exists, promote the oldest owner.
+            # L-5 fix: use a single atomic UPDATE … WHERE NOT EXISTS to avoid
+            # the race condition where two workers both read super_count == 0
+            # and both attempt the promotion concurrently.
+            conn.execute(text("""
+                UPDATE users SET is_superuser = 1
+                WHERE id = (SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1)
+                  AND NOT EXISTS (SELECT 1 FROM users WHERE is_superuser = 1)
+            """))
+            conn.commit()
         except Exception:
             pass
 
@@ -473,12 +478,16 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
     email = email.lower().strip()
     user  = get_user_by_email(org_id, email) if org_id else get_user_by_email_global(email)
     if not user:
-        logger.error(f"Login failed: User {email} not found.")
-        raise HTTPException(status_code=401, detail="email does not exist")
-    
+        import hashlib
+        _eh = hashlib.sha256(email.encode()).hexdigest()[:12]
+        logger.warning(f"Login failed: unknown email hash={_eh}…")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
     if not verify_password(password, user["password_hash"]):
-        logger.error(f"Login failed: Password mismatch for user {email}.")
-        raise HTTPException(status_code=401, detail="Incorrect password")
+        import hashlib
+        _eh = hashlib.sha256(email.encode()).hexdigest()[:12]
+        logger.warning(f"Login failed: wrong password email_hash={_eh}…")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     effective_org_id = user["org_id"]
     with admin_engine.connect() as conn:
@@ -534,17 +543,36 @@ def refresh_access_token(raw_refresh_token: str) -> dict:
     now      = datetime.now(timezone.utc).isoformat()
     with admin_engine.connect() as conn:
         row = conn.execute(
-            text("SELECT rt.*, u.org_id, u.role FROM refresh_tokens rt "
+            # H-1 fix: include u.is_superuser so refreshed tokens retain admin privileges
+            text("SELECT rt.*, u.org_id, u.role, u.is_superuser FROM refresh_tokens rt "
                  "JOIN users u ON u.id = rt.user_id "
                  "WHERE rt.token_hash = :hash AND rt.expires_at > :now"),
             {"hash": ref_hash, "now": now},
         ).mappings().first()
     if not row or not hmac.compare_digest(row["token_hash"], ref_hash):
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+
+    # L-3 fix: rotate the refresh token on every use (prevent replay after theft)
+    new_raw, new_hash = _make_refresh_token()
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL)).isoformat()
+    created_at     = datetime.now(timezone.utc).isoformat()
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            # delete old token
+            conn.execute(text("DELETE FROM refresh_tokens WHERE token_hash = :old"),
+                         {"old": ref_hash})
+            # insert rotated token
+            conn.execute(text("INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at) "
+                              "VALUES (:uid, :h, :exp, :now)"),
+                         {"uid": row["user_id"], "h": new_hash,
+                          "exp": new_expires_at, "now": created_at})
+
     return {
-        "access_token": _make_access_token(row["user_id"], row["org_id"], row["role"], row.get("is_superuser", 0)),
-        "token_type":   "bearer",
-        "expires_in":   ACCESS_TOKEN_TTL * 60,
+        "access_token":  _make_access_token(row["user_id"], row["org_id"], row["role"],
+                                             row.get("is_superuser", 0)),
+        "refresh_token": new_raw,   # rotated — client must store this new value
+        "token_type":    "bearer",
+        "expires_in":    ACCESS_TOKEN_TTL * 60,
     }
 
 

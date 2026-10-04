@@ -229,9 +229,11 @@ class DatabaseManager:
                 with self.engine.connect() as connection:
                     # Start explicit transaction to ensure clean state
                     with connection.begin():
-                        # Escape colons in the SQL that aren't bind parameters.
-                        safe_sql = sql.replace(":", "\\:")
-                        result = connection.execute(text(safe_sql))
+                        # H-2 fix: removed blanket colon-replace (was corrupting
+                        # ISO 8601 timestamps and SQLAlchemy named bind params).
+                        # The SQL validator already enforces SELECT/WITH-only
+                        # allowlist, so raw text() execution is safe here.
+                        result = connection.execute(text(sql))
                         
                         # Check if query returns results
                         query_type = sql.strip().upper().split()[0]

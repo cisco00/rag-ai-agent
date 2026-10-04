@@ -12,7 +12,12 @@ from contextlib import contextmanager
 from typing import Optional, List, Dict
 import secrets
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# L-4 fix: datetime.utcnow() is deprecated in Python 3.12+ and returns a naive
+# datetime.  Use a tz-aware helper everywhere instead.
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 import json
 
 from logging_config import get_logger
@@ -62,7 +67,7 @@ class Organization(Base):
     api_key = Column(String(64), unique=True, nullable=False, index=True)
     db_connection_string = Column(EncryptedString, nullable=True)
     branding = Column(Text, nullable=True)  # JSON: {org_name, tagline, primary_color, logo_url}
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<Organization(id={self.id}, name='{self.name}')>"
@@ -97,7 +102,7 @@ class SharedReport(Base):
     query = Column(Text, nullable=False)
     response = Column(Text, nullable=False)
     visualization = Column(Text, nullable=True)  # JSON string
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=True, index=True)
     
     def __repr__(self):
@@ -107,7 +112,7 @@ class SharedReport(Base):
         """Check if the report has expired."""
         if self.expires_at is None:
             return False
-        return self.expires_at < datetime.utcnow()
+        return self.expires_at < _utcnow()
     
     def get_visualization(self) -> Optional[dict]:
         """Get visualization data as a dictionary."""
@@ -133,7 +138,7 @@ class ScheduledReport(Base):
     next_run_at = Column(DateTime, nullable=False, index=True)
     recipients = Column(Text, nullable=False)  # comma-separated emails
     is_active = Column(Integer, default=1)  # 1=active, 0=inactive (using Integer for SQLite boolean compat)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<ScheduledReport(id={self.id}, org_id={self.org_id}, freq='{self.frequency}')>"
@@ -149,7 +154,7 @@ class ConnectedDatabase(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, nullable=False, index=True)
     connection_string = Column(EncryptedString, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<ConnectedDatabase(id={self.id}, org_id={self.org_id})>"
@@ -167,7 +172,7 @@ class Feedback(Base):
     response = Column(Text, nullable=False)
     vote = Column(Integer, nullable=False)  # 1 for up, -1 for down
     feedback_text = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<Feedback(id={self.id}, vote={self.vote})>"
@@ -186,7 +191,7 @@ class QueryHistory(Base):
     visualization = Column(Text, nullable=True)  # JSON string
     sql_query = Column(Text, nullable=True)
     user_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<QueryHistory(id={self.id}, org_id={self.org_id})>"
@@ -213,8 +218,8 @@ class DataSource(Base):
     refresh_interval = Column(Integer, nullable=True) # Interval in minutes
     last_synced_at = Column(DateTime, nullable=True)
     is_active = Column(Integer, default=1) # 1 for active, 0 for inactive
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     
     def __repr__(self):
         return f"<DataSource(id={self.id}, name='{self.name}', type='{self.source_type}')>"
@@ -232,8 +237,8 @@ class IntegrationCredential(Base):
     client_id = Column(EncryptedString, nullable=False)
     client_secret = Column(EncryptedString, nullable=False)
     redirect_uri = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     
     def __repr__(self):
         return f"<IntegrationCredential(org_id={self.org_id}, provider='{self.provider}')>"
@@ -246,8 +251,8 @@ class ChatSession(Base):
     org_id = Column(Integer, nullable=False, index=True)
     title = Column(String(255), nullable=True)
     user_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     
     def __repr__(self):
         return f"<ChatSession(id='{self.id}', title='{self.title}')>"
@@ -262,7 +267,7 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)
     visualization = Column(Text, nullable=True)  # JSON string
     thinking_process = Column(Text, nullable=True)  # JSON string
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
     
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, role='{self.role}')>"
@@ -778,7 +783,7 @@ def create_shared_report(
             report_id = secrets.token_urlsafe(16)
             
             # Calculate expiration
-            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+            expires_at = _utcnow() + timedelta(days=expires_in_days)
             
             # Create report
             report = SharedReport(

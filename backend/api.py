@@ -237,13 +237,41 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-Instrumentator().instrument(app).expose(app)
+# H-3 fix: restrict /metrics to loopback/internal callers only
+import ipaddress as _ipaddress
+
+def _metrics_guard(request: Request):
+    client_host = request.client.host if request.client else "0.0.0.0"
+    try:
+        addr = _ipaddress.ip_address(client_host)
+        if not (addr.is_loopback or addr.is_private):
+            from fastapi.responses import JSONResponse as _JR
+            raise HTTPException(status_code=403, detail="Metrics access restricted.")
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Metrics access restricted.")
+
+Instrumentator().instrument(app).expose(
+    app,
+    include_in_schema=False,
+    dependencies=[Depends(_metrics_guard)],
+)
 
 # ── Security & Logging Middlewares ───────────────────────────────────────────
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' ws: wss: https:;"
+    # M-1 fix: removed 'unsafe-inline' and 'unsafe-eval' from script-src.
+    # If your Vite build needs inline styles, move them to hashed/nonced directives.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' ws: wss: https:; "
+        "object-src 'none'; "
+        "base-uri 'self';"
+    )
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -271,46 +299,51 @@ async def health_check():
 
 
 # ── Desktop configuration endpoint ───────────────────────────────────────
-@app.post("/api/desktop/configure")
-async def desktop_configure(request: Request):
-    """Save LLM configuration from the desktop setup wizard."""
-    body = await request.json()
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+# C-2 fix: only available in desktop mode; returns 404 in all other environments.
+if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
+    @app.post("/api/desktop/configure")
+    async def desktop_configure(request: Request):
+        """Save LLM configuration from the desktop setup wizard (desktop mode only)."""
+        body = await request.json()
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
 
-    lines_to_write = []
-    # Read existing .env and update/add keys
-    existing = {}
-    if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            for line in f:
-                if "=" in line and not line.strip().startswith("#"):
-                    key = line.split("=", 1)[0].strip()
-                    existing[key] = line
-                lines_to_write.append(line)
+        lines_to_write = []
+        existing = {}
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                for line in f:
+                    if "=" in line and not line.strip().startswith("#"):
+                        key = line.split("=", 1)[0].strip()
+                        existing[key] = line
+                    lines_to_write.append(line)
 
-    updates = {}
-    if body.get("llm_provider"):
-        updates["LLM_PROVIDER"] = body["llm_provider"]
-    if body.get("llm_api_key"):
-        updates["LLM_API_KEY"] = body["llm_api_key"]
-    if body.get("azure_endpoint"):
-        updates["AZURE_OPENAI_ENDPOINT"] = body["azure_endpoint"]
+        updates = {}
+        if body.get("llm_provider"):
+            updates["LLM_PROVIDER"] = body["llm_provider"]
+        if body.get("llm_api_key"):
+            updates["LLM_API_KEY"] = body["llm_api_key"]
+        if body.get("azure_endpoint"):
+            updates["AZURE_OPENAI_ENDPOINT"] = body["azure_endpoint"]
 
-    # Update existing lines or append new ones
-    for key, value in updates.items():
-        new_line = f"{key}={value}\n"
-        if key in existing:
-            lines_to_write = [new_line if l.startswith(f"{key}=") else l for l in lines_to_write]
-        else:
-            lines_to_write.append(new_line)
+        # H-4 fix: strip newlines/carriage-returns from values to prevent
+        # env-file injection (e.g. "sk-real\nJWT_SECRET=evil")
+        for key, value in updates.items():
+            safe_value = str(value).replace("\n", "").replace("\r", "")
+            new_line = f"{key}={safe_value}\n"
+            if key in existing:
+                lines_to_write = [new_line if l.startswith(f"{key}=") else l
+                                  for l in lines_to_write]
+            else:
+                lines_to_write.append(new_line)
 
-    with open(env_path, "w") as f:
-        f.writelines(lines_to_write)
+        with open(env_path, "w") as f:
+            f.writelines(lines_to_write)
 
-    return {"status": "ok", "message": "Configuration saved. Restart the app to apply changes."}
+        return {"status": "ok", "message": "Configuration saved. Restart the app to apply changes."}
 
 
-if os.getenv("ENVIRONMENT", "development").lower() != "production":
+# M-3 fix: debug endpoints only in "development" (not staging, not production)
+if os.getenv("ENVIRONMENT", "development").lower() == "development":
     @app.get("/debug/routes")
     async def get_all_routes():
         """Return a list of all registered routes and their methods."""
@@ -369,22 +402,27 @@ else:
         "Set CORS_ORIGINS=<your frontend URL> before deploying to production."
     )
 
-_CORS_ALLOW_HEADERS = ["*"]
+# M-2 fix: enumerate only the headers the frontend actually needs instead of "*"
+_CORS_ALLOW_HEADERS = [
+    "Authorization", "Content-Type", "X-API-KEY", "Accept",
+    "X-Requested-With", "Cache-Control",
+]
+_CORS_EXPOSE_HEADERS = ["Content-Disposition", "X-Total-Count"]
 
+# M-2 fix: removed "http://0.0.0.0" variants — not a real browser origin
 _PERMISSIVE_ORIGINS = [
     "http://localhost:5173", "http://127.0.0.1:5173",
     "http://localhost:3000", "http://127.0.0.1:3000",
-    "http://localhost", "http://127.0.0.1",
-    "http://0.0.0.0:5173", "http://0.0.0.0"
+    "http://localhost",      "http://127.0.0.1",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins + (_PERMISSIVE_ORIGINS if _ENVIRONMENT != "production" else []),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=_CORS_ALLOW_HEADERS,
+    expose_headers=_CORS_EXPOSE_HEADERS,
 )
 
 # SPA Fallback Path Logic
@@ -469,9 +507,12 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
 
             dialect      = db.engine.dialect.name
             id_col       = "ctid" if dialect == "postgresql" else "rowid"
+            # L-2 fix: double-quote the table name for defence-in-depth even
+            # though TableNameValidator already restricts to [a-zA-Z0-9_].
+            safe_table   = f'"{table_name}"'
             last_sent_id = None
             while True:
-                query   = f"SELECT *, {id_col} as _stream_id FROM {table_name} ORDER BY {id_col} DESC LIMIT 1"
+                query   = f"SELECT *, {id_col} as _stream_id FROM {safe_table} ORDER BY {id_col} DESC LIMIT 1"
                 # Offload blocking query to threadpool
                 results = await run_in_threadpool(db.execute_query, query)
                 if results:
@@ -511,13 +552,22 @@ app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 @app.get("/{full_path:path}")
 async def serve_spa(request: Request, full_path: str):
     # API Guard: Never serve HTML for paths that should be handled by API routers
-    if any(full_path.startswith(p) for p in ["auth", "data", "integrations", "analytics", "branding", "sessions", "transformations", "alerts", "dashboards", "insights", "org_context", "admin"]):
+    if any(full_path.startswith(p) for p in [
+        "auth", "data", "integrations", "analytics", "branding", "sessions",
+        "transformations", "alerts", "dashboards", "insights", "org_context", "admin",
+    ]):
         return JSONResponse(status_code=404, content={"detail": f"Route '{full_path}' not found in API."})
 
-    file_path = os.path.join(static_dir, full_path)
+    # C-1 fix: resolve the real path and confirm it stays inside static_dir.
+    # Without this, requests like GET /../../etc/passwd escape the static root.
+    _static_root = os.path.realpath(static_dir)
+    file_path    = os.path.realpath(os.path.join(_static_root, full_path))
+    if not file_path.startswith(_static_root + os.sep) and file_path != _static_root:
+        return JSONResponse(status_code=404, content={"detail": "Not found."})
+
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
-    index_path = os.path.join(static_dir, "index.html")
+    index_path = os.path.join(_static_root, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"error": "Frontend not found"}

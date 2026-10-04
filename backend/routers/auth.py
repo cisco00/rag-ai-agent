@@ -17,7 +17,7 @@ Bug #15 — Removed @router.get("/register") and @router.get("/login") SPA
 import os
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Header, Response, Request
+from fastapi import APIRouter, Cookie, HTTPException, Depends, Header, Response, Request
 from fastapi.concurrency import run_in_threadpool
 
 import auth as auth_module
@@ -183,8 +183,17 @@ async def login_route(request: Request, payload: LoginRequest, response: Respons
 
 
 @router.post("/logout")
-async def logout_route(response: Response):
-    """Log out a user by clearing cookies."""
+async def logout_route(
+    response: Response,
+    vantage_refresh_token: Optional[str] = Cookie(None),  # C-4 fix: read cookie
+):
+    """Log out a user and invalidate the server-side refresh token."""
+    # C-4 fix: delete the token from the DB so stolen tokens cannot be reused
+    if vantage_refresh_token:
+        try:
+            auth_module.logout_user(vantage_refresh_token)
+        except Exception:
+            pass  # already expired or missing — still clear cookies
     auth_module._clear_auth_cookies(response)
     return {"message": "Logged out successfully"}
 

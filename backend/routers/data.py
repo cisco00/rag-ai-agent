@@ -309,19 +309,21 @@ async def import_file_to_database(
         from file_uploader import FileUploader
         uploader = FileUploader(db_manager)
         
-        # Save file temporarily
+        # L-1 fix: initialise tmp_path to None so the finally block never
+        # raises NameError if the NamedTemporaryFile call itself fails.
         import tempfile
-        if cleaning_config:
-            # If we cleaned the DataFrame, save it as a new CSV
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-            df.to_csv(tmp_path, index=False)
-        else:
-            with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
-                tmp_file.write(content)
-                tmp_path = tmp_file.name
-        
+        tmp_path = None
         try:
+            if cleaning_config:
+                # If we cleaned the DataFrame, save it as a new CSV
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                df.to_csv(tmp_path, index=False)
+            else:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix=Path(filename).suffix, delete=False) as tmp_file:
+                    tmp_file.write(content)
+                    tmp_path = tmp_file.name
+
             if not table_name:
                 table_name = sanitize_table_name(filename)
 
@@ -333,7 +335,7 @@ async def import_file_to_database(
                 table_name,
                 if_exists
             )
-            
+
             if result['success']:
                 invalidate_schema_cache(org.db_connection_string)
                 res_data = {
@@ -352,17 +354,17 @@ async def import_file_to_database(
                 # Log file upload activity
                 try:
                     from auth import log_activity
-                    log_activity(user.get("id"), user.get("org_id"), "File Uploaded", {"filename": filename, "table": table_name, "rows": result['rows_imported']})
+                    log_activity(user.get("id"), user.get("org_id"), "File Uploaded",
+                                 {"filename": filename, "table": table_name, "rows": result['rows_imported']})
                 except Exception:
                     pass
                 return res_data
             else:
                 raise HTTPException(status_code=500, detail=result.get('error', 'Import failed'))
-        
+
         finally:
-            # Clean up temp file
-            import os
-            if os.path.exists(tmp_path):
+            # L-1 fix: only unlink if tmp_path was successfully assigned
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             db_manager.close()
             
