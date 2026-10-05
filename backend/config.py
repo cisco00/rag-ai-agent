@@ -391,10 +391,7 @@ Score the recommendation using this rubric:
 
     def validate(self) -> None:
         """Validate agent configuration."""
-        # In desktop mode the user configures the API key via the setup wizard
-        # after installation, so we cannot require it at startup time.
-        skip = bool(os.getenv("SKIP_KEY_VALIDATION")) or \
-               os.getenv("ENVIRONMENT", "").lower() == "desktop"
+        skip = bool(os.getenv("SKIP_KEY_VALIDATION"))
         universal_key = self.llm_api_key
 
         if self.model_provider == "huggingface":

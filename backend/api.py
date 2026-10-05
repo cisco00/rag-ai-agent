@@ -298,6 +298,37 @@ async def health_check():
     return {"status": "ok", "version": os.getenv("APP_VERSION", "2.6.0")}
 
 
+@app.get("/api/setup/status")
+async def setup_status():
+    """
+    Returns whether the app is fully configured.
+    The desktop frontend calls this on launch to decide whether to show
+    the setup wizard or go straight to the main app.
+    """
+    import config as _config_mod
+    is_desktop = os.getenv("ENVIRONMENT", "").lower() == "desktop"
+    has_llm_key = bool(
+        os.getenv("LLM_API_KEY") or
+        os.getenv("OPENAI_API_KEY") or
+        os.getenv("ANTHROPIC_API_KEY") or
+        os.getenv("AZURE_OPENAI_API_KEY") or
+        os.getenv("GOOGLE_API_KEY")
+    )
+    try:
+        # If the current config validates cleanly the app is ready
+        _config_mod.config.agent.validate()
+        configured = True
+    except Exception:
+        configured = False
+
+    return {
+        "desktop_mode": is_desktop,
+        "configured": configured,
+        "needs_setup": is_desktop and not configured,
+        "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
+    }
+
+
 # ── Desktop configuration endpoint ───────────────────────────────────────
 # C-2 fix: only available in desktop mode; returns 404 in all other environments.
 if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
@@ -327,8 +358,10 @@ if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
 
         # H-4 fix: strip newlines/carriage-returns from values to prevent
         # env-file injection (e.g. "sk-real\nJWT_SECRET=evil")
+        safe_updates = {}
         for key, value in updates.items():
             safe_value = str(value).replace("\n", "").replace("\r", "")
+            safe_updates[key] = safe_value
             new_line = f"{key}={safe_value}\n"
             if key in existing:
                 lines_to_write = [new_line if l.startswith(f"{key}=") else l
@@ -339,7 +372,26 @@ if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
         with open(env_path, "w") as f:
             f.writelines(lines_to_write)
 
-        return {"status": "ok", "message": "Configuration saved. Restart the app to apply changes."}
+        # Apply new values to the live process environment so the config
+        # hot-reloads without requiring an app restart.
+        for key, value in safe_updates.items():
+            os.environ[key] = value
+
+        # Hot-reload the global config — validates the new key immediately
+        # and returns an error to the wizard if it is invalid.
+        try:
+            import config as _config_mod
+            _config_mod.config = _config_mod.AppConfig.from_env()
+        except Exception as reload_err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Key saved but config validation failed: {reload_err}"
+            )
+
+        return {
+            "status": "ok",
+            "message": "Configuration saved and applied. No restart needed.",
+        }
 
 
 # M-3 fix: debug endpoints only in "development" (not staging, not production)
