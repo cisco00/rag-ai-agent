@@ -391,7 +391,10 @@ Score the recommendation using this rubric:
 
     def validate(self) -> None:
         """Validate agent configuration."""
-        skip = bool(os.getenv("SKIP_KEY_VALIDATION"))
+        # In desktop mode the user configures the API key via the setup wizard
+        # after installation, so we cannot require it at startup time.
+        skip = bool(os.getenv("SKIP_KEY_VALIDATION")) or \
+               os.getenv("ENVIRONMENT", "").lower() == "desktop"
         universal_key = self.llm_api_key
 
         if self.model_provider == "huggingface":
@@ -516,10 +519,11 @@ class AppConfig:
         self.logging.validate()
         
         # Environment-specific validation
-        if self.environment not in ["development", "staging", "production"]:
+        # "desktop" is a valid environment (Tauri sidecar sets ENVIRONMENT=desktop)
+        if self.environment not in ["development", "staging", "production", "desktop"]:
             raise InvalidConfigurationError(
                 "environment",
-                "Must be one of: development, staging, production"
+                "Must be one of: development, staging, production, desktop"
             )
     
     @classmethod
