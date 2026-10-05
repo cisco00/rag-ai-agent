@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
+use tauri_plugin_shell::ShellExt;
 
 // ---------------------------------------------------------------------------
 // Backend process wrapper — kills the child on drop
