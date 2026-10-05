@@ -100,27 +100,100 @@ fn main() {
                 }
             });
 
+            // Show a loading screen immediately so the user never sees a blank window
+            if let Some(window) = app.get_webview_window("main") {
+                let loading_html = format!(r#"
+                    data:text/html,<!DOCTYPE html>
+                    <html>
+                    <head><meta charset="utf-8"><title>Vantage AI</title>
+                    <style>
+                        * {{ margin:0; padding:0; box-sizing:border-box; }}
+                        body {{
+                            background: #0f1117;
+                            color: #e2e8f0;
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                            height: 100vh;
+                            gap: 24px;
+                        }}
+                        .logo {{ font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }}
+                        .logo span {{ color: #6366f1; }}
+                        .spinner {{
+                            width: 36px; height: 36px;
+                            border: 3px solid #2d3748;
+                            border-top-color: #6366f1;
+                            border-radius: 50%;
+                            animation: spin 0.8s linear infinite;
+                        }}
+                        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+                        .status {{ font-size: 0.85rem; color: #718096; }}
+                    </style>
+                    </head>
+                    <body>
+                        <div class="logo">Vantage <span>AI</span></div>
+                        <div class="spinner"></div>
+                        <div class="status" id="s">Starting backend…</div>
+                    </body>
+                    </html>
+                "#);
+                let _ = window.navigate(loading_html.parse().unwrap());
+            }
+
             // Wait for backend health in a background thread to avoid blocking UI
             let handle = app.handle().clone();
             thread::spawn(move || {
-                if wait_for_backend(port, 30) {
+                if wait_for_backend(port, 60) {
                     eprintln!("[tauri] Backend is healthy on port {}", port);
+
+                    if let Some(window) = handle.get_webview_window("main") {
+                        // Set the API URL then navigate to the bundled frontend
+                        let js = format!(
+                            "window.__VANTAGE_API_URL__ = 'http://127.0.0.1:{port}'; \
+                             console.log('[Vantage] Backend ready on port {port}');"
+                        );
+                        let _ = window.eval(&js);
+                        // Navigate to the bundled index.html
+                        let _ = window.navigate("tauri://localhost".parse().unwrap());
+                    }
                 } else {
-                    eprintln!("[tauri] WARNING: Backend did not become healthy within 30s");
-                }
+                    eprintln!("[tauri] ERROR: Backend did not become healthy within 60s");
 
-                // Inject the backend URL into the webview
-                if let Some(window) = handle.get_webview_window("main") {
-                    let js = format!(
-                        "window.__VANTAGE_API_URL__ = 'http://127.0.0.1:{}'; \
-                         window.__TAURI_INTERNALS__ = window.__TAURI_INTERNALS__ || true; \
-                         console.log('[Vantage] Backend URL set to port {}');",
-                        port, port
-                    );
-                    let _ = window.eval(&js);
-
-                    // Reload the page so the React app picks up the backend URL
-                    let _ = window.eval("setTimeout(() => location.reload(), 500);");
+                    // Show a user-friendly error page instead of staying blank
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let error_html = r#"data:text/html,<!DOCTYPE html>
+                            <html><head><meta charset="utf-8"><title>Vantage AI — Error</title>
+                            <style>
+                                * { margin:0; padding:0; box-sizing:border-box; }
+                                body {
+                                    background:#0f1117; color:#e2e8f0;
+                                    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                                    display:flex; flex-direction:column;
+                                    align-items:center; justify-content:center;
+                                    height:100vh; gap:16px; padding:32px; text-align:center;
+                                }
+                                h2 { color:#fc8181; font-size:1.25rem; }
+                                p  { color:#718096; font-size:0.875rem; max-width:420px; line-height:1.6; }
+                                button {
+                                    margin-top:8px; padding:10px 24px;
+                                    background:#6366f1; color:#fff; border:none;
+                                    border-radius:6px; font-size:0.875rem; cursor:pointer;
+                                }
+                                button:hover { background:#4f46e5; }
+                            </style></head>
+                            <body>
+                                <h2>&#9888; Backend failed to start</h2>
+                                <p>The Vantage AI backend service did not start within 60 seconds.
+                                   This can happen if antivirus software is blocking the process,
+                                   or if the app bundle is incomplete.</p>
+                                <p>Try restarting the app. If the problem persists, reinstall
+                                   from the latest release.</p>
+                                <button onclick="location.reload()">Retry</button>
+                            </body></html>"#;
+                        let _ = window.navigate(error_html.parse().unwrap());
+                    }
                 }
             });
 
