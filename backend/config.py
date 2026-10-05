@@ -547,8 +547,35 @@ class AppConfig:
         return config
 
 
-# Global configuration instance
-config = AppConfig.from_env()
+# Global configuration instance.
+# We allow the server to start with an incomplete LLM config so that Railway/
+# Docker deployments can boot and users can supply the key via the setup page.
+# Endpoints that actually call the LLM check get_config() and return HTTP 503
+# if the key is still missing.
+import logging as _cfg_log
+_cfg_logger = _cfg_log.getLogger(__name__)
+
+def _load_config() -> 'AppConfig':
+    try:
+        return AppConfig.from_env()
+    except MissingConfigurationError as exc:
+        _cfg_logger.warning(
+            "Server starting with incomplete configuration: %s. "
+            "LLM features will be unavailable until the key is set "
+            "via environment variables or the setup page.", exc
+        )
+        # Temporarily skip key validation so the process can boot.
+        _prev = os.environ.get("SKIP_KEY_VALIDATION")
+        os.environ["SKIP_KEY_VALIDATION"] = "1"
+        try:
+            return AppConfig.from_env()
+        finally:
+            if _prev is None:
+                os.environ.pop("SKIP_KEY_VALIDATION", None)
+            else:
+                os.environ["SKIP_KEY_VALIDATION"] = _prev
+
+config = _load_config()
 
 
 # Convenience functions for accessing configuration
