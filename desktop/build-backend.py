@@ -90,15 +90,9 @@ def main():
 
     is_windows = "windows" in target_triple
 
-    # --onedir: extract once to a folder next to the exe instead of to %TEMP%
-    # on every launch (--onefile). This eliminates the 30-60 s Windows Defender
-    # scan on first run and the blank console while extraction happens.
-    # The Tauri externalBin points at the exe inside the folder (see tauri.conf.json).
-    binary_dir = os.path.join(output_dir, f"vantage-backend-{target_triple}")
-
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--onedir",
+        "--onefile",                           # single bundled exe — required by Tauri externalBin
         "--name", f"vantage-backend-{target_triple}",
         "--distpath", output_dir,
         "--workpath", os.path.join(project_root, "desktop", "build", "pyinstaller"),
@@ -107,8 +101,9 @@ def main():
         "--noconfirm",
     ]
 
-    # Windows: hide the console window so no blank terminal flashes on launch.
-    # Logs are written to a file by uvicorn instead of stdout.
+    # Windows only: hide the console window so no blank terminal appears.
+    # The PyInstaller extraction still runs silently in the background while
+    # the Tauri loading screen is shown to the user.
     if is_windows:
         cmd.append("--noconsole")
 
@@ -138,8 +133,7 @@ def main():
         print("\nERROR: PyInstaller build FAILED")
         sys.exit(1)
 
-    # With --onedir the exe lives inside a subdirectory
-    output_path = os.path.join(output_dir, f"vantage-backend-{target_triple}", output_name)
+    output_path = os.path.join(output_dir, output_name)
     if os.path.exists(output_path):
         size_mb = os.path.getsize(output_path) / (1024 * 1024)
         print(f"\nSUCCESS: Built {output_name} ({size_mb:.1f} MB)")

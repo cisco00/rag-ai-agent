@@ -64,7 +64,7 @@ fn main() {
             // This handles the target-triple suffix and platform-specific extensions.
             let sidecar = app
                 .shell()
-                .sidecar("binaries/vantage-backend/vantage-backend")
+                .sidecar("vantage-backend")
                 .map_err(|e| format!("Failed to create sidecar command: {}", e))?
                 .env("PORT", port.to_string())
                 .env("HOST", "127.0.0.1")
