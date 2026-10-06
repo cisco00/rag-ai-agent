@@ -52,7 +52,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: backend-${{ matrix.target }}
-          path: desktop/src-tauri/binaries/vantage-backend-${{ matrix.target }}${{ matrix.ext }}
+          # --onedir produces a folder; upload the whole thing
+          path: desktop/src-tauri/binaries/vantage-backend-${{ matrix.target }}/
           if-no-files-found: error
 
   # -----------------------------------------------------------------------
@@ -119,11 +120,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: backend-${{ matrix.backend-target }}
-          path: desktop/src-tauri/binaries/
+          # Restore into the onedir folder Tauri expects
+          path: desktop/src-tauri/binaries/vantage-backend-${{ matrix.backend-target }}/
 
       - name: Make backend binary executable
         if: matrix.os != 'windows-latest'
-        run: chmod +x desktop/src-tauri/binaries/vantage-backend-*
+        run: chmod +x desktop/src-tauri/binaries/vantage-backend-${{ matrix.backend-target }}/vantage-backend-${{ matrix.backend-target }}
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

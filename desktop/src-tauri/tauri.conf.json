@@ -39,8 +39,11 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/vantage-backend"
+      "binaries/vantage-backend/vantage-backend"
     ],
+    "resources": {
+      "binaries/vantage-backend/": "vantage-backend/"
+    },
     "category": "Business",
     "shortDescription": "AI-powered analytics platform",
     "longDescription": "Vantage AI is a self-hosted, AI-powered analytics platform that connects to your databases and provides natural language querying, automated insights, and interactive dashboards.",
