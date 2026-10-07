@@ -12,6 +12,44 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from exceptions import MissingConfigurationError, InvalidConfigurationError
+
+
+def _get_log_path() -> str:
+    """
+    Return a platform-appropriate, user-writable path for the log file.
+
+    Writing to a path relative to CWD fails on Windows when the app is
+    installed in C:\\Program Files\\ (WinError 5 — Access is denied).
+
+    Priority:
+      1. LOG_FILE env var (explicit override)
+      2. LOCALAPPDATA\\VantageAI\\logs\\  (Windows)
+      3. ~/Library/Logs/VantageAI/        (macOS)
+      4. ~/.local/share/VantageAI/logs/   (Linux / other)
+    """
+    import sys
+    from pathlib import Path
+
+    if os.getenv("LOG_FILE"):
+        return os.environ["LOG_FILE"]
+
+    if sys.platform == "win32":
+        base = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        log_dir = base / "VantageAI" / "logs"
+    elif sys.platform == "darwin":
+        log_dir = Path.home() / "Library" / "Logs" / "VantageAI"
+    else:
+        log_dir = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "VantageAI" / "logs"
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Last resort: system temp directory
+        import tempfile
+        log_dir = Path(tempfile.gettempdir()) / "VantageAI" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+    return str(log_dir / "rag_agent.log")
 import base64
 import secrets
 
@@ -471,7 +509,7 @@ class LoggingConfig:
     
     # Log files
     log_to_file: bool = True
-    log_file: str = "logs/rag_agent.log"
+    log_file: str = field(default_factory=lambda: _get_log_path())
     max_log_size: int = 10 * 1024 * 1024  # 10MB
     backup_count: int = 5
     
