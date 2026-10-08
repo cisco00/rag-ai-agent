@@ -107,6 +107,28 @@ def main():
     if is_windows:
         cmd.append("--noconsole")
 
+    # uvicorn uses string-based class references in its dictConfig that
+    # PyInstaller's static analyser cannot follow. Add them explicitly so
+    # they end up in the frozen bundle.
+    hidden_imports = [
+        "uvicorn.logging",
+        "uvicorn.loops",
+        "uvicorn.loops.auto",
+        "uvicorn.loops.asyncio",
+        "uvicorn.protocols",
+        "uvicorn.protocols.http",
+        "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.http.h11_impl",
+        "uvicorn.protocols.websockets",
+        "uvicorn.protocols.websockets.auto",
+        "uvicorn.protocols.websockets.websockets_impl",
+        "uvicorn.lifespan",
+        "uvicorn.lifespan.on",
+        "uvicorn.lifespan.off",
+    ]
+    for imp in hidden_imports:
+        cmd.extend(["--hidden-import", imp])
+
     for imp in hidden_imports:
         cmd.extend(["--hidden-import", imp])
 

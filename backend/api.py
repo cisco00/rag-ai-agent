@@ -628,4 +628,14 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        # log_config=None: skip uvicorn's dictConfig-based logging setup.
+        # In a PyInstaller --onefile bundle, uvicorn.logging.DefaultFormatter
+        # is not discoverable via the string reference in dictConfig, which
+        # raises "ValueError: Unable to configure formatter 'default'".
+        # Our logging_config.py already sets up all handlers, so this is safe.
+        log_config=None,
+    )
