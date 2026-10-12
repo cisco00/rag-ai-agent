@@ -79,7 +79,8 @@ export function FileImport({ onConfigured, onQueryClick }: FileImportProps) {
     e.preventDefault();
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files).filter((f: any) =>
-      f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls')
+      f.name.endsWith('.csv') || f.name.endsWith('.xlsx') || f.name.endsWith('.xls') ||
+      f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.docx') || f.name.toLowerCase().endsWith('.doc')
     );
     if (files.length > 0) analyzeAndPreviewFiles(files);
   };
@@ -365,7 +366,7 @@ export function FileImport({ onConfigured, onQueryClick }: FileImportProps) {
           <h1 className="text-3xl font-bold text-gray-900">Import Files</h1>
         </div>
         <p className="text-gray-600">
-          Upload CSV or Excel files to analyze your data with natural language queries.
+          Upload CSV, Excel, PDF, or Word files to analyze your data with natural language queries.
         </p>
       </div>
 
@@ -406,7 +407,7 @@ export function FileImport({ onConfigured, onQueryClick }: FileImportProps) {
               <input
                 type="file"
                 onChange={handleAnalyzeFile}
-                accept=".csv,.xlsx,.xls"
+                accept=".csv,.xlsx,.xls,.pdf,.docx,.doc"
                 className="hidden"
                 disabled={isUploading}
               />
@@ -481,15 +482,15 @@ export function FileImport({ onConfigured, onQueryClick }: FileImportProps) {
               </h3>
               <p className="text-gray-600 mb-6">
                 {activeTab === 'file'
-                  ? 'Upload a CSV or Excel file'
-                  : 'Upload up to 20 CSV or Excel files at once'}
+                  ? 'Upload a CSV, Excel, PDF, or Word file'
+                  : 'Upload up to 20 files (CSV, Excel, PDF, Word)'}
               </p>
               <label className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition-colors font-medium">
                 Select Files
                 <input
                   type="file"
                   onChange={handleFileSelect}
-                  accept=".csv,.xlsx,.xls"
+                  accept=".csv,.xlsx,.xls,.pdf,.docx,.doc"
                   multiple={activeTab === 'batch'}
                   className="hidden"
                   disabled={isUploading}

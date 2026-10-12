@@ -2,9 +2,12 @@
 routers/org_context.py — Routes for organizational context and business rules.
 """
 
+import asyncio
+import json
 import logging
 import time
-from typing import List
+from threading import Thread
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
@@ -266,6 +269,115 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
         )
     finally:
         agent.close()
+
+
+@router.post("/query/stream")
+async def stream_query(request: QueryRequest, org=Depends(get_current_org), user=Depends(get_current_user)):
+    """SSE endpoint that streams thinking steps + final result as they arrive."""
+    conn_str = get_org_connection_string(org, prefer_file_db=request.use_file)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+
+    schema_summary = get_cached_schema_summary(conn_str)
+
+    from config import get_agent_config
+    config = get_agent_config()
+    ctx_manager = OrgContextManager(org.id)
+    enriched_prompt = ctx_manager.inject_into_prompt(config.system_prompt)
+
+    from main import AnalyticsAgent
+    agent = AnalyticsAgent(
+        connection_string=conn_str,
+        schema_summary=schema_summary,
+        system_prompt_override=enriched_prompt,
+        observability_tags=[f"org:{org.id}"],
+    )
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def progress_callback(event: dict):
+        """Called from worker thread — schedules SSE event on event loop."""
+        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+
+    def run_agent():
+        try:
+            history = request.history
+            if request.session_id and not history:
+                db_messages = get_chat_history(request.session_id)
+                history = [{"role": m.role, "content": m.content} for m in db_messages]
+
+            if request.session_id:
+                try:
+                    add_chat_message(request.session_id, "user", request.query)
+                except Exception:
+                    pass
+
+            result = agent.run_query(
+                request.query,
+                history,
+                tables=request.tables,
+                verify_only=request.verify_only,
+                confirmed_sql=request.confirmed_sql,
+                progress_callback=progress_callback,
+            )
+
+            # Persist history
+            if result.get("status") == "success":
+                try:
+                    create_query_history(
+                        org_id=org.id,
+                        query=request.query,
+                        response=result["text"],
+                        visualization=result.get("visualization"),
+                        sql_query=result.get("sql_query"),
+                        user_id=user["id"],
+                    )
+                except Exception as ex:
+                    logger.error(f"Failed to save history: {ex}")
+
+            if request.session_id:
+                try:
+                    add_chat_message(
+                        request.session_id, "assistant", result.get("text", ""),
+                        visualization=result.get("visualization"),
+                        thinking_process=result.get("thinking_process"),
+                    )
+                except Exception as ex:
+                    logger.error(f"Failed to save assistant message: {ex}")
+
+            asyncio.run_coroutine_threadsafe(
+                queue.put({"type": "done", "result": result}), loop
+            )
+        except Exception as exc:
+            logger.error(f"Streaming agent error: {exc}", exc_info=True)
+            asyncio.run_coroutine_threadsafe(
+                queue.put({"type": "error", "message": str(exc)}), loop
+            )
+        finally:
+            agent.close()
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)  # sentinel
+
+    Thread(target=run_agent, daemon=True).start()
+
+    async def event_generator():
+        try:
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Query timed out'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/share")

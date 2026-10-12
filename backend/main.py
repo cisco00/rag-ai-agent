@@ -36,7 +36,7 @@ import os
 import sys
 import json
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
@@ -306,10 +306,11 @@ class QueryProcessor:
 
     def process(
         self,
-        query:          str,
-        messages:       List[Dict],
-        max_iterations: Optional[int] = None,
-        verify_only:    bool          = False,
+        query:             str,
+        messages:          List[Dict],
+        max_iterations:    Optional[int]      = None,
+        verify_only:       bool               = False,
+        progress_callback: Optional[Callable] = None,
     ) -> QueryResult:
         max_iterations  = max_iterations or self.config.max_iterations
         iteration_count = 0
@@ -369,11 +370,17 @@ class QueryProcessor:
             if not tool_calls:
                 logger.info(f"Completed in {iteration_count} iterations")
                 final_text = response_msg.content
-                thinking_process.append({
+                step = {
                     "step": iteration_count,
                     "thought": response_msg.content or "Finalizing response...",
                     "action": "Complete"
-                })
+                }
+                thinking_process.append(step)
+                if progress_callback:
+                    try:
+                        progress_callback({"type": "thinking", **step})
+                    except Exception:
+                        pass
                 break
 
             msg_dict: Dict = {"role": response_msg.role, "content": response_msg.content}
@@ -392,7 +399,7 @@ class QueryProcessor:
             messages.append(msg_dict)
 
             # Record reasoning and intended tool calls
-            thinking_process.append({
+            tool_step = {
                 "step": iteration_count,
                 "thought": response_msg.content or "Analyzing...",
                 "tool_calls": [
@@ -401,7 +408,13 @@ class QueryProcessor:
                         "args": tc.function.arguments
                     } for tc in tool_calls
                 ]
-            })
+            }
+            thinking_process.append(tool_step)
+            if progress_callback:
+                try:
+                    progress_callback({"type": "thinking", **tool_step})
+                except Exception:
+                    pass
 
             for tc in tool_calls:
                 # Parse args once so we can store them for Bug #17
@@ -615,12 +628,13 @@ class AnalyticsAgent:
 
     def run_query(
         self,
-        query:          str,
-        history:        Optional[List[Dict]] = None,
-        max_iterations: Optional[int]        = None,
-        tables:         Optional[List[str]]  = None,
-        verify_only:    bool                 = False,
-        confirmed_sql:  Optional[str]        = None,
+        query:             str,
+        history:           Optional[List[Dict]]      = None,
+        max_iterations:    Optional[int]             = None,
+        tables:            Optional[List[str]]       = None,
+        verify_only:       bool                      = False,
+        confirmed_sql:     Optional[str]             = None,
+        progress_callback: Optional[Callable]        = None,
     ) -> Dict[str, Any]:
         logger.info(f"run_query: {query[:100]} | tables={tables}")
 
@@ -657,7 +671,8 @@ class AnalyticsAgent:
                     result = self._run_confirmed_sql(confirmed_sql, query, messages, max_iterations)
                 else:
                     result = self.query_processor.process(
-                        query, messages, max_iterations, verify_only=verify_only
+                        query, messages, max_iterations, verify_only=verify_only,
+                        progress_callback=progress_callback,
                     )
 
             except VerificationRequired as vr:

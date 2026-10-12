@@ -57,6 +57,86 @@ def _read_df_from_content(content: bytes, filename: str) -> Optional[pd.DataFram
                 return pd.read_csv(io.BytesIO(content), encoding='cp1252', errors='replace')
     elif filename.endswith(('.xls', '.xlsx')):
         return pd.read_excel(io.BytesIO(content))
+    elif filename.lower().endswith('.pdf'):
+        return _read_pdf_to_df(content)
+    elif filename.lower().endswith(('.docx', '.doc')):
+        return _read_docx_to_df(content)
+    return None
+
+
+def _read_pdf_to_df(content: bytes) -> Optional[pd.DataFrame]:
+    """Extract tables and text from a PDF into a DataFrame."""
+    try:
+        import pdfplumber
+    except ImportError:
+        raise ValueError("PDF support requires pdfplumber. Run: pip install pdfplumber")
+
+    rows = []
+    text_rows = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            # Try to extract tables first
+            tables = page.extract_tables()
+            for tbl in tables:
+                if not tbl:
+                    continue
+                headers = tbl[0]
+                if headers and any(h for h in headers):
+                    for data_row in tbl[1:]:
+                        if any(cell for cell in data_row):
+                            row = {"_page": page_num}
+                            for h, cell in zip(headers, data_row):
+                                row[h or f"col_{len(row)}"] = cell
+                            rows.append(row)
+            # If no tables found, extract raw text per page
+            if not tables:
+                text = page.extract_text() or ""
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line:
+                        text_rows.append({"page": page_num, "text": line})
+
+    if rows:
+        return pd.DataFrame(rows)
+    if text_rows:
+        return pd.DataFrame(text_rows)
+    return None
+
+
+def _read_docx_to_df(content: bytes) -> Optional[pd.DataFrame]:
+    """Extract tables and paragraphs from a Word document into a DataFrame."""
+    try:
+        from docx import Document
+    except ImportError:
+        raise ValueError("Word document support requires python-docx. Run: pip install python-docx")
+
+    doc = Document(io.BytesIO(content))
+    rows = []
+    text_rows = []
+
+    # Extract tables
+    for table in doc.tables:
+        if not table.rows:
+            continue
+        headers = [cell.text.strip() for cell in table.rows[0].cells]
+        for row in table.rows[1:]:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                row_dict = dict(zip(headers, cells))
+                rows.append(row_dict)
+
+    if rows:
+        return pd.DataFrame(rows)
+
+    # Fallback: extract paragraphs
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            text_rows.append({"text": text, "style": para.style.name})
+
+    if text_rows:
+        return pd.DataFrame(text_rows)
+
     return None
 
 def _import_file_to_db_sync(uploader, tmp_path, table_name, if_exists):
@@ -279,7 +359,7 @@ async def import_file_to_database(
         df = await run_in_threadpool(_read_df_from_content, content, filename)
         
         if df is None:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel (.csv, .xls, .xlsx)")
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV, Excel (.csv, .xls, .xlsx), PDF (.pdf), or Word (.docx)")
         
         # Validate file is not empty
         if df.empty:
@@ -463,9 +543,9 @@ async def import_multiple_files(
                 filename = file.filename
                 
                 # Validate file type
-                if not filename.endswith(('.csv', '.xls', '.xlsx')):
+                if not filename.lower().endswith(('.csv', '.xls', '.xlsx', '.pdf', '.docx', '.doc')):
                     file_result["status"] = "failed"
-                    file_result["error"] = f"Unsupported file format. Only CSV and Excel files allowed."
+                    file_result["error"] = f"Unsupported file format. Use CSV, Excel, PDF, or Word."
                     results["failed"] += 1
                     results["files"].append(file_result)
                     continue
@@ -564,7 +644,7 @@ async def upload_file(file: UploadFile = File(...), org=Depends(get_current_org)
         df = await run_in_threadpool(_read_df_from_content, content, filename)
         
         if df is None:
-             raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV or Excel.")
+             raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV, Excel, PDF, or Word.")
         
         # Store original row count for reporting
         original_rows = len(df)

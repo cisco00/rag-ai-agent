@@ -66,6 +66,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [streamingSteps, setStreamingSteps] = useState<string[]>([]);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
@@ -213,43 +214,117 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
 
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
+    setStreamingSteps([]);
 
     try {
       let activeSessionId = currentSessionId;
       if (!activeSessionId) {
-        // Auto-create a session if we don't have one active
         const session = await api.post<any>('/chat/sessions', { title: queryText.substring(0, 30) });
         activeSessionId = session.id;
         setCurrentSessionId(session.id);
-        fetchSessions(); // refresh the sidebar
+        fetchSessions();
       }
 
-      const response = await api.post<any>('/query', {
-        query: queryText,
-        session_id: activeSessionId
+      // Use SSE streaming endpoint
+      const baseUrl = (window as any).__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const accessToken = localStorage.getItem('vantage_access_token');
+      const apiKey = localStorage.getItem('vantage_api_key');
+
+      const body = JSON.stringify({ query: queryText, session_id: activeSessionId });
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+      if (apiKey) headers['X-API-KEY'] = apiKey;
+
+      const resp = await fetch(`${baseUrl}/query/stream`, {
+        method: 'POST',
+        headers,
+        body,
       });
+
+      if (!resp.ok || !resp.body) {
+        // Fallback to regular endpoint if streaming fails
+        throw new Error(`Stream failed: ${resp.status}`);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalResult: any = null;
+      const thinkingSteps: any[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          try {
+            const event = JSON.parse(line.slice(5).trim());
+            if (event.type === 'thinking') {
+              thinkingSteps.push(event);
+              // Show a friendly step label
+              const label = event.tool_calls?.length
+                ? `Running: ${event.tool_calls.map((t: any) => t.name).join(', ')}`
+                : event.action === 'Complete'
+                  ? 'Composing answer…'
+                  : 'Analyzing…';
+              setStreamingSteps((prev) => [...new Set([...prev, label])]);
+            } else if (event.type === 'done') {
+              finalResult = event.result;
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+
+      if (!finalResult) {
+        throw new Error('No result received from stream');
+      }
 
       const assistantMessage: Message = {
         role: 'assistant',
-        content: response.answer || 'I have analyzed your data and prepared the results.',
-        visualization: response.visualization,
+        content: finalResult.text || finalResult.response || finalResult.answer || 'I have analyzed your data and prepared the results.',
+        visualization: finalResult.visualization,
         timestamp: new Date(),
         feedback: null,
-        queryId: response.query_id,
-        thinkingProcess: response.thinking_process,
+        queryId: finalResult.query_id,
+        thinkingProcess: finalResult.thinking_process || thinkingSteps,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (err: any) {
-      console.error(err);
-      const errorMessage: Message = {
-        role: 'assistant',
-        content: `Error: ${err.message || 'Failed to process your query.'}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      console.error('Streaming failed, falling back to regular query:', err);
+      // Fallback: call the regular /query endpoint
+      try {
+        let activeSessionId = currentSessionId;
+        const response = await api.post<any>('/query', {
+          query: queryText,
+          session_id: activeSessionId,
+        });
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: response.response || response.answer || 'I have analyzed your data and prepared the results.',
+          visualization: response.visualization,
+          timestamp: new Date(),
+          feedback: null,
+          queryId: response.query_id,
+          thinkingProcess: response.thinking_process,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      } catch (fallbackErr: any) {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: `Error: ${fallbackErr.message || 'Failed to process your query.'}`,
+          timestamp: new Date(),
+        }]);
+      }
     } finally {
       setIsLoading(false);
+      setStreamingSteps([]);
     }
   };
 
@@ -565,11 +640,21 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
 
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-6 shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <Loader2 className="size-5 text-blue-600 animate-spin" />
-                    <span className="text-gray-600">Analyzing your data...</span>
+                <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-4 md:p-6 shadow-sm max-w-sm">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Loader2 className="size-5 text-blue-600 animate-spin shrink-0" />
+                    <span className="text-gray-600 font-medium text-sm">Analyzing your data…</span>
                   </div>
+                  {streamingSteps.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {streamingSteps.map((step, i) => (
+                        <li key={i} className="flex items-center gap-2 text-xs text-gray-500">
+                          <CheckCircle2 className="size-3 text-green-500 shrink-0" />
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             )}
