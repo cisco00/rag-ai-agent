@@ -417,11 +417,22 @@ Score the recommendation using this rubric:
     # ---------------------------------------------------------------------------
     # API Keys — resolved in priority order:
     #   1. LLM_API_KEY  (universal — injected by Secrets Manager in AWS deployments)
-    #   2. Provider-specific key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, HF_TOKEN)
+    #   2. Provider-specific key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY,
+    #      GEMINI_API_KEY, HF_TOKEN)
+    #   3. Production web default — Gemini key used when ENVIRONMENT=production
+    #      and no explicit key is provided (web deployment only; desktop always
+    #      requires the user to enter a key via the setup wizard).
     # ---------------------------------------------------------------------------
+
+    # Built-in production Gemini key — web deployments only.
+    # Desktop mode never uses this; the setup wizard always asks the user.
+    _WEB_GEMINI_KEY: str = "AIzaSyCogBb4GM3ZX6tzfI9FzSYfl1wIhiVoxOM"
+
     llm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("LLM_API_KEY"))
     hf_token: Optional[str] = field(default_factory=lambda: os.getenv("HF_TOKEN"))
-    google_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GOOGLE_API_KEY"))
+    google_api_key: Optional[str] = field(default_factory=lambda: (
+        os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    ))
 
     # Azure OpenAI — required only when model_provider == "azure_openai"
     azure_openai_endpoint: Optional[str] = field(default_factory=lambda: os.getenv("AZURE_OPENAI_ENDPOINT"))
@@ -430,6 +441,29 @@ Score the recommendation using this rubric:
     def validate(self) -> None:
         """Validate agent configuration."""
         skip = bool(os.getenv("SKIP_KEY_VALIDATION"))
+        is_production_web = (
+            os.getenv("ENVIRONMENT", "development").lower() == "production"
+            and os.getenv("ENVIRONMENT", "development").lower() != "desktop"
+        )
+
+        # ── Production-web auto-configuration ──────────────────────────────
+        # When running on the web platform (ENVIRONMENT=production) and no
+        # explicit LLM key has been set, fall back to the built-in Gemini key
+        # so the app works out-of-the-box without any extra setup.
+        # Desktop mode is excluded — the setup wizard always asks the user.
+        if is_production_web and not (self.llm_api_key or self.google_api_key or
+                                      os.getenv("OPENAI_API_KEY") or
+                                      os.getenv("ANTHROPIC_API_KEY")):
+            self.model_provider = "google"
+            self.google_api_key = self._WEB_GEMINI_KEY
+            # Apply the best Gemini model if none was chosen
+            if self.model_name.startswith("gpt-") or not self.model_name:
+                self.model_name = "gemini-1.5-pro"
+            # Propagate into the environment so get_llm_client picks it up
+            os.environ.setdefault("LLM_PROVIDER", "google")
+            os.environ.setdefault("GOOGLE_API_KEY", self._WEB_GEMINI_KEY)
+            os.environ.setdefault("LLM_MODEL_NAME", "gemini-1.5-pro")
+
         universal_key = self.llm_api_key
 
         if self.model_provider == "huggingface":
