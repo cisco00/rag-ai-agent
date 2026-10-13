@@ -76,7 +76,15 @@ def _build_postgres_url() -> str:
     # Full URL takes precedence (Railway, Heroku, Render, etc.)
     if url := os.getenv("DATABASE_URL"):
         # SQLAlchemy 1.4+ rejects the legacy postgres:// scheme
-        return url.replace("postgres://", "postgresql://", 1)
+        url = url.replace("postgres://", "postgresql://", 1)
+        # Railway sometimes emits postgresql+psycopg:// (psycopg v3 dialect).
+        # We ship both psycopg2-binary AND psycopg[binary], so either works;
+        # but if psycopg3 isn't available for any reason, fall back to psycopg2.
+        try:
+            import psycopg  # noqa: F401  (psycopg v3)
+        except ModuleNotFoundError:
+            url = url.replace("postgresql+psycopg://", "postgresql+psycopg2://")
+        return url
 
     host     = os.getenv("POSTGRES_HOST",     "")
     port     = os.getenv("POSTGRES_PORT",     "5432")
