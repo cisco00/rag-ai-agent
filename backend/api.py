@@ -353,6 +353,8 @@ if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
             updates["LLM_PROVIDER"] = body["llm_provider"]
         if body.get("llm_api_key"):
             updates["LLM_API_KEY"] = body["llm_api_key"]
+        if body.get("llm_model_name"):
+            updates["LLM_MODEL_NAME"] = body["llm_model_name"]
         if body.get("azure_endpoint"):
             updates["AZURE_OPENAI_ENDPOINT"] = body["azure_endpoint"]
 
@@ -391,6 +393,23 @@ if os.getenv("ENVIRONMENT", "development").lower() == "desktop":
         return {
             "status": "ok",
             "message": "Configuration saved and applied. No restart needed.",
+        }
+
+    @app.get("/api/desktop/status")
+    async def desktop_status():
+        """Return LLM configuration status so the setup wizard knows whether to show."""
+        has_key = bool(
+            os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("HF_TOKEN")
+        )
+        return {
+            "llm_configured": has_key,
+            "llm_provider": os.getenv("LLM_PROVIDER", ""),
+            "llm_model": os.getenv("LLM_MODEL_NAME", ""),
         }
 
 

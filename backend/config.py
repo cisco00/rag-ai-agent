@@ -171,7 +171,7 @@ class FileUploadConfig:
     max_batch_files: int = 20
     
     # Supported file types
-    supported_extensions: List[str] = field(default_factory=lambda: ['.csv', '.xlsx', '.xls'])
+    supported_extensions: List[str] = field(default_factory=lambda: ['.csv', '.xlsx', '.xls', '.pdf', '.docx', '.doc'])
     
     # Upload settings
     chunk_size: int = 8192  # bytes for streaming uploads

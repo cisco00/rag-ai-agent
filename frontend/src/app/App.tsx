@@ -25,6 +25,7 @@ import { Integrations } from './components/Integrations';
 import { UsageAnalytics } from './components/UsageAnalytics';
 import { UpdateBanner } from './components/UpdateBanner';
 import { TrialBanner } from './components/TrialBanner';
+import { SetupWizard } from './components/SetupWizard';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 

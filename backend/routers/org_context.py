@@ -293,7 +293,7 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
         observability_tags=[f"org:{org.id}"],
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
     def progress_callback(event: dict):
@@ -363,7 +363,7 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
     async def event_generator():
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                event = await asyncio.wait_for(queue.get(), timeout=330.0)
                 if event is None:
                     break
                 yield f"data: {json.dumps(event, default=str)}\n\n"
