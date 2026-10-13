@@ -35,5 +35,8 @@ ENV PORT=8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run migrations then start the application
-CMD ["sh", "-c", "alembic upgrade head && uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run migrations (non-fatal) then start the application.
+# Using || instead of && so a migration failure (e.g. DB unreachable at boot)
+# never prevents the API from starting — the app can still serve health checks
+# and non-DB endpoints while the database becomes available.
+CMD ["sh", "-c", "alembic upgrade head || echo '[WARN] DB migrations failed – the server will still start; check DATABASE_URL and DB connectivity'; uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]

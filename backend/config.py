@@ -57,6 +57,52 @@ import secrets
 load_dotenv()
 
 
+def _encode_db_url_password(url: str) -> str:
+    """
+    Percent-encode special characters in the password portion of a DB URL.
+
+    Providers like Supabase generate passwords that may contain '@', '/', '#',
+    etc.  When those characters appear un-encoded in the URL the host parser
+    mistakes part of the password for the hostname, e.g.:
+
+        failed to resolve host 'Ab@aws-0-eu-west-1.pooler.supabase.com'
+
+    We recover by splitting on the LAST '@' (which is always the
+    credential/host separator) and percent-encoding everything between the
+    first ':' and that final '@'.
+    """
+    from urllib.parse import quote
+
+    try:
+        scheme_end = url.find("://")
+        if scheme_end == -1:
+            return url
+        scheme = url[:scheme_end]
+        rest   = url[scheme_end + 3:]          # everything after '://'
+
+        last_at = rest.rfind("@")
+        if last_at == -1:
+            return url                          # no credentials → nothing to fix
+
+        credentials   = rest[:last_at]
+        host_and_rest = rest[last_at + 1:]
+
+        first_colon = credentials.find(":")
+        if first_colon == -1:
+            return url                          # username-only, no password
+
+        username = credentials[:first_colon]
+        password = credentials[first_colon + 1:]
+        encoded  = quote(password, safe="")     # encode '@', '/', '#', etc.
+
+        if encoded == password:
+            return url                          # nothing needed encoding
+
+        return f"{scheme}://{username}:{encoded}@{host_and_rest}"
+    except Exception:
+        return url                              # never break startup over a URL fix
+
+
 def _build_postgres_url() -> str:
     """
     Build a PostgreSQL connection URL from individual env vars, or fall back to
@@ -77,6 +123,8 @@ def _build_postgres_url() -> str:
     if url := os.getenv("DATABASE_URL"):
         # SQLAlchemy 1.4+ rejects the legacy postgres:// scheme
         url = url.replace("postgres://", "postgresql://", 1)
+        # Fix unencoded special characters in the password (e.g. Supabase URLs)
+        url = _encode_db_url_password(url)
         # Railway sometimes emits postgresql+psycopg:// (psycopg v3 dialect).
         # We ship both psycopg2-binary AND psycopg[binary], so either works;
         # but if psycopg3 isn't available for any reason, fall back to psycopg2.
