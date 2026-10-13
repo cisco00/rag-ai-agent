@@ -9,17 +9,16 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-[deploy.env]
-# Platform signals — do NOT override these in the Railway dashboard
-ENVIRONMENT  = "production"
-LLM_PROVIDER = "google"
-LLM_MODEL_NAME = "gemini-1.5-pro"
-
+# NOTE: Railway does not honour [deploy.env] as env-var defaults.
+# Production defaults (ENVIRONMENT, LLM_PROVIDER, LLM_MODEL_NAME) are
+# set via Dockerfile ENV instructions instead.
+#
 # Set these secrets in Railway's Variables dashboard:
 # JWT_SECRET       = "a-long-random-secret-string"
 # APP_URL          = "https://your-frontend.vercel.app"
 # ENCRYPTION_KEY   = "<fernet-key>"   (generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-# Optional overrides (uncomment to use a different LLM):
-# OPENAI_API_KEY   = "sk-..."          (switches provider to OpenAI automatically)
-# ANTHROPIC_API_KEY= "sk-ant-..."      (switches provider to Anthropic automatically)
-# GOOGLE_API_KEY   = "AIza..."         (override the built-in Gemini key)
+#
+# Optional LLM overrides (dashboard only — override the built-in Gemini key):
+# OPENAI_API_KEY   = "sk-..."        → automatically switches provider to OpenAI
+# ANTHROPIC_API_KEY= "sk-ant-..."    → automatically switches provider to Anthropic
+# GOOGLE_API_KEY   = "AIza..."       → overrides the built-in Gemini key

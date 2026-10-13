@@ -30,6 +30,12 @@ EXPOSE 8000
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
+# Production defaults — these tell the app it is running on the web platform
+# and activate the built-in Gemini key so the LLM works out-of-the-box.
+# Override any of these in the Railway dashboard to use a different provider.
+ENV ENVIRONMENT=production
+ENV LLM_PROVIDER=google
+ENV LLM_MODEL_NAME=gemini-1.5-pro
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
