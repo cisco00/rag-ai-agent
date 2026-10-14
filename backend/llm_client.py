@@ -573,9 +573,10 @@ class GoogleGeminiClient(LLMClient):
                 logger.warning(f"Gemini API rate limit hit. Retrying in {wait_time}s... ({retry_count}/{max_retries})")
                 time.sleep(wait_time)
             except Exception as e:
-                logger.error(f"Gemini API error: {e}")
+                err_str = str(e)
+                logger.error(f"Gemini API error (type={type(e).__name__}): {err_str}", exc_info=True)
                 from exceptions import ModelAPIError
-                raise ModelAPIError(str(e))
+                raise ModelAPIError(err_str)
 
         if response is None:
             raise RuntimeError("Failed to get a response from Gemini API after retries.")

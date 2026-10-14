@@ -142,9 +142,36 @@ class ModelAPIError(AgentError):
     
     def __init__(self, message: str, model_name: str = None):
         self.model_name = model_name
-        user_msg = "The AI service is temporarily unavailable or at its limit. Please try again in 30-60 seconds."
-        if "402" in str(message):
-            user_msg = "The AI provider's usage limit has been reached. Please upgrade your plan or check quota."
+        msg = str(message).lower()
+
+        if any(k in msg for k in ("api_key_invalid", "api key not valid", "invalid api key",
+                                   "401", "403", "permission denied", "unauthenticated",
+                                   "invalid authentication", "key expired")):
+            user_msg = (
+                "The AI API key is invalid or has expired. "
+                "Please check your API key in the settings or contact support."
+            )
+        elif any(k in msg for k in ("429", "quota", "resource_exhausted", "rate limit",
+                                     "too many requests", "resourceexhausted")):
+            user_msg = (
+                "The AI service is at its rate limit. "
+                "Please wait 30-60 seconds and try again."
+            )
+        elif "402" in msg or "billing" in msg or "payment" in msg:
+            user_msg = (
+                "The AI provider's usage quota has been reached. "
+                "Please upgrade your plan or check your billing."
+            )
+        elif any(k in msg for k in ("503", "502", "500", "unavailable", "overloaded")):
+            user_msg = (
+                "The AI service is temporarily overloaded. "
+                "Please try again in a minute."
+            )
+        else:
+            user_msg = (
+                f"The AI service returned an error: {str(message)[:200]}. "
+                "Please try again or check your API key."
+            )
         super().__init__(message, user_message=user_msg)
 
 
