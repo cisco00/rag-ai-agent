@@ -274,6 +274,9 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
               setStreamingSteps((prev) => [...new Set([...prev, label])]);
             } else if (event.type === 'done') {
               finalResult = event.result;
+            } else if (event.type === 'error') {
+              // Surface backend error rather than silently falling back
+              finalResult = { text: event.message || 'An error occurred while processing your query.' };
             }
           } catch {
             // skip malformed lines
@@ -287,7 +290,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
 
       const assistantMessage: Message = {
         role: 'assistant',
-        content: finalResult.text || finalResult.response || finalResult.answer || 'I have analyzed your data and prepared the results.',
+        content: (finalResult.text != null ? finalResult.text : null) ?? finalResult.response ?? finalResult.answer ?? 'I have analyzed your data and prepared the results.',
         visualization: finalResult.visualization,
         timestamp: new Date(),
         feedback: null,
@@ -307,7 +310,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         });
         const assistantMessage: Message = {
           role: 'assistant',
-          content: response.response || response.answer || 'I have analyzed your data and prepared the results.',
+          content: response.text ?? response.response ?? response.answer ?? 'I have analyzed your data and prepared the results.',
           visualization: response.visualization,
           timestamp: new Date(),
           feedback: null,

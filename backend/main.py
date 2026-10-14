@@ -707,9 +707,11 @@ class AnalyticsAgent:
                     "thinking_process":     [],
                 }
 
-            clean_text, viz_data = VisualizationParser.parse(result.text)
+            clean_text, viz_data = VisualizationParser.parse(result.text or "")
             if viz_data and not clean_text:
                 clean_text = "Here is the visual analysis of the results."
+            if not clean_text:
+                clean_text = "The query completed successfully but the model returned an empty response."
 
             # Bug #17: extract table names from (name, args) tuples
             tables_used = self._extract_tables_from_tools(result.tools_used)
