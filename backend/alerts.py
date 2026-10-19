@@ -20,7 +20,7 @@ import httpx
 from sqlalchemy import text
 
 from models import engine as admin_engine
-from email_service import send_email_mock
+from email_service import send_email_mock, send_alert_email
 from logging_config import get_logger
 from validators import URLValidator
 
@@ -66,6 +66,7 @@ def ensure_alert_tables():
             notify_webhook      {text_},
             cooldown_minutes    INTEGER DEFAULT 60,
             last_triggered_at   {text_},
+            timestamp_column    {text_} DEFAULT 'created_at',
             created_by          INTEGER,
             created_at          {text_} NOT NULL
         );
@@ -109,26 +110,29 @@ def create_alert_rule(org_id: int, data: dict) -> dict:
                 INSERT INTO alert_rules
                     (org_id, name, is_active, alert_type, table_name, column_name,
                      aggregate, operator, threshold_value, lookback_hours,
-                     notify_email, notify_webhook, cooldown_minutes, created_by, created_at)
+                     notify_email, notify_webhook, cooldown_minutes,
+                     timestamp_column, created_by, created_at)
                 VALUES
                     (:org_id, :name, 1, :alert_type, :table_name, :column_name,
                      :aggregate, :operator, :threshold_value, :lookback_hours,
-                     :notify_email, :notify_webhook, :cooldown_minutes, :created_by, :now)
+                     :notify_email, :notify_webhook, :cooldown_minutes,
+                     :timestamp_column, :created_by, :now)
             """), {
-                "org_id":          org_id,
-                "name":            data["name"],
-                "alert_type":      data.get("alert_type", "metric"),
-                "table_name":      data.get("table_name"),
-                "column_name":     data.get("column_name"),
-                "aggregate":       data.get("aggregate", "avg"),
-                "operator":        data["operator"],
-                "threshold_value": data.get("threshold_value"),
-                "lookback_hours":  data.get("lookback_hours", 24),
-                "notify_email":    data.get("notify_email"),
-                "notify_webhook":  data.get("notify_webhook"),
-                "cooldown_minutes":data.get("cooldown_minutes", 60),
-                "created_by":      data.get("created_by"),
-                "now":             now,
+                "org_id":           org_id,
+                "name":             data["name"],
+                "alert_type":       data.get("alert_type", "metric"),
+                "table_name":       data.get("table_name"),
+                "column_name":      data.get("column_name"),
+                "aggregate":        data.get("aggregate", "avg"),
+                "operator":         data["operator"],
+                "threshold_value":  data.get("threshold_value"),
+                "lookback_hours":   data.get("lookback_hours", 24),
+                "notify_email":     data.get("notify_email"),
+                "notify_webhook":   data.get("notify_webhook"),
+                "cooldown_minutes": data.get("cooldown_minutes", 60),
+                "timestamp_column": data.get("timestamp_column", "created_at"),
+                "created_by":       data.get("created_by"),
+                "now":              now,
             })
         row = conn.execute(
             text("SELECT * FROM alert_rules WHERE org_id=:org_id ORDER BY created_at DESC LIMIT 1"),
@@ -159,7 +163,7 @@ def update_alert_rule(rule_id: int, org_id: int, updates: dict):
     allowed = {
         "name", "is_active", "table_name", "column_name", "aggregate",
         "operator", "threshold_value", "lookback_hours",
-        "notify_email", "notify_webhook", "cooldown_minutes",
+        "notify_email", "notify_webhook", "cooldown_minutes", "timestamp_column",
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
     if not filtered:
@@ -375,7 +379,20 @@ async def _deliver_alert(rule: dict, current_value: Optional[float], message: st
 
     if rule.get("notify_email"):
         try:
-            send_email_mock(rule["notify_email"], subject, body)
+            metric = (
+                f"{rule.get('aggregate', 'avg').upper()}({rule.get('column_name', '')})"
+                if rule.get("alert_type", "metric") != "freshness"
+                else f"freshness({rule.get('table_name', '')})"
+            )
+            send_alert_email(
+                to_email=rule["notify_email"],
+                rule_name=rule["name"],
+                metric=metric,
+                current_val=current_value or 0,
+                threshold=rule.get("threshold_value") or 0,
+                operator=rule.get("operator", ""),
+                table_name=rule.get("table_name", ""),
+            )
         except Exception as exc:
             delivery_error = f"email: {exc}"
             logger.error(f"[Alerts] Email delivery failed for rule {rule['id']}: {exc}")

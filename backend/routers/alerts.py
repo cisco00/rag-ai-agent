@@ -34,6 +34,11 @@ async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org),
     return {"status": "success", "alert": rule}
 
 
+@router.get("/alerts/history")
+async def alert_history(rule_id: Optional[int] = None, org=Depends(get_current_org)):
+    return {"history": get_alert_history(org.id, rule_id=rule_id)}
+
+
 @router.patch("/alerts/{rule_id}")
 async def update_alert(rule_id: int, request: AlertRuleRequest, org=Depends(get_current_org),
                        user=Depends(require_permission("MANAGE_ALERTS"))):
@@ -81,8 +86,3 @@ async def test_alert(rule_id: int, org=Depends(get_current_org),
         return {"triggered": triggered, "current_value": val, "message": msg}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/alerts/history")
-async def alert_history(rule_id: Optional[int] = None, org=Depends(get_current_org)):
-    return {"history": get_alert_history(org.id, rule_id=rule_id)}

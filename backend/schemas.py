@@ -183,6 +183,7 @@ class AlertRuleRequest(BaseModel):
     notify_email: Optional[str] = None
     notify_webhook: Optional[str] = None
     cooldown_minutes: int = 60
+    timestamp_column: Optional[str] = "created_at"
     created_by: Optional[int] = None
 
 # ── Advanced Analytics ──
