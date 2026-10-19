@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   BarChart3,
   Send,
@@ -40,6 +40,46 @@ interface QueryInterfaceProps {
   initialQuery?: string;
   onQueryProcessed?: () => void;
   user?: { permissions?: string[], id?: number, role?: string };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Wrap every occurrence of `term` in the text with a highlighted <mark> span. */
+function HighlightedText({ text, term }: { text: string; term: string }) {
+  if (!term || !text) return <>{text}</>;
+  const kw = term.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let lo = text.toLowerCase();
+  let idx = lo.indexOf(kw);
+  while (idx !== -1) {
+    if (idx > cursor) parts.push(text.slice(cursor, idx));
+    parts.push(
+      <mark key={idx} className="bg-yellow-200 text-yellow-900 rounded px-0.5 not-italic">
+        {text.slice(idx, idx + term.length)}
+      </mark>
+    );
+    cursor = idx + term.length;
+    idx = lo.indexOf(kw, cursor);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
+
+/** Format a date string as a human-friendly relative time. */
+function relativeTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  const mins   = Math.floor(diffMs / 60_000);
+  const hours  = Math.floor(mins  / 60);
+  const days   = Math.floor(hours / 24);
+  if (mins  <  1) return 'just now';
+  if (mins  < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days  <  7) return `${days}d ago`;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 interface Message {
@@ -95,6 +135,12 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [exampleQueries, setExampleQueries] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
+  // History search
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchSessions();
@@ -160,13 +206,31 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
     try {
       const data = await api.get<any[]>('/chat/sessions');
       setSessions(data);
-      if (data.length > 0 && !currentSessionId) {
-        // We do not auto-load the first session to avoid jarring the user, 
-        // but let's load it if we want to default to the most recent conversation.
-      }
     } catch (err) {
       console.error('Failed to fetch sessions:', err);
     }
+  };
+
+  const handleSessionSearch = (value: string) => {
+    setSessionSearch(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!value.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    searchDebounceRef.current = setTimeout(async () => {
+      try {
+        const results = await api.get<any[]>(`/chat/sessions/search?q=${encodeURIComponent(value.trim())}`);
+        setSearchResults(results || []);
+      } catch (err) {
+        console.error('Session search failed:', err);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
   };
 
   const handleNewChat = async () => {
@@ -513,29 +577,95 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
             <Bookmark className="size-4" />
             Saved ({savedQueries.length})
           </button>
+          {/* Search box */}
+          <div className="relative mt-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={sessionSearch}
+              onChange={(e) => handleSessionSearch(e.target.value)}
+              placeholder="Search history…"
+              className="w-full pl-8 pr-7 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 placeholder-gray-400 transition-all"
+            />
+            {sessionSearch && (
+              <button
+                onClick={() => { setSessionSearch(''); setSearchResults([]); setIsSearching(false); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto w-full pb-4 space-y-1">
-          {sessions.map((session) => (
+          {/* Search state indicator */}
+          {isSearching && (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-gray-400">
+              <Loader2 className="size-3 animate-spin" />
+              Searching…
+            </div>
+          )}
+
+          {/* Search results */}
+          {sessionSearch && !isSearching && searchResults.length === 0 && (
+            <div className="text-center text-sm text-gray-400 px-4 py-8">
+              No results for &ldquo;{sessionSearch}&rdquo;
+            </div>
+          )}
+
+          {/* Result count when searching */}
+          {sessionSearch && !isSearching && searchResults.length > 0 && (
+            <div className="px-4 py-1.5 text-[11px] text-gray-400 font-medium">
+              {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+            </div>
+          )}
+
+          {(sessionSearch ? searchResults : sessions).map((session) => (
             <div
               key={session.id}
               onClick={() => loadSession(session.id)}
-              className={`group flex items-center justify-between px-4 py-3 mx-2 rounded-lg cursor-pointer transition-colors ${currentSessionId === session.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
-                }`}
+              className={`group flex items-start justify-between px-4 py-3 mx-2 rounded-lg cursor-pointer transition-colors ${
+                currentSessionId === session.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+              }`}
             >
-              <div className="flex items-center gap-3 overflow-hidden">
-                <MessageSquare className="size-4 shrink-0 opacity-60" />
-                <span className="truncate text-sm font-medium">{session.title || 'New Chat'}</span>
+              <div className="flex items-start gap-3 overflow-hidden min-w-0">
+                <MessageSquare className="size-4 shrink-0 opacity-60 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="truncate text-sm font-medium block">
+                      <HighlightedText text={session.title || 'New Chat'} term={sessionSearch} />
+                    </span>
+                    {session.updated_at && (
+                      <span className="text-[10px] text-gray-400 shrink-0 ml-1 tabular-nums">
+                        {relativeTime(session.updated_at)}
+                      </span>
+                    )}
+                  </div>
+                  {session.snippet && (
+                    <span className="text-xs text-gray-400 line-clamp-2 mt-0.5 leading-relaxed block">
+                      <HighlightedText text={session.snippet} term={sessionSearch} />
+                    </span>
+                  )}
+                  {sessionSearch && session.match_role === 'title' && (
+                    <span className="inline-block mt-1 text-[10px] bg-blue-50 text-blue-500 font-semibold px-1.5 py-0.5 rounded">
+                      title match
+                    </span>
+                  )}
+                </div>
               </div>
-              <button
-                onClick={(e) => deleteSession(e, session.id)}
-                className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded transition-all"
-                title="Delete Chat"
-              >
-                <Trash2 className="size-4" />
-              </button>
+              {!sessionSearch && (
+                <button
+                  onClick={(e) => deleteSession(e, session.id)}
+                  className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded transition-all shrink-0 mt-0.5"
+                  title="Delete Chat"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              )}
             </div>
           ))}
-          {sessions.length === 0 && (
+
+          {!sessionSearch && sessions.length === 0 && (
             <div className="text-center text-sm text-gray-400 px-4 py-8">
               No chat history yet.
             </div>
