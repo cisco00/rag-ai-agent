@@ -75,6 +75,11 @@ class QueryResponse(BaseModel):
     status: str
     sql_query: Optional[str] = None
     thinking_process: Optional[List[Dict[str, Any]]] = None
+    query_id: Optional[int] = None   # ID in query_history, used for Save/bookmark
+    # Alias 'text' so the frontend can use response.text interchangeably
+    @property
+    def text(self) -> str:
+        return self.response
 
 class FeedbackRequest(BaseModel):
     query: str

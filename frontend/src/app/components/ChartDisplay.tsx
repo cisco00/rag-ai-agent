@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { Download } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie,
   ScatterChart, Scatter, AreaChart, Area,
@@ -84,6 +86,22 @@ function formatValue(v: number): string {
 
 export function ChartDisplay({ visualization }: ChartDisplayProps) {
   const { type, data, title, description, x_label, y_label } = visualization;
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  const handleExportPNG = async () => {
+    if (!chartRef.current) return;
+    try {
+      // Dynamic import so bundle stays light
+      const { toPng } = await import('html-to-image');
+      const dataUrl = await toPng(chartRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 });
+      const link = document.createElement('a');
+      link.download = `${(title || 'chart').replace(/\s+/g, '-').toLowerCase()}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Chart export failed:', err);
+    }
+  };
 
   // Guard against missing/malformed data
   if (!data || typeof data !== 'object') {
@@ -246,11 +264,25 @@ export function ChartDisplay({ visualization }: ChartDisplayProps) {
 
   return (
     <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mt-2">
-      {title && <h3 className="font-semibold text-gray-800 text-sm mb-1">{title}</h3>}
-      {description && !isMultiSeries && (
-        <p className="text-xs text-gray-500 mb-3">{description}</p>
-      )}
-      {renderChart()}
+      <div className="flex items-start justify-between mb-1 gap-2">
+        <div className="min-w-0">
+          {title && <h3 className="font-semibold text-gray-800 text-sm">{title}</h3>}
+          {description && !isMultiSeries && (
+            <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+          )}
+        </div>
+        <button
+          onClick={handleExportPNG}
+          title="Download chart as PNG"
+          className="shrink-0 flex items-center gap-1 px-2 py-1 text-xs text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
+        >
+          <Download className="size-3" />
+          PNG
+        </button>
+      </div>
+      <div ref={chartRef}>
+        {renderChart()}
+      </div>
     </div>
   );
 }

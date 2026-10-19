@@ -183,7 +183,7 @@ class QueryHistory(Base):
     Model for storing query history.
     """
     __tablename__ = 'query_history'
-    
+
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, nullable=False, index=True)
     query = Column(Text, nullable=False)
@@ -192,6 +192,8 @@ class QueryHistory(Base):
     sql_query = Column(Text, nullable=True)
     user_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
+    is_saved = Column(Integer, default=0, nullable=False)   # 0=not saved, 1=saved
+    saved_title = Column(Text, nullable=True)               # optional user-defined title
     
     def __repr__(self):
         return f"<QueryHistory(id={self.id}, org_id={self.org_id})>"
@@ -333,6 +335,14 @@ def init_admin_db():
                     pass
                 try:
                     conn.execute(text("ALTER TABLE query_history ADD COLUMN user_id INTEGER"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE query_history ADD COLUMN is_saved INTEGER DEFAULT 0"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE query_history ADD COLUMN saved_title TEXT"))
                 except Exception:
                     pass
                 try:
@@ -984,4 +994,58 @@ def get_org_history(org_id: int, limit: int = 50, user_id: Optional[int] = None)
             
     except Exception as e:
         logger.error(f"Failed to get query history: {e}", exc_info=True)
+        return []
+
+def save_query(query_id: int, org_id: int, title: Optional[str] = None) -> Optional[QueryHistory]:
+    """Mark a query history entry as saved (bookmarked)."""
+    try:
+        with get_db() as db:
+            item = db.query(QueryHistory).filter(
+                QueryHistory.id == query_id,
+                QueryHistory.org_id == org_id
+            ).first()
+            if not item:
+                return None
+            item.is_saved = 1
+            if title:
+                item.saved_title = title[:200]
+            db.flush()
+            db.refresh(item)
+            db.expunge(item)
+            return item
+    except Exception as e:
+        logger.error(f"Failed to save query {query_id}: {e}", exc_info=True)
+        return None
+
+
+def unsave_query(query_id: int, org_id: int) -> bool:
+    """Remove the saved bookmark from a query history entry."""
+    try:
+        with get_db() as db:
+            updated = db.query(QueryHistory).filter(
+                QueryHistory.id == query_id,
+                QueryHistory.org_id == org_id
+            ).update({"is_saved": 0, "saved_title": None})
+            return updated > 0
+    except Exception as e:
+        logger.error(f"Failed to unsave query {query_id}: {e}", exc_info=True)
+        return False
+
+
+def get_saved_queries(org_id: int, user_id: Optional[int] = None) -> list[QueryHistory]:
+    """Get all saved/bookmarked queries for an organization."""
+    try:
+        with get_db() as db:
+            q = db.query(QueryHistory).filter(
+                QueryHistory.org_id == org_id,
+                QueryHistory.is_saved == 1
+            )
+            if user_id is not None:
+                q = q.filter(QueryHistory.user_id == user_id)
+            items = q.order_by(QueryHistory.created_at.desc()).all()
+            for item in items:
+                db.expunge(item)
+            return items
+    except Exception as e:
+        logger.error(f"Failed to get saved queries: {e}", exc_info=True)
         return []

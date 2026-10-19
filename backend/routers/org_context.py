@@ -8,7 +8,7 @@ import logging
 import time
 from threading import Thread
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 
@@ -16,7 +16,8 @@ from models import (
     get_org_history, create_feedback, create_query_history,
     get_chat_history, add_chat_message, create_shared_report,
     get_shared_report, get_org_shared_reports, ScheduledReport,
-    get_db, update_org_db
+    get_db, update_org_db,
+    save_query, unsave_query, get_saved_queries
 )
 from exceptions import RAGAgentError, ModelAPIError
 from database import DatabaseManager
@@ -218,9 +219,10 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
             confirmed_sql=request.confirmed_sql
         )
         
+        history_id: Optional[int] = None
         if result.get("status") == "success" and not request.verify_only:
              try:
-                create_query_history(
+                h = create_query_history(
                     org_id=org.id,
                     query=request.query,
                     response=result["text"],
@@ -228,6 +230,7 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
                     sql_query=result.get("sql_query"),
                     user_id=user["id"]
                 )
+                history_id = h.id if h else None
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
              # Track AI query activity
@@ -238,7 +241,7 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
                  pass
         elif request.confirmed_sql and result.get("status") == "success":
              try:
-                create_query_history(
+                h = create_query_history(
                     org_id=org.id,
                     query=request.query,
                     response=result["text"],
@@ -246,15 +249,16 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
                     sql_query=request.confirmed_sql,
                     user_id=user["id"]
                 )
+                history_id = h.id if h else None
              except Exception as ex:
                 logger.error(f"Failed to save history: {ex}")
-        
+
         if request.session_id:
             try:
                 response_text = result.get("text", "")
                 visualization = result.get("visualization")
                 thinking_process = result.get("thinking_process")
-                add_chat_message(request.session_id, "assistant", response_text, 
+                add_chat_message(request.session_id, "assistant", response_text,
                                  visualization=visualization, thinking_process=thinking_process)
             except Exception as e:
                 logger.error(f"Failed to save assistant message: {e}")
@@ -265,7 +269,8 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
             visualization=result.get("visualization"),
             status=result.get("status", "success"),
             sql_query=result.get("sql_query"),
-            thinking_process=result.get("thinking_process")
+            thinking_process=result.get("thinking_process"),
+            query_id=history_id,
         )
     finally:
         agent.close()
@@ -325,7 +330,7 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
             # Persist history
             if result.get("status") == "success":
                 try:
-                    create_query_history(
+                    h = create_query_history(
                         org_id=org.id,
                         query=request.query,
                         response=result["text"],
@@ -333,6 +338,8 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
                         sql_query=result.get("sql_query"),
                         user_id=user["id"],
                     )
+                    if h:
+                        result["query_id"] = h.id
                 except Exception as ex:
                     logger.error(f"Failed to save history: {ex}")
 
@@ -587,3 +594,46 @@ async def update_scheduled_report(report_id: int, request: ScheduledReportReques
         db.commit()
         db.refresh(report)
         return {"message": "Report updated successfully", "id": report.id}
+
+
+# ── Saved Queries endpoints ──────────────────────────────────────────────────
+
+@router.get("/saved-queries")
+async def list_saved_queries(org=Depends(get_current_org), user=Depends(get_current_user)):
+    """Return all saved/bookmarked queries for this org."""
+    items = get_saved_queries(org.id, user_id=user["id"] if user else None)
+    return [
+        {
+            "id": item.id,
+            "query": item.query,
+            "response": item.response,
+            "sql_query": item.sql_query,
+            "visualization": item.get_visualization(),
+            "saved_title": item.saved_title,
+            "created_at": item.created_at.isoformat(),
+        }
+        for item in items
+    ]
+
+
+@router.post("/saved-queries/{query_id}")
+async def bookmark_query(
+    query_id: int,
+    body: dict = Body(default={}),
+    org=Depends(get_current_org),
+):
+    """Bookmark (save) a query history entry. Optionally pass {\"title\": \"...\"}."""
+    title = body.get("title") if isinstance(body, dict) else None
+    item = save_query(query_id, org.id, title=title)
+    if not item:
+        raise HTTPException(status_code=404, detail="Query not found")
+    return {"status": "saved", "id": item.id, "saved_title": item.saved_title}
+
+
+@router.delete("/saved-queries/{query_id}")
+async def unbookmark_query(query_id: int, org=Depends(get_current_org)):
+    """Remove the saved bookmark from a query history entry."""
+    ok = unsave_query(query_id, org.id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Query not found")
+    return {"status": "unsaved", "id": query_id}

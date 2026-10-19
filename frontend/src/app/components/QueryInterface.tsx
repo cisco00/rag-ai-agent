@@ -1,31 +1,34 @@
 import { useState, useEffect } from 'react';
-import { 
-  BarChart3, 
-  Send, 
-  Loader2, 
-  Cpu, 
-  Search, 
-  History, 
-  ChevronRight, 
-  Plus, 
-  Settings, 
-  PanelLeftClose, 
-  PanelLeft, 
-  LogOut, 
-  CheckCircle2, 
+import {
+  BarChart3,
+  Send,
+  Loader2,
+  Cpu,
+  Search,
+  History,
+  ChevronRight,
+  Plus,
+  Settings,
+  PanelLeftClose,
+  PanelLeft,
+  LogOut,
+  CheckCircle2,
   AlertCircle,
   Brain,
-  FileDown, 
-  Share2, 
-  Mic, 
-  MicOff, 
-  ThumbsUp, 
-  ThumbsDown, 
-  MessageSquare, 
-  Trash2, 
-  X, 
-  Pin, 
-  Check 
+  FileDown,
+  Share2,
+  Mic,
+  MicOff,
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare,
+  Trash2,
+  X,
+  Pin,
+  Check,
+  Bookmark,
+  BookmarkCheck,
+  Code2,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -51,6 +54,8 @@ interface Message {
   timestamp: Date;
   feedback?: 'up' | 'down' | null;
   queryId?: string;
+  isSaved?: boolean;
+  sqlQuery?: string;
   thinkingProcess?: any[];
 }
 
@@ -79,6 +84,11 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   const [pinningId, setPinningId] = useState<number | null>(null);
   const [pinnedIds, setPinnedIds] = useState<number[]>([]);
 
+  // Saved queries state
+  const [savedQueries, setSavedQueries] = useState<any[]>([]);
+  const [showSavedPanel, setShowSavedPanel] = useState(false);
+  const [showSqlModal, setShowSqlModal] = useState<{sql: string; query: string} | null>(null);
+
   // Chat Session states
   const [sessions, setSessions] = useState<any[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -89,6 +99,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   useEffect(() => {
     fetchSessions();
     fetchSuggestions();
+    fetchSavedQueries();
   }, []);
 
   useEffect(() => {
@@ -102,6 +113,33 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
     setInput(queryText);
     // Use a small timeout to ensure the state update is reflected or just pass it directly
     await executeQuery(queryText);
+  };
+
+  const fetchSavedQueries = async () => {
+    try {
+      const data = await api.get<any[]>('/saved-queries');
+      setSavedQueries(data || []);
+    } catch (err) {
+      console.error('Failed to fetch saved queries:', err);
+    }
+  };
+
+  const toggleSaveQuery = async (msg: Message, userQuery: string) => {
+    if (!msg.queryId) return;
+    const id = parseInt(msg.queryId);
+    try {
+      if (msg.isSaved) {
+        await api.delete(`/saved-queries/${id}`);
+        setMessages(prev => prev.map(m => m === msg ? { ...m, isSaved: false } : m));
+        setSavedQueries(prev => prev.filter(q => q.id !== id));
+      } else {
+        await api.post(`/saved-queries/${id}`, { title: userQuery.slice(0, 100) });
+        setMessages(prev => prev.map(m => m === msg ? { ...m, isSaved: true } : m));
+        fetchSavedQueries();
+      }
+    } catch (err) {
+      console.error('Failed to toggle saved query:', err);
+    }
   };
 
   const fetchSuggestions = async () => {
@@ -295,6 +333,8 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         timestamp: new Date(),
         feedback: null,
         queryId: finalResult.query_id,
+        sqlQuery: finalResult.sql_query,
+        isSaved: false,
         thinkingProcess: finalResult.thinking_process || thinkingSteps,
       };
 
@@ -315,6 +355,8 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
           timestamp: new Date(),
           feedback: null,
           queryId: response.query_id,
+          sqlQuery: response.sql_query,
+          isSaved: false,
           thinkingProcess: response.thinking_process,
         };
         setMessages((prev) => [...prev, assistantMessage]);
@@ -456,13 +498,20 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
             <X className="size-5" />
           </button>
         </div>
-        <div className="p-4">
+        <div className="p-4 flex flex-col gap-2">
           <button
             onClick={handleNewChat}
             className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors font-medium border border-blue-100"
           >
             <Plus className="size-4" />
             New Chat
+          </button>
+          <button
+            onClick={() => setShowSavedPanel(v => !v)}
+            className={`w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg transition-colors font-medium border ${showSavedPanel ? 'bg-yellow-50 text-yellow-700 border-yellow-100' : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border-gray-100'}`}
+          >
+            <Bookmark className="size-4" />
+            Saved ({savedQueries.length})
           </button>
         </div>
         <div className="flex-1 overflow-y-auto w-full pb-4 space-y-1">
@@ -607,6 +656,38 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                         >
                           <Pin className="size-3 md:size-4" />
                           Pin
+                        </button>
+                      )}
+
+                      {/* Save query button */}
+                      {message.queryId && (
+                        <button
+                          onClick={() => {
+                            const userMsg = messages[index - 1];
+                            toggleSaveQuery(message, userMsg?.content || '');
+                          }}
+                          title={message.isSaved ? 'Remove bookmark' : 'Save query'}
+                          className={`flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm rounded-lg transition-colors ${
+                            message.isSaved
+                              ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+                              : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                          }`}
+                        >
+                          {message.isSaved
+                            ? <BookmarkCheck className="size-3 md:size-4" />
+                            : <Bookmark className="size-3 md:size-4" />}
+                          {message.isSaved ? 'Saved' : 'Save'}
+                        </button>
+                      )}
+
+                      {/* Show SQL button */}
+                      {message.sqlQuery && (
+                        <button
+                          onClick={() => setShowSqlModal({ sql: message.sqlQuery!, query: message.content })}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-gray-50 text-gray-500 rounded-lg hover:bg-gray-100 transition-colors"
+                        >
+                          <Code2 className="size-3 md:size-4" />
+                          SQL
                         </button>
                       )}
 
@@ -804,6 +885,93 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
           </div>
         )}
       </div>
+
+      {/* Saved Queries slide-in panel */}
+      {showSavedPanel && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setShowSavedPanel(false)}>
+          <div className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Bookmark className="size-5 text-yellow-600" />
+                <h2 className="font-semibold text-gray-900">Saved Queries</h2>
+              </div>
+              <button onClick={() => setShowSavedPanel(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {savedQueries.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <BookmarkCheck className="size-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No saved queries yet.</p>
+                  <p className="text-xs mt-1">Click <strong>Save</strong> on any answer to bookmark it.</p>
+                </div>
+              ) : (
+                savedQueries.map(sq => (
+                  <div key={sq.id} className="bg-gray-50 rounded-xl p-4 border border-gray-100 hover:border-yellow-200 transition-colors group">
+                    <p className="text-sm font-medium text-gray-800 line-clamp-2 mb-1">
+                      {sq.saved_title || sq.query}
+                    </p>
+                    <p className="text-xs text-gray-400 mb-3">
+                      {new Date(sq.created_at).toLocaleDateString()}
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setInput(sq.query);
+                          setShowSavedPanel(false);
+                        }}
+                        className="flex-1 text-xs py-1.5 px-3 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                      >
+                        Re-run
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await api.delete(`/saved-queries/${sq.id}`);
+                          setSavedQueries(prev => prev.filter(q => q.id !== sq.id));
+                        }}
+                        className="text-xs py-1.5 px-3 bg-red-50 text-red-500 rounded-lg hover:bg-red-100 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SQL Query Viewer Modal */}
+      {showSqlModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowSqlModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <Code2 className="size-5 text-gray-600" />
+                <h2 className="font-semibold text-gray-900">Generated SQL</h2>
+              </div>
+              <button onClick={() => setShowSqlModal(null)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="p-5">
+              <pre className="bg-gray-900 text-green-300 rounded-xl p-4 text-xs md:text-sm overflow-x-auto whitespace-pre-wrap font-mono max-h-80">
+                {showSqlModal.sql}
+              </pre>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(showSqlModal.sql);
+                }}
+                className="mt-3 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Copy to clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
