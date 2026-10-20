@@ -29,6 +29,7 @@ import {
   Bookmark,
   BookmarkCheck,
   Code2,
+  Play,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -96,6 +97,7 @@ interface Message {
   queryId?: string;
   isSaved?: boolean;
   sqlQuery?: string;
+  originalQuery?: string;
   thinkingProcess?: any[];
 }
 
@@ -127,7 +129,9 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   // Saved queries state
   const [savedQueries, setSavedQueries] = useState<any[]>([]);
   const [showSavedPanel, setShowSavedPanel] = useState(false);
-  const [showSqlModal, setShowSqlModal] = useState<{sql: string; query: string} | null>(null);
+  const [showSqlModal, setShowSqlModal] = useState<{sql: string; query: string; messageIndex: number} | null>(null);
+  const [editableSql, setEditableSql] = useState('');
+  const [sqlRunning, setSqlRunning] = useState(false);
 
   // Chat Session states
   const [sessions, setSessions] = useState<any[]>([]);
@@ -398,6 +402,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         feedback: null,
         queryId: finalResult.query_id,
         sqlQuery: finalResult.sql_query,
+        originalQuery: queryText,
         isSaved: false,
         thinkingProcess: finalResult.thinking_process || thinkingSteps,
       };
@@ -420,6 +425,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
           feedback: null,
           queryId: response.query_id,
           sqlQuery: response.sql_query,
+          originalQuery: queryText,
           isSaved: false,
           thinkingProcess: response.thinking_process,
         };
@@ -434,6 +440,40 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
     } finally {
       setIsLoading(false);
       setStreamingSteps([]);
+    }
+  };
+
+  const runCorrectedSql = async () => {
+    if (!showSqlModal || !editableSql.trim() || sqlRunning) return;
+    setSqlRunning(true);
+    try {
+      const response = await api.post<any>('/query', {
+        query: showSqlModal.query,
+        confirmed_sql: editableSql,
+        session_id: currentSessionId,
+      });
+      const updated: Message = {
+        role: 'assistant',
+        content: response.text ?? response.response ?? response.answer ?? 'Query executed with corrected SQL.',
+        visualization: response.visualization,
+        timestamp: new Date(),
+        feedback: null,
+        queryId: response.query_id,
+        sqlQuery: editableSql,
+        originalQuery: showSqlModal.query,
+        isSaved: false,
+        thinkingProcess: response.thinking_process,
+      };
+      setMessages((prev) => {
+        const next = [...prev];
+        next[showSqlModal.messageIndex] = updated;
+        return next;
+      });
+      setShowSqlModal(null);
+    } catch (err: any) {
+      alert(`Failed to run corrected SQL: ${err.message || 'Unknown error'}`);
+    } finally {
+      setSqlRunning(false);
     }
   };
 
@@ -813,7 +853,10 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                       {/* Show SQL button */}
                       {message.sqlQuery && (
                         <button
-                          onClick={() => setShowSqlModal({ sql: message.sqlQuery!, query: message.content })}
+                          onClick={() => {
+                            setEditableSql(message.sqlQuery!);
+                            setShowSqlModal({ sql: message.sqlQuery!, query: message.originalQuery ?? message.content, messageIndex: index });
+                          }}
                           className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-gray-50 text-gray-500 rounded-lg hover:bg-gray-100 transition-colors"
                         >
                           <Code2 className="size-3 md:size-4" />
@@ -1073,31 +1116,56 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         </div>
       )}
 
-      {/* SQL Query Viewer Modal */}
+      {/* SQL Query Editor Modal */}
       {showSqlModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowSqlModal(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !sqlRunning && setShowSqlModal(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b border-gray-100">
               <div className="flex items-center gap-2">
                 <Code2 className="size-5 text-gray-600" />
-                <h2 className="font-semibold text-gray-900">Generated SQL</h2>
+                <h2 className="font-semibold text-gray-900">Edit SQL</h2>
+                <span className="text-xs text-gray-400 font-normal">— tweak and re-run</span>
               </div>
-              <button onClick={() => setShowSqlModal(null)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+              <button onClick={() => !sqlRunning && setShowSqlModal(null)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg" disabled={sqlRunning}>
                 <X className="size-4" />
               </button>
             </div>
-            <div className="p-5">
-              <pre className="bg-gray-900 text-green-300 rounded-xl p-4 text-xs md:text-sm overflow-x-auto whitespace-pre-wrap font-mono max-h-80">
-                {showSqlModal.sql}
-              </pre>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(showSqlModal.sql);
-                }}
-                className="mt-3 text-xs text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                Copy to clipboard
-              </button>
+            <div className="p-5 space-y-3">
+              <textarea
+                value={editableSql}
+                onChange={e => setEditableSql(e.target.value)}
+                spellCheck={false}
+                rows={10}
+                className="w-full bg-gray-900 text-green-300 rounded-xl p-4 text-xs md:text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={sqlRunning}
+              />
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => navigator.clipboard.writeText(editableSql)}
+                  className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  Copy to clipboard
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setEditableSql(showSqlModal.sql)}
+                    className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                    disabled={sqlRunning}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={runCorrectedSql}
+                    disabled={sqlRunning || !editableSql.trim()}
+                    className="flex items-center gap-2 px-4 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {sqlRunning
+                      ? <><Loader2 className="size-3 animate-spin" /> Running…</>
+                      : <><Play className="size-3" /> Run corrected SQL</>
+                    }
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
