@@ -30,6 +30,7 @@ import {
   BookmarkCheck,
   Code2,
   Play,
+  Clock,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -132,6 +133,12 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   const [showSqlModal, setShowSqlModal] = useState<{sql: string; query: string; messageIndex: number} | null>(null);
   const [editableSql, setEditableSql] = useState('');
   const [sqlRunning, setSqlRunning] = useState(false);
+
+  // Schedule report modal state
+  const [showScheduleModal, setShowScheduleModal] = useState<{query: string} | null>(null);
+  const [scheduleForm, setScheduleForm] = useState({ frequency: 'weekly', recipients: '' });
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+  const [scheduleSuccess, setScheduleSuccess] = useState(false);
 
   // Chat Session states
   const [sessions, setSessions] = useState<any[]>([]);
@@ -474,6 +481,23 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
       alert(`Failed to run corrected SQL: ${err.message || 'Unknown error'}`);
     } finally {
       setSqlRunning(false);
+    }
+  };
+
+  const handleSubmitSchedule = async () => {
+    if (!showScheduleModal || !scheduleForm.recipients.trim() || scheduleSubmitting) return;
+    setScheduleSubmitting(true);
+    try {
+      await api.post('/scheduled-reports', {
+        query: showScheduleModal.query,
+        frequency: scheduleForm.frequency,
+        recipients: scheduleForm.recipients,
+      });
+      setScheduleSuccess(true);
+    } catch (err: any) {
+      alert(`Failed to schedule report: ${err.message || 'Unknown error'}`);
+    } finally {
+      setScheduleSubmitting(false);
     }
   };
 
@@ -864,6 +888,24 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                         </button>
                       )}
 
+                      {/* Schedule report button */}
+                      {message.queryId && (
+                        <button
+                          onClick={() => {
+                            const userMsg = messages[index - 1];
+                            const queryText = message.originalQuery ?? userMsg?.content ?? '';
+                            setScheduleForm({ frequency: 'weekly', recipients: '' });
+                            setScheduleSuccess(false);
+                            setShowScheduleModal({ query: queryText });
+                          }}
+                          title="Schedule as recurring report"
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+                        >
+                          <Clock className="size-3 md:size-4" />
+                          Schedule
+                        </button>
+                      )}
+
                       {/* Feedback buttons */}
                       <div className="ml-auto flex items-center gap-1 md:gap-2">
                         <button
@@ -1167,6 +1209,109 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule Report Modal */}
+      {showScheduleModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => { if (!scheduleSubmitting) { setShowScheduleModal(null); setScheduleSuccess(false); } }}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <Clock className="size-5 text-orange-500" />
+                <h2 className="font-semibold text-gray-900">Schedule Report</h2>
+              </div>
+              <button
+                onClick={() => { if (!scheduleSubmitting) { setShowScheduleModal(null); setScheduleSuccess(false); } }}
+                className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
+                disabled={scheduleSubmitting}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {scheduleSuccess ? (
+              <div className="p-8 text-center">
+                <CheckCircle2 className="size-12 text-green-500 mx-auto mb-3" />
+                <h3 className="font-semibold text-gray-900 mb-1">Report Scheduled!</h3>
+                <p className="text-sm text-gray-500 mb-5">
+                  Your report will run on the selected schedule and be emailed to the recipients.
+                </p>
+                <button
+                  onClick={() => { setShowScheduleModal(null); setScheduleSuccess(false); }}
+                  className="px-5 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <div className="p-6 space-y-5">
+                {/* Query preview */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Query</label>
+                  <div className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 line-clamp-3">
+                    {showScheduleModal.query}
+                  </div>
+                </div>
+
+                {/* Frequency */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Frequency</label>
+                  <select
+                    value={scheduleForm.frequency}
+                    onChange={(e) => setScheduleForm(f => ({ ...f, frequency: e.target.value }))}
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+
+                {/* Recipients */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Email Recipients</label>
+                  <input
+                    type="text"
+                    value={scheduleForm.recipients}
+                    onChange={(e) => setScheduleForm(f => ({ ...f, recipients: e.target.value }))}
+                    placeholder="admin@example.com, team@example.com"
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Separate multiple emails with commas</p>
+                </div>
+
+                {/* Footer */}
+                <div className="flex justify-end gap-3 pt-1">
+                  <button
+                    onClick={() => { setShowScheduleModal(null); setScheduleSuccess(false); }}
+                    disabled={scheduleSubmitting}
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmitSchedule}
+                    disabled={scheduleSubmitting || !scheduleForm.recipients.trim()}
+                    className="flex items-center gap-2 px-5 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                  >
+                    {scheduleSubmitting
+                      ? <><Loader2 className="size-3.5 animate-spin" /> Scheduling…</>
+                      : <><Clock className="size-3.5" /> Schedule</>
+                    }
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
