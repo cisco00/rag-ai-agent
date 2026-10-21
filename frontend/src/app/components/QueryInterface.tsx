@@ -31,11 +31,60 @@ import {
   Code2,
   Play,
   Clock,
+  Table2,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
 import { ExportModal } from './ExportModal';
+
+// ── CSV / Excel download helpers ──────────────────────────────────────────────
+
+/** Convert any visualization payload to a flat row array (mirrors ChartDisplay logic) */
+function vizToRows(viz: any): Array<Record<string, any>> {
+  if (!viz?.data) return [];
+  const d = viz.data;
+  // datasets array  { labels, datasets: [{label, values}] }
+  if (d.datasets?.length) {
+    const labels = d.labels || d.datasets[0].values.map((_: any, i: number) => String(i));
+    return labels.map((label: string, i: number) => {
+      const row: Record<string, any> = { name: label };
+      d.datasets.forEach((ds: any) => { row[ds.label] = ds.values?.[i] ?? ''; });
+      return row;
+    });
+  }
+  // scatter  { x, y }
+  if (d.x && d.y) return d.x.map((xv: number, i: number) => ({ x: xv, y: d.y[i] ?? '' }));
+  // simple  { labels, values }
+  const labels: string[] = d.labels || [];
+  const values: number[] = d.values || [];
+  return labels.map((label: string, i: number) => ({ name: label, value: values[i] ?? '' }));
+}
+
+function downloadCSV(viz: any, filename = 'data') {
+  const rows = vizToRows(viz);
+  if (!rows.length) return;
+  const cols = Object.keys(rows[0]);
+  const escape = (v: any) => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `${filename}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+async function downloadExcel(viz: any, title = 'data') {
+  const rows = vizToRows(viz);
+  if (!rows.length) return;
+  const XLSX = await import('xlsx');
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Data');
+  XLSX.writeFile(wb, `${title}.xlsx`);
+}
 
 interface QueryInterfaceProps {
   apiKey: string;
@@ -844,6 +893,28 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                           >
                             <FileDown className="size-3 md:size-4" />
                             Export
+                          </button>
+                          <button
+                            onClick={() => {
+                              const userMsg = messages.slice(0, index).reverse().find(m => m.role === 'user');
+                              downloadCSV(message.visualization, (userMsg?.content || 'data').slice(0, 40).replace(/[^a-z0-9]/gi, '-'));
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 transition-colors"
+                            title="Download raw data as CSV"
+                          >
+                            <Table2 className="size-3 md:size-4" />
+                            CSV
+                          </button>
+                          <button
+                            onClick={() => {
+                              const userMsg = messages.slice(0, index).reverse().find(m => m.role === 'user');
+                              downloadExcel(message.visualization, (userMsg?.content || 'data').slice(0, 40).replace(/[^a-z0-9]/gi, '-'));
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors"
+                            title="Download raw data as Excel spreadsheet"
+                          >
+                            <FileDown className="size-3 md:size-4" />
+                            Excel
                           </button>
                         </>
                       )}

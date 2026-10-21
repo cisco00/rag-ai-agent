@@ -25,7 +25,8 @@ from dependencies import (
     require_permission
 )
 from auth import get_current_user
-from models import get_org_history
+from models import get_org_history, get_db, QueryHistory
+from typing import Optional
 from schemas import (
     ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse
 )
@@ -221,11 +222,59 @@ async def get_suggested_queries(org=Depends(get_current_org)):
 
 
 @router.get("/analytics/history")
-async def get_history(limit: int = 50, org=Depends(get_current_org), user=Depends(get_current_user)):
-    """Get past queries for the organization (filtered by user)"""
+async def get_history(
+    page: int = 1,
+    per_page: int = 20,
+    search: Optional[str] = None,
+    saved_only: bool = False,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """
+    Paginated, searchable query history for the organisation.
+
+    Query params:
+      page       – 1-based page number (default 1)
+      per_page   – rows per page, max 100 (default 20)
+      search     – case-insensitive substring filter on the query text
+      saved_only – if true, return only bookmarked queries
+    """
+    per_page = min(per_page, 100)
+    offset = (max(page, 1) - 1) * per_page
+
     try:
-        history = get_org_history(org.id, limit, user_id=user["id"])
-        return {"history": history}
+        with get_db() as db:
+            q = db.query(QueryHistory).filter(QueryHistory.org_id == org.id)
+            if user and user.get("id"):
+                q = q.filter(QueryHistory.user_id == user["id"])
+            if saved_only:
+                q = q.filter(QueryHistory.is_saved == 1)
+            if search:
+                term = f"%{search}%"
+                q = q.filter(QueryHistory.query.ilike(term))
+
+            total = q.count()
+            items = q.order_by(QueryHistory.created_at.desc()).offset(offset).limit(per_page).all()
+
+            return {
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "pages": max(1, -(-total // per_page)),  # ceiling div
+                "history": [
+                    {
+                        "id": h.id,
+                        "query": h.query,
+                        "response": h.response,
+                        "visualization": json.loads(h.visualization) if h.visualization else None,
+                        "sql_query": h.sql_query,
+                        "created_at": h.created_at.isoformat(),
+                        "is_saved": bool(h.is_saved),
+                        "saved_title": h.saved_title,
+                    }
+                    for h in items
+                ],
+            }
     except Exception as e:
-        logger.error(f"Error fetching history: {e}")
+        logger.error(f"Error fetching history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch history")

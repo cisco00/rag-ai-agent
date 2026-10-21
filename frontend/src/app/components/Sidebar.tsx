@@ -15,6 +15,7 @@ import {
   Bell,
   LayoutGrid,
   BarChart2,
+  History,
   LogOut,
   User as UserIcon,
   UserPlus,
@@ -90,6 +91,7 @@ export function Sidebar({
   ].filter(item => !item.hide);
 
   const adminItems = [
+    { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
     { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },

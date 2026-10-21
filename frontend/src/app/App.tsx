@@ -27,6 +27,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { TrialBanner } from './components/TrialBanner';
 import { SetupWizard } from './components/SetupWizard';
 import { SharedView } from './components/SharedView';
+import { QueryHistoryBrowser } from './components/QueryHistoryBrowser';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
@@ -53,7 +54,8 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
-  'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing';
+  'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
+  'history';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -436,6 +438,14 @@ export default function App() {
           {currentView === 'boards' && <DashboardsView apiKey={apiKey!} user={user} />}
           {currentView === 'profiler' && <DataProfiler apiKey={apiKey!} />}
           {currentView === 'about' && <AboutPage />}
+          {currentView === 'history' && (
+            <QueryHistoryBrowser
+              onRerunQuery={(query) => {
+                setInitialQuery(query);
+                setCurrentView('query');
+              }}
+            />
+          )}
           {currentView === 'admin' && (!desktop || !license || license.hasFeature('admin_panel') ? <AdminPanel /> : <FeatureLockedMessage feature="Admin Panel" />)}
           {currentView === 'branding' && (
             <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
