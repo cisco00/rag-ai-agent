@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, Copy, Trash2, Edit2, Zap, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Database, Copy, Trash2, Edit2, Zap, AlertCircle, CheckCircle2, RefreshCw, BookOpen, ChevronDown, ChevronUp, Sparkles, Save, RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DataManagementProps {
@@ -22,6 +22,14 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
     const [editingCell, setEditingCell] = useState<{ rowId: string, column: string } | null>(null);
     const [editValue, setEditValue] = useState<string>('');
 
+    // Column Descriptions State
+    const [colDescs, setColDescs] = useState<{ table_name: string; column_name: string; description: string; generated_by: string }[]>([]);
+    const [showColDescs, setShowColDescs] = useState(false);
+    const [editingDesc, setEditingDesc] = useState<{ col: string; val: string } | null>(null);
+    const [savingDesc, setSavingDesc] = useState(false);
+    const [regenerating, setRegenerating] = useState(false);
+    const [colDescsMsg, setColDescsMsg] = useState<string | null>(null);
+
     // Fill Missing State
     const [showFillModal, setShowFillModal] = useState(false);
     const [fillConfig, setFillConfig] = useState({
@@ -37,10 +45,59 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
     useEffect(() => {
         if (selectedTable) {
             fetchTablePreview(selectedTable);
+            fetchColDescs(selectedTable);
         } else {
             setTableData(null);
+            setColDescs([]);
         }
     }, [selectedTable]);
+
+    const fetchColDescs = useCallback(async (tableName: string) => {
+        try {
+            const resp = await api.get<any>(`/column-descriptions?table_name=${encodeURIComponent(tableName)}`);
+            setColDescs(resp || []);
+        } catch {
+            setColDescs([]);
+        }
+    }, []);
+
+    const handleSaveDesc = async () => {
+        if (!editingDesc || !selectedTable || savingDesc) return;
+        setSavingDesc(true);
+        setColDescsMsg(null);
+        try {
+            await api.put(`/column-descriptions/${encodeURIComponent(selectedTable)}/${encodeURIComponent(editingDesc.col)}`, {
+                description: editingDesc.val,
+            });
+            setColDescs((prev: typeof colDescs) => prev.map((d: typeof colDescs[0]) =>
+                d.column_name === editingDesc.col
+                    ? { ...d, description: editingDesc.val, generated_by: 'manual' }
+                    : d
+            ));
+            setEditingDesc(null);
+            setColDescsMsg('Description saved.');
+        } catch (err: any) {
+            setColDescsMsg(`Save failed: ${err.message || 'Unknown error'}`);
+        } finally {
+            setSavingDesc(false);
+        }
+    };
+
+    const handleRegenerate = async () => {
+        if (!selectedTable || regenerating) return;
+        setRegenerating(true);
+        setColDescsMsg(null);
+        try {
+            await api.post(`/column-descriptions/${encodeURIComponent(selectedTable)}/regenerate`, {});
+            setColDescsMsg('Re-generation started — descriptions will update in a few seconds.');
+            // Poll once after 4 s to pick up new descriptions
+            setTimeout(() => fetchColDescs(selectedTable), 4000);
+        } catch (err: any) {
+            setColDescsMsg(`Regenerate failed: ${err.message || 'Unknown error'}`);
+        } finally {
+            setRegenerating(false);
+        }
+    };
 
     const fetchTables = useCallback(async () => {
         try {
@@ -317,6 +374,114 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
                             )}
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Column Descriptions Panel */}
+            {selectedTable && (
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <button
+                        onClick={() => setShowColDescs(v => !v)}
+                        className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
+                    >
+                        <div className="flex items-center gap-3">
+                            <BookOpen className="size-5 text-purple-600" />
+                            <span className="font-semibold text-gray-900">Column Descriptions</span>
+                            {colDescs.length > 0 && (
+                                <span className="bg-purple-100 text-purple-700 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                    {colDescs.length} column{colDescs.length !== 1 ? 's' : ''}
+                                </span>
+                            )}
+                        </div>
+                        {showColDescs ? <ChevronUp className="size-4 text-gray-400" /> : <ChevronDown className="size-4 text-gray-400" />}
+                    </button>
+
+                    {showColDescs && (
+                        <div className="border-t border-gray-100">
+                            <div className="px-6 py-3 flex items-center justify-between bg-gray-50/50">
+                                <p className="text-xs text-gray-500">
+                                    AI-generated descriptions help the assistant understand ambiguous column names.
+                                    Click any description to edit it.
+                                </p>
+                                <button
+                                    onClick={handleRegenerate}
+                                    disabled={regenerating}
+                                    className="flex items-center gap-1.5 text-xs font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50 transition-colors ml-4 shrink-0"
+                                >
+                                    {regenerating
+                                        ? <><RefreshCw className="size-3.5 animate-spin" /> Regenerating…</>
+                                        : <><Sparkles className="size-3.5" /> Re-generate all</>
+                                    }
+                                </button>
+                            </div>
+
+                            {colDescsMsg && (
+                                <div className="mx-6 mt-3 px-3 py-2 bg-blue-50 text-blue-700 text-xs rounded-lg">
+                                    {colDescsMsg}
+                                </div>
+                            )}
+
+                            {colDescs.length === 0 ? (
+                                <div className="px-6 py-8 text-center text-gray-400 text-sm">
+                                    No descriptions yet — they are generated automatically after import,
+                                    or click <span className="font-medium text-purple-600">Re-generate all</span>.
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-gray-100">
+                                    {colDescs.map(({ column_name, description, generated_by }: { column_name: string; description: string; generated_by: string }) => (
+                                        <div key={column_name} className="px-6 py-3 flex items-start gap-4 group">
+                                            <div className="w-48 shrink-0 pt-0.5">
+                                                <span className="text-sm font-mono font-medium text-gray-800">{column_name}</span>
+                                                <span className={`ml-2 text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                                                    generated_by === 'manual'
+                                                        ? 'bg-green-100 text-green-700'
+                                                        : 'bg-purple-100 text-purple-600'
+                                                }`}>
+                                                    {generated_by === 'manual' ? 'edited' : 'AI'}
+                                                </span>
+                                            </div>
+
+                                            {editingDesc?.col === column_name ? (
+                                                <div className="flex-1 flex items-center gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={editingDesc.val}
+                                                        onChange={e => setEditingDesc({ col: column_name, val: e.target.value })}
+                                                        onKeyDown={e => { if (e.key === 'Enter') handleSaveDesc(); if (e.key === 'Escape') setEditingDesc(null); }}
+                                                        autoFocus
+                                                        className="flex-1 px-3 py-1.5 text-sm border border-purple-400 rounded-lg focus:ring-2 focus:ring-purple-300 outline-none"
+                                                    />
+                                                    <button
+                                                        onClick={handleSaveDesc}
+                                                        disabled={savingDesc}
+                                                        className="p-1.5 text-purple-600 hover:text-purple-700 disabled:opacity-50"
+                                                        title="Save"
+                                                    >
+                                                        <Save className="size-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setEditingDesc(null)}
+                                                        className="p-1.5 text-gray-400 hover:text-gray-600"
+                                                        title="Cancel"
+                                                    >
+                                                        <RotateCcw className="size-4" />
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    onClick={() => { setEditingDesc({ col: column_name, val: description }); setColDescsMsg(null); }}
+                                                    className="flex-1 text-left text-sm text-gray-600 hover:text-gray-900 py-1 px-2 -mx-2 rounded hover:bg-gray-50 transition-colors group-hover:text-gray-700"
+                                                    title="Click to edit"
+                                                >
+                                                    {description || <em className="text-gray-300">no description</em>}
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 
