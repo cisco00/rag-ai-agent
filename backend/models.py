@@ -246,9 +246,29 @@ class IntegrationCredential(Base):
         return f"<IntegrationCredential(org_id={self.org_id}, provider='{self.provider}')>"
 
 
+class ColumnDescription(Base):
+    """
+    AI-generated (or manually edited) descriptions for table columns.
+    Injected into the LLM system prompt to improve answer accuracy.
+    """
+    __tablename__ = 'column_descriptions'
+
+    id           = Column(Integer, primary_key=True)
+    org_id       = Column(Integer, nullable=False, index=True)
+    table_name   = Column(String(255), nullable=False, index=True)
+    column_name  = Column(String(255), nullable=False)
+    description  = Column(Text, nullable=False)
+    sample_values = Column(Text, nullable=True)   # JSON array of up to 5 sample values
+    generated_by = Column(String(20), default='ai')  # 'ai' or 'manual'
+    generated_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<ColumnDescription(org={self.org_id}, table='{self.table_name}', col='{self.column_name}')>"
+
+
 class ChatSession(Base):
     __tablename__ = 'chat_sessions'
-    
+
     id = Column(String(32), primary_key=True)
     org_id = Column(Integer, nullable=False, index=True)
     title = Column(String(255), nullable=True)
@@ -380,6 +400,28 @@ def init_admin_db():
                 except Exception as e:
                     logger.warning(f"Migration: integration_credentials error: {e}")
                     
+                # column_descriptions table
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS column_descriptions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            org_id INTEGER NOT NULL,
+                            table_name VARCHAR(255) NOT NULL,
+                            column_name VARCHAR(255) NOT NULL,
+                            description TEXT NOT NULL,
+                            sample_values TEXT,
+                            generated_by VARCHAR(20) DEFAULT 'ai',
+                            generated_at DATETIME NOT NULL
+                        )
+                    """))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_col_desc_org_table "
+                        "ON column_descriptions (org_id, table_name)"
+                    ))
+                    logger.info("Migration: column_descriptions table ready")
+                except Exception as e:
+                    logger.warning(f"Migration: column_descriptions error: {e}")
+
         logger.info("Admin database tables created and migrations applied")
     except Exception as e:
         logger.error(f"Failed to create admin database tables: {e}", exc_info=True)

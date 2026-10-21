@@ -8,7 +8,7 @@ import logging
 import time
 from threading import Thread
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Body
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 
@@ -17,7 +17,8 @@ from models import (
     get_chat_history, add_chat_message, create_shared_report,
     get_shared_report, get_org_shared_reports, ScheduledReport,
     get_db, update_org_db,
-    save_query, unsave_query, get_saved_queries
+    save_query, unsave_query, get_saved_queries,
+    ColumnDescription,
 )
 from exceptions import RAGAgentError, ModelAPIError
 from database import DatabaseManager
@@ -183,20 +184,30 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
         raise HTTPException(status_code=400, detail="No database configured.")
     
     schema_summary = get_cached_schema_summary(conn_str)
-    
+
     from config import get_agent_config
     config = get_agent_config()
     ctx_manager = OrgContextManager(org.id)
     enriched_prompt = ctx_manager.inject_into_prompt(config.system_prompt)
-    
+
+    # Append AI-generated column descriptions to the system prompt
+    try:
+        from column_describer import get_descriptions_for_schema, build_descriptions_block
+        col_descs = get_descriptions_for_schema(org.id)
+        desc_block = build_descriptions_block(col_descs)
+        if desc_block:
+            enriched_prompt = enriched_prompt + "\n\n" + desc_block
+    except Exception as _cd_err:
+        logger.warning("column_describer inject failed: %s", _cd_err)
+
     from main import AnalyticsAgent
     agent = AnalyticsAgent(
-        connection_string=conn_str, 
+        connection_string=conn_str,
         schema_summary=schema_summary,
         system_prompt_override=enriched_prompt,
         observability_tags=[f"org:{org.id}"]
     )
-    
+
     if request.session_id:
         try:
             add_chat_message(request.session_id, "user", request.query)
@@ -289,6 +300,16 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
     config = get_agent_config()
     ctx_manager = OrgContextManager(org.id)
     enriched_prompt = ctx_manager.inject_into_prompt(config.system_prompt)
+
+    # Append AI-generated column descriptions to the system prompt
+    try:
+        from column_describer import get_descriptions_for_schema, build_descriptions_block
+        col_descs = get_descriptions_for_schema(org.id)
+        desc_block = build_descriptions_block(col_descs)
+        if desc_block:
+            enriched_prompt = enriched_prompt + "\n\n" + desc_block
+    except Exception as _cd_err:
+        logger.warning("column_describer inject failed: %s", _cd_err)
 
     from main import AnalyticsAgent
     agent = AnalyticsAgent(
@@ -637,3 +658,74 @@ async def unbookmark_query(query_id: int, org=Depends(get_current_org)):
     if not ok:
         raise HTTPException(status_code=404, detail="Query not found")
     return {"status": "unsaved", "id": query_id}
+
+
+# ── Column Descriptions ───────────────────────────────────────────────────────
+
+@router.get("/column-descriptions")
+async def list_column_descriptions(
+    table_name: Optional[str] = None,
+    org=Depends(get_current_org),
+):
+    """Return AI-generated column descriptions for this org, optionally filtered by table."""
+    from column_describer import get_descriptions_for_schema
+    tables = [table_name] if table_name else None
+    descs = get_descriptions_for_schema(org.id, tables)
+    # Flatten to a list for easy consumption by the frontend
+    result = []
+    for tbl, cols in descs.items():
+        for col, desc in cols.items():
+            result.append({"table_name": tbl, "column_name": col, "description": desc})
+    return result
+
+
+@router.put("/column-descriptions/{table_name}/{column_name}")
+async def update_column_description(
+    table_name: str,
+    column_name: str,
+    body: dict = Body(...),
+    org=Depends(get_current_org),
+):
+    """Manually update a column description (marks it as human-edited)."""
+    description = body.get("description", "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="description is required")
+    from datetime import datetime as _dt
+    with get_db() as db:
+        row = db.query(ColumnDescription).filter_by(
+            org_id=org.id,
+            table_name=table_name,
+            column_name=column_name,
+        ).first()
+        if row:
+            row.description  = description
+            row.generated_by = "manual"
+            row.generated_at = _dt.utcnow()
+        else:
+            db.add(ColumnDescription(
+                org_id=org.id,
+                table_name=table_name,
+                column_name=column_name,
+                description=description,
+                generated_by="manual",
+                generated_at=_dt.utcnow(),
+            ))
+    return {"status": "updated", "table_name": table_name, "column_name": column_name}
+
+
+@router.post("/column-descriptions/{table_name}/regenerate")
+async def regenerate_column_descriptions(
+    table_name: str,
+    background_tasks: BackgroundTasks,
+    org=Depends(get_current_org),
+    user=Depends(require_permission("WRITE_DATA")),
+):
+    """Re-generate AI descriptions for all columns in the given table."""
+    from dependencies import get_org_connection_string
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+    from column_describer import generate_and_store_descriptions
+    background_tasks.add_task(generate_and_store_descriptions, org.id, table_name, conn_str, True)
+    return {"status": "queued", "table_name": table_name}
+

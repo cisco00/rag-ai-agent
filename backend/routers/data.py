@@ -8,7 +8,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timedelta
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Header, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, UploadFile, File, Form, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -146,6 +146,14 @@ def _import_file_to_db_sync(uploader, tmp_path, table_name, if_exists):
         table_name=table_name,
         if_exists=if_exists
     )
+
+def _enqueue_column_descriptions(background_tasks: "BackgroundTasks", org_id: int, table_name: str, conn_str: str):
+    """Fire-and-forget: generate AI column descriptions after a successful import."""
+    try:
+        from column_describer import generate_and_store_descriptions
+        background_tasks.add_task(generate_and_store_descriptions, org_id, table_name, conn_str)
+    except Exception as exc:
+        logger.warning("Failed to enqueue column description generation: %s", exc)
 
 def clean_dataframe(df):
     """Clean dataframe by handling missing and null values"""
@@ -321,7 +329,8 @@ Vantage AI Team
 
 @router.post("/import")
 async def import_file_to_database(
-    file: UploadFile = File(...), 
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
     table_name: Optional[str] = Form(None),
     if_exists: str = Form('replace'),
     cleaning_config: Optional[str] = Form(None),
@@ -418,10 +427,13 @@ async def import_file_to_database(
 
             if result['success']:
                 invalidate_schema_cache(org.db_connection_string)
+                final_table = result['table_name']
+                # Kick off AI column description generation in the background
+                _enqueue_column_descriptions(background_tasks, org.id, final_table, org.db_connection_string)
                 res_data = {
                     "status": "success",
                     "message": f"File '{filename}' imported successfully",
-                    "table_name": result['table_name'],
+                    "table_name": final_table,
                     "rows_imported": result['rows_imported'],
                     "columns": result['columns'],
                     "column_names": result['column_names'],
@@ -456,6 +468,7 @@ async def import_file_to_database(
 
 @router.post("/import/batch")
 async def import_multiple_files(
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     table_prefix: Optional[str] = None,
     if_exists: str = 'replace',
@@ -591,6 +604,7 @@ async def import_multiple_files(
                     
                     if result['success']:
                         invalidate_schema_cache(org.db_connection_string)
+                        _enqueue_column_descriptions(background_tasks, org.id, result['table_name'], org.db_connection_string)
                         file_result["status"] = "success"
                         file_result["table_name"] = result['table_name']
                         file_result["rows_imported"] = result['rows_imported']
@@ -825,7 +839,7 @@ async def list_data_sources(org=Depends(get_current_org)):
 
 
 @router.post("/import/api")
-async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org),
+async def import_from_api(background_tasks: BackgroundTasks, request: ApiImportRequest, org=Depends(get_current_org),
                           user=Depends(require_permission("WRITE_DATA"))):
     """Import data from an external API."""
     import httpx
@@ -881,6 +895,7 @@ async def import_from_api(request: ApiImportRequest, org=Depends(get_current_org
         
         if success:
             invalidate_schema_cache(org.db_connection_string)
+            _enqueue_column_descriptions(background_tasks, org.id, request.table_name, org.db_connection_string)
             # Register DataSource using CRUD function
             source = create_data_source(
                 org_id=org.id,
