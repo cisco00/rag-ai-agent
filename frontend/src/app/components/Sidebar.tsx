@@ -34,6 +34,7 @@ interface SidebarProps {
     logo_url: string;
   };
   unseenInsights?: number;
+  unseenAlerts?: number;
   user?: {
     display_name: string;
     role: string;
@@ -53,6 +54,7 @@ export function Sidebar({
   isConfigured,
   branding,
   unseenInsights = 0,
+  unseenAlerts = 0,
   user,
   onLogout,
   onClose,
@@ -65,7 +67,7 @@ export function Sidebar({
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'insights', label: 'Insights', icon: Lightbulb, badge: unseenInsights > 0 ? unseenInsights : undefined },
     { id: 'boards', label: 'Dashboards', icon: LayoutGrid, disabled: !isConfigured },
-    { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured },
+    { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured, badge: unseenAlerts > 0 ? unseenAlerts : undefined },
     { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
   ];

@@ -91,6 +91,7 @@ export default function App() {
 
   const [isConfigured, setIsConfigured] = useState(false);
   const [unseenCount, setUnseenCount] = useState(0);
+  const [unseenAlertCount, setUnseenAlertCount] = useState(0);
   const [branding, setBranding] = useState<Branding>(() => {
     try {
       const saved = localStorage.getItem('vantage_branding');
@@ -235,6 +236,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
+  // Poll unseen alert count every 60s
+  useEffect(() => {
+    if (!isAuthenticated || !isConfigured) return;
+    const fetchAlertCount = () =>
+      api.get<{ count: number }>('/alerts/unseen-count')
+        .then((data) => setUnseenAlertCount(data.count ?? 0))
+        .catch(() => { });
+    fetchAlertCount();
+    const interval = setInterval(fetchAlertCount, 60_000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, isConfigured]);
+
   // Fetch update status for sidebar version label (superuser only)
   useEffect(() => {
     if (!isAuthenticated || !user?.is_superuser) return;
@@ -329,10 +342,16 @@ export default function App() {
           onNavigate={(view) => {
             setCurrentView(view as View);
             setIsSidebarOpen(false); // Close sidebar on navigation on mobile
+            // Mark alert history as seen when the user opens the Alerts view
+            if (view === 'alerts' && unseenAlertCount > 0) {
+              api.post('/alerts/history/mark-seen').catch(() => { });
+              setUnseenAlertCount(0);
+            }
           }}
           isConfigured={isConfigured}
           branding={branding}
           unseenInsights={unseenCount}
+          unseenAlerts={unseenAlertCount}
           user={user}
           onLogout={handleLogout}
           onClose={() => setIsSidebarOpen(false)}

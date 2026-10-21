@@ -81,7 +81,8 @@ def ensure_alert_tables():
             threshold_value REAL,
             message         {text_},
             delivered       INTEGER DEFAULT 0,
-            delivery_error  {text_}
+            delivery_error  {text_},
+            is_seen         INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS ix_alert_history_rule_id ON alert_history (rule_id);
 
@@ -98,6 +99,17 @@ def ensure_alert_tables():
         with conn.begin():
             for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
+
+        # Inline migration: add is_seen column to alert_history if missing
+        try:
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(alert_history)")).fetchall()]
+            if "is_seen" not in cols:
+                conn.execute(text("ALTER TABLE alert_history ADD COLUMN is_seen INTEGER DEFAULT 0"))
+                conn.commit()
+                logger.info("[Alerts] Migrated alert_history: added is_seen column")
+        except Exception:
+            # PostgreSQL doesn't support PRAGMA; column was created above
+            pass
 
 
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -185,6 +197,27 @@ def delete_alert_rule(rule_id: int, org_id: int):
                 text("DELETE FROM alert_rules WHERE id=:id AND org_id=:org_id"),
                 {"id": rule_id, "org_id": org_id}
             )
+
+
+def get_unseen_alert_count(org_id: int) -> int:
+    """Return the count of alert_history rows not yet seen by the org's users."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT COUNT(*) FROM alert_history WHERE org_id=:org_id AND is_seen=0"),
+            {"org_id": org_id}
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def mark_alerts_seen(org_id: int) -> int:
+    """Mark all unseen alert_history rows for this org as seen. Returns rows updated."""
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            result = conn.execute(
+                text("UPDATE alert_history SET is_seen=1 WHERE org_id=:org_id AND is_seen=0"),
+                {"org_id": org_id}
+            )
+    return result.rowcount
 
 
 def get_alert_history(org_id: int, rule_id: Optional[int] = None, limit: int = 50) -> list[dict]:

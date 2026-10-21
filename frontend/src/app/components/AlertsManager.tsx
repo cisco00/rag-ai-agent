@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Bell, Plus, Trash2, ToggleLeft, ToggleRight, PlayCircle, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Bell, Plus, Trash2, ToggleLeft, ToggleRight, PlayCircle, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Activity } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface AlertRule {
@@ -40,6 +40,8 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(false);
   const [testResult, setTestResult] = useState<Record<number, any>>({});
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [form, setForm] = useState({
     name: '', alert_type: 'metric', table_name: '', column_name: '',
     aggregate: 'avg', operator: '>', threshold_value: '', lookback_hours: 24,
@@ -58,10 +60,17 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
     try {
       const data = await api.get<{ history: AlertHistory[] }>('/alerts/history');
       setHistory(data.history || []);
+      setLastChecked(new Date());
     } catch (e) { console.error(e); }
   };
 
-  useEffect(() => { fetchAlerts(); fetchHistory(); }, []);
+  useEffect(() => {
+    fetchAlerts();
+    fetchHistory();
+    // Auto-refresh history every 30s to surface proactively fired alerts
+    pollRef.current = setInterval(fetchHistory, 30_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   const handleCreate = async () => {
     setLoading(true);
@@ -103,6 +112,20 @@ export function AlertsManager({ apiKey }: { apiKey: string }) {
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
           <Plus className="size-4" /><span>New Alert</span>
         </button>
+      </div>
+
+      {/* Live monitoring status */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-700">
+        <Activity className="size-4 shrink-0 animate-pulse" />
+        <span className="font-medium">Proactive monitoring active</span>
+        <span className="text-emerald-500 mx-1">·</span>
+        <span className="text-emerald-600">Rules evaluated automatically every 15 min</span>
+        {lastChecked && (
+          <>
+            <span className="text-emerald-500 mx-1">·</span>
+            <span className="text-emerald-500 text-xs">History refreshed {lastChecked.toLocaleTimeString()}</span>
+          </>
+        )}
       </div>
 
       {/* Create Form */}

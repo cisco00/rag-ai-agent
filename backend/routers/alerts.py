@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from dependencies import get_current_org, get_org_connection_string, require_permission
 from alerts import (
     get_alert_rules, create_alert_rule, get_alert_rule, update_alert_rule,
-    delete_alert_rule, get_alert_history, _evaluate_metric_rule, _evaluate_freshness_rule
+    delete_alert_rule, get_alert_history, _evaluate_metric_rule, _evaluate_freshness_rule,
+    get_unseen_alert_count, mark_alerts_seen,
 )
 from schemas import AlertRuleRequest
 
@@ -37,6 +38,19 @@ async def create_alert(request: AlertRuleRequest, org=Depends(get_current_org),
 @router.get("/alerts/history")
 async def alert_history(rule_id: Optional[int] = None, org=Depends(get_current_org)):
     return {"history": get_alert_history(org.id, rule_id=rule_id)}
+
+
+@router.get("/alerts/unseen-count")
+async def unseen_count(org=Depends(get_current_org)):
+    """Return count of alert history rows not yet seen by the user."""
+    return {"count": get_unseen_alert_count(org.id)}
+
+
+@router.post("/alerts/history/mark-seen")
+async def mark_seen(org=Depends(get_current_org)):
+    """Mark all unseen alert history rows as seen."""
+    updated = mark_alerts_seen(org.id)
+    return {"status": "ok", "marked": updated}
 
 
 @router.patch("/alerts/{rule_id}")
