@@ -734,3 +734,139 @@ async def regenerate_column_descriptions(
     background_tasks.add_task(generate_and_store_descriptions, org.id, table_name, conn_str, True)
     return {"status": "queued", "table_name": table_name}
 
+
+
+# ── CSV / Excel export ────────────────────────────────────────────────────────
+
+class ExportDataRequest(BaseModel):
+    """Rows + columns extracted from a visualization or table result."""
+    columns: list          # list of column name strings
+    rows: list             # list of dicts {col: value}
+    filename: str = "export"
+
+
+@router.post("/export/csv")
+async def export_csv(request: ExportDataRequest, org=Depends(get_current_org)):
+    """Stream result data as a UTF-8 CSV file."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=request.columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in request.rows:
+        writer.writerow({c: row.get(c, "") for c in request.columns})
+
+    filename = f"{request.filename}_{int(time.time())}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue().encode("utf-8-sig")]),   # utf-8-sig adds BOM for Excel compat
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/export/xlsx")
+async def export_xlsx(request: ExportDataRequest, org=Depends(get_current_org)):
+    """Stream result data as an Excel (.xlsx) file."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Results"
+
+    header_font  = Font(bold=True, color="FFFFFF")
+    header_fill  = PatternFill("solid", fgColor="2563EB")  # Tailwind blue-600
+    header_align = Alignment(horizontal="center", vertical="center")
+
+    # Header row
+    for col_idx, col_name in enumerate(request.columns, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font   = header_font
+        cell.fill   = header_fill
+        cell.alignment = header_align
+
+    # Data rows
+    for row_idx, row in enumerate(request.rows, start=2):
+        for col_idx, col_name in enumerate(request.columns, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=row.get(col_name, ""))
+
+    # Auto-size columns (cap at 60)
+    for col_idx, col_name in enumerate(request.columns, start=1):
+        max_len = max(len(str(col_name)), *(len(str(r.get(col_name, ""))) for r in request.rows or [{}]))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"{request.filename}_{int(time.time())}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Query History Browser ─────────────────────────────────────────────────────
+
+@router.get("/history")
+async def get_query_history(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = "",
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """
+    Paginated, searchable query history for the organisation.
+    Returns entries newest-first; each includes id, query, response snippet,
+    visualization type, sql_query, created_at, is_saved, saved_title.
+    """
+    from models import QueryHistory
+    offset = (page - 1) * page_size
+    with get_db() as db:
+        q = db.query(QueryHistory).filter(QueryHistory.org_id == org.id)
+        if search:
+            like = f"%{search}%"
+            q = q.filter(
+                (QueryHistory.query.ilike(like)) | (QueryHistory.response.ilike(like))
+            )
+        total = q.count()
+        items = (
+            q.order_by(QueryHistory.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+
+    results = []
+    for item in items:
+        viz_type = None
+        if item.visualization:
+            try:
+                viz_type = json.loads(item.visualization).get("type")
+            except Exception:
+                pass
+        results.append({
+            "id":           item.id,
+            "query":        item.query,
+            "response":     item.response[:300] + "…" if len(item.response) > 300 else item.response,
+            "visualization_type": viz_type,
+            "sql_query":    item.sql_query,
+            "created_at":   item.created_at.isoformat(),
+            "is_saved":     bool(item.is_saved),
+            "saved_title":  item.saved_title,
+        })
+
+    return {
+        "items": results,
+        "total": total,
+        "page":  page,
+        "page_size": page_size,
+        "pages": max(1, -(-total // page_size)),   # ceiling division
+    }
