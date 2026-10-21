@@ -4,29 +4,32 @@ import { api } from '../../lib/api';
 
 interface ShareModalProps {
   message: any;
+  userQuery?: string;
   onClose: () => void;
   apiKey: string;
 }
 
-export function ShareModal({ message, onClose }: ShareModalProps) {
+export function ShareModal({ message, userQuery, onClose }: ShareModalProps) {
   const [shareUrl, setShareUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
 
   const handleGenerateLink = async () => {
     setIsGenerating(true);
+    setError('');
 
     try {
       const res = await api.post<any>('/share', {
-        query: message.content || 'Shared Report',
-        visual_type: message.visualization?.type || 'table',
-        visual_data: message.visualization?.data || {}
+        query: userQuery || 'Shared Report',
+        response: message.content || '',
+        visualization: message.visualization || null,
       });
 
-      const url = `${window.location.origin}/shared/${res.share_id}`;
-      setShareUrl(url);
-    } catch (error) {
-      console.error(error);
+      // Use the share_url returned by the backend (it already has the correct origin)
+      setShareUrl(res.share_url || `${window.location.origin}/shared/${res.report_id}`);
+    } catch (err: any) {
+      setError(err.message || 'Failed to generate link. Please try again.');
     } finally {
       setIsGenerating(false);
     }
@@ -60,6 +63,12 @@ export function ShareModal({ message, onClose }: ShareModalProps) {
           <p className="text-gray-600">
             Generate a shareable link to this report. Anyone with the link can view the results and visualization.
           </p>
+
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
+              {error}
+            </div>
+          )}
 
           {!shareUrl ? (
             <button

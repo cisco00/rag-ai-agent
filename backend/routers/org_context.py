@@ -8,6 +8,7 @@ import logging
 import time
 from threading import Thread
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Body
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
@@ -408,39 +409,43 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
     )
 
 
+class ShareSnapshotRequest(BaseModel):
+    """Payload for creating a public link from an already-computed result."""
+    query: str                          # the user's original question
+    response: str                       # the AI's markdown / text answer
+    visualization: Optional[dict] = None  # chart/table payload (optional)
+
+
 @router.post("/share")
-async def share_report(request: QueryRequest, org=Depends(get_current_org)):
-    """Create a shareable link for an analysis result"""
-    conn_str = get_org_connection_string(org, prefer_file_db=request.use_file)
-    if not conn_str:
-        raise HTTPException(status_code=400, detail="No database configured.")
-    
-    from main import AnalyticsAgent
-    agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
-    
+async def share_report(request: ShareSnapshotRequest, org=Depends(get_current_org)):
+    """
+    Create a public shareable link for an already-computed result.
+
+    Accepts the pre-rendered query + response + visualization so that the
+    LLM is *not* re-invoked — this is purely a storage operation.
+    """
+    import os
     try:
-        # Offload blocking agent run_query
-        result = await run_in_threadpool(agent.run_query, request.query, request.history)
         shared_report = create_shared_report(
             org_id=org.id,
             query=request.query,
-            response=result["text"],
-            visualization=result["visualization"]
+            response=request.response,
+            visualization=request.visualization,
         )
-        
-        base_url = "http://localhost:8000"
-        share_url = f"{base_url}/shared/{shared_report.id}"
-        
+        # APP_URL should be the *frontend* origin so the link opens in the browser.
+        # Fall back to the backend origin if not set.
+        app_url = os.getenv("APP_URL", "http://localhost:5173").rstrip("/")
+        share_url = f"{app_url}/shared/{shared_report.id}"
+
         return {
             "status": "success",
             "share_url": share_url,
             "report_id": shared_report.id,
-            "expires_at": shared_report.expires_at.isoformat()
+            "expires_at": shared_report.expires_at.isoformat() if shared_report.expires_at else None,
         }
     except Exception as e:
+        logger.error("share_report error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        agent.close()
 
 
 @router.get("/shared")

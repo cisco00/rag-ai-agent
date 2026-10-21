@@ -118,6 +118,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   const [showShareModal, setShowShareModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [shareUserQuery, setShareUserQuery] = useState<string>('');
 
   // Pin-to-dashboard state
   const [showPinModal, setShowPinModal] = useState(false);
@@ -564,8 +565,11 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
     }
   };
 
-  const handleShare = (message: Message) => {
+  const handleShare = (message: Message, index: number) => {
     setSelectedMessage(message);
+    // Find the nearest preceding user message to use as the query label
+    const preceding = messages.slice(0, index).reverse().find(m => m.role === 'user');
+    setShareUserQuery(preceding?.content || '');
     setShowShareModal(true);
   };
 
@@ -828,7 +832,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                       {message.visualization && (
                         <>
                           <button
-                            onClick={() => handleShare(message)}
+                            onClick={() => handleShare(message, index)}
                             className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
                           >
                             <Share2 className="size-3 md:size-4" />
@@ -1031,6 +1035,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
         {showShareModal && selectedMessage && (
           <ShareModal
             message={selectedMessage}
+            userQuery={shareUserQuery}
             onClose={() => setShowShareModal(false)}
             apiKey={apiKey}
           />

@@ -26,6 +26,7 @@ import { UsageAnalytics } from './components/UsageAnalytics';
 import { UpdateBanner } from './components/UpdateBanner';
 import { TrialBanner } from './components/TrialBanner';
 import { SetupWizard } from './components/SetupWizard';
+import { SharedView } from './components/SharedView';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
@@ -281,6 +282,12 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  // ── Public shared-report viewer (no auth required) ───────────────────
+  const sharedMatch = window.location.pathname.match(/^\/shared\/([^/?#]+)/);
+  if (sharedMatch) {
+    return <SharedView reportId={sharedMatch[1]} />;
   }
 
   // ── Unauthenticated routing (web mode only) ────────────────────────────
