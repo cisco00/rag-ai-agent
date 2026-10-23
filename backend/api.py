@@ -43,6 +43,7 @@ from query_templates import ensure_template_tables
 from card_comments import ensure_comment_tables
 from google_sheets import ensure_sheets_tables
 from totp_auth import ensure_totp_columns
+from data_permissions import ensure_permission_tables
 from dashboards import ensure_dashboard_tables
 from dependencies import get_org_connection_string
 from job_queue import start_job_queue, stop_job_queue
@@ -51,7 +52,7 @@ from update_checker import check_for_updates, get_current_version, UPDATE_CHECK_
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
-from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing, query_templates, schema_diagram, card_comments, sheets, totp
+from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing, query_templates, schema_diagram, card_comments, sheets, totp, data_permissions
 
 load_dotenv()
 
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     ensure_comment_tables()
     ensure_sheets_tables()
     ensure_totp_columns()
+    ensure_permission_tables()
 
     # ── Alert evaluation via APScheduler ─────────────────────────────────────
     _ALERT_EVAL_TIMEOUT_S = int(ALERT_CHECK_INTERVAL_MINUTES * 60 * 0.8)
@@ -542,6 +544,7 @@ app.include_router(query_templates.router,                           tags=["Quer
 app.include_router(schema_diagram.router,                            tags=["Schema Diagram"])
 app.include_router(card_comments.router,                             tags=["Card Comments"])
 app.include_router(sheets.router,                                    tags=["Google Sheets Sync"])
+app.include_router(data_permissions.router,                          tags=["Data Permissions"])
 
 
 @app.get("/")

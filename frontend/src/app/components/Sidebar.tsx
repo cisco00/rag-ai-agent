@@ -24,6 +24,7 @@ import {
   UserPlus,
   Shield,
   ShieldCheck,
+  ShieldAlert,
   X
 } from 'lucide-react';
 
@@ -102,6 +103,7 @@ export function Sidebar({
     { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
     { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
+    { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },
     { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },

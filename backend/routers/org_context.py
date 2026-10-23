@@ -224,13 +224,34 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
         # Offload blocking agent run_query
         result = await run_in_threadpool(
             agent.run_query,
-            request.query, 
-            history, 
-            tables=request.tables, 
+            request.query,
+            history,
+            tables=request.tables,
             verify_only=request.verify_only,
             confirmed_sql=request.confirmed_sql
         )
-        
+
+        # Feature #10 — apply row/column permissions to result
+        try:
+            from data_permissions import apply_permissions
+            sql_for_perms = result.get("sql_query") or ""
+            rows_for_perms = result.get("last_result_rows")
+            if sql_for_perms:
+                _, filtered_rows = apply_permissions(
+                    sql=sql_for_perms,
+                    rows=rows_for_perms,
+                    org_id=org.id,
+                    role=user.get("role", "viewer"),
+                    user_id=user.get("id", 0),
+                )
+                if filtered_rows is not None and isinstance(result, dict):
+                    result["last_result_rows"] = filtered_rows
+                    # Rebuild visualization from filtered rows if present
+                    if result.get("visualization") and "data" in result["visualization"]:
+                        result["visualization"]["data"] = filtered_rows[:1000]
+        except Exception as _pe:
+            logger.warning(f"Permission enforcement skipped: {_pe}")
+
         history_id: Optional[int] = None
         if result.get("status") == "success" and not request.verify_only:
              try:
@@ -348,6 +369,25 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
                 confirmed_sql=request.confirmed_sql,
                 progress_callback=progress_callback,
             )
+
+            # Feature #10 — apply row/column permissions to streamed result
+            try:
+                from data_permissions import apply_permissions
+                sql_for_perms = result.get("sql_query") or ""
+                if sql_for_perms:
+                    _, filtered_rows = apply_permissions(
+                        sql=sql_for_perms,
+                        rows=result.get("last_result_rows"),
+                        org_id=org.id,
+                        role=user.get("role", "viewer"),
+                        user_id=user.get("id", 0),
+                    )
+                    if filtered_rows is not None:
+                        result["last_result_rows"] = filtered_rows
+                        if result.get("visualization") and "data" in result["visualization"]:
+                            result["visualization"]["data"] = filtered_rows[:1000]
+            except Exception as _pe:
+                logger.warning(f"Stream permission enforcement skipped: {_pe}")
 
             # Persist history
             if result.get("status") == "success":
