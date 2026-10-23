@@ -24,6 +24,7 @@ class ConfigRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    totp_code: Optional[str] = None  # Feature #9 — provided on the 2nd login step
 
 class RegisterUserRequest(BaseModel):
     email: str

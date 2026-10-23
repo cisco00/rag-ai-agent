@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
     Building2, CheckCircle, Copy, AlertCircle, Mail, Lock,
     User, UserPlus, LogIn, ArrowRight, TrendingUp, Sparkles,
-    ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2
+    ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2, KeyRound, Loader2
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -59,10 +59,17 @@ const InputField = ({ icon: Icon, label, id, ...props }: any) => (
 function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoading }: LoginFormProps) {
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPassword, setLoginPassword] = useState('');
+    // Feature #9 — two-step TOTP flow
+    const [totpRequired, setTotpRequired] = useState(false);
+    const [totpCode, setTotpCode] = useState('');
 
     const handleLogin = async () => {
         if (!loginEmail.trim() || !loginPassword.trim()) {
             setError('Email and Password are required.');
+            return;
+        }
+        if (totpRequired && totpCode.length !== 6) {
+            setError('Enter the 6-digit code from your authenticator app.');
             return;
         }
 
@@ -72,8 +79,16 @@ function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoa
         try {
             const authRes = await api.post<any>('/auth/login', {
                 email: loginEmail,
-                password: loginPassword
+                password: loginPassword,
+                ...(totpRequired ? { totp_code: totpCode } : {}),
             });
+
+            // Server signals that 2FA is required — show the TOTP step
+            if (authRes.totp_required) {
+                setTotpRequired(true);
+                setIsLoading(false);
+                return;
+            }
 
             onLoginSuccess(
                 authRes.api_key,
@@ -92,6 +107,58 @@ function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoa
         e.preventDefault();
         handleLogin();
     };
+
+    /* ── TOTP verification step ─────────────────────────────────────── */
+    if (totpRequired) {
+        return (
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-2xl">
+                    <ShieldCheck className="size-6 text-blue-600 shrink-0" />
+                    <div>
+                        <p className="text-sm font-bold text-blue-900">Two-Factor Authentication</p>
+                        <p className="text-xs text-blue-700 mt-0.5">
+                            Enter the code from your authenticator app to continue.
+                        </p>
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                        Authenticator code
+                    </label>
+                    <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        autoFocus
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="000000"
+                        className="w-full px-4 py-4 border-2 border-slate-200 rounded-xl text-center text-3xl font-mono tracking-[0.6em] text-slate-800 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                </div>
+
+                <button
+                    type="submit"
+                    disabled={isLoading || totpCode.length !== 6}
+                    className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                    {isLoading
+                        ? <><Loader2 className="size-5 animate-spin" /> Verifying…</>
+                        : <><KeyRound className="size-5" /> Verify &amp; Sign In</>
+                    }
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => { setTotpRequired(false); setTotpCode(''); setError(null); }}
+                    className="w-full text-sm text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                    ← Use a different account
+                </button>
+            </form>
+        );
+    }
 
     return (
         <form onSubmit={handleSubmit} className="space-y-8">

@@ -8,10 +8,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   History, Search, X, ChevronLeft, ChevronRight,
   Bookmark, BookmarkCheck, RefreshCw, Clock,
-  BarChart2, Code2, ChevronDown, ChevronUp,
+  BarChart2, Code2, ChevronDown, ChevronUp, BookMarked,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
+import { SaveTemplateModal } from './SaveTemplateModal';
 
 interface HistoryEntry {
   id: number;
@@ -55,6 +56,7 @@ function relTime(iso: string): string {
 export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrowserProps) {
   const rerun = onRerun || onRerunQuery;
   const [data, setData] = useState<HistoryPage | null>(null);
+  const [saveTemplateQuery, setSaveTemplateQuery] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [savedOnly, setSavedOnly] = useState(false);
@@ -106,6 +108,7 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
   };
 
   return (
+    <>
     <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div>
@@ -224,6 +227,14 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
                     </button>
                   )}
                   <button
+                    onClick={() => setSaveTemplateQuery(item.query)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"
+                    title="Save as Template"
+                  >
+                    <BookMarked className="size-3.5" />
+                    Template
+                  </button>
+                  <button
                     onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                     className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
                     title={expanded === item.id ? 'Collapse' : 'Expand'}
@@ -312,5 +323,14 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
         </div>
       )}
     </div>
+
+    {/* Save as Template modal */}
+    {saveTemplateQuery && (
+      <SaveTemplateModal
+        initialQuery={saveTemplateQuery}
+        onClose={() => setSaveTemplateQuery(null)}
+      />
+    )}
+    </>
   );
 }

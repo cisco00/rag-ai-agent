@@ -28,6 +28,10 @@ import { TrialBanner } from './components/TrialBanner';
 import { SetupWizard } from './components/SetupWizard';
 import { SharedView } from './components/SharedView';
 import { QueryHistoryBrowser } from './components/QueryHistoryBrowser';
+import { QueryTemplatesLibrary } from './components/QueryTemplatesLibrary';
+import { GoogleSheetsSync } from './components/GoogleSheetsSync';
+import { SchemaDiagram } from './components/SchemaDiagram';
+import { TwoFactorSettings } from './components/TwoFactorSettings';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
@@ -55,7 +59,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -444,6 +448,10 @@ export default function App() {
               apiKey={apiKey!}
               initialQuery={initialQuery || undefined}
               onQueryProcessed={() => setInitialQuery(null)}
+              onNavigate={(view, query) => {
+                if (query) setInitialQuery(query);
+                setCurrentView(view as View);
+              }}
               user={user}
             />
           )}
@@ -465,6 +473,27 @@ export default function App() {
               }}
             />
           )}
+          {currentView === 'templates' && (
+            <QueryTemplatesLibrary
+              onRunQuery={(query) => {
+                setInitialQuery(query);
+                setCurrentView('query');
+              }}
+            />
+          )}
+          {currentView === 'sheets' && (
+            <GoogleSheetsSync
+              initialQuery={initialQuery || undefined}
+            />
+          )}
+          {currentView === 'schema' && (
+            <SchemaDiagram
+              onRunQuery={(query) => {
+                setInitialQuery(query);
+                setCurrentView('query');
+              }}
+            />
+          )}
           {currentView === 'admin' && (!desktop || !license || license.hasFeature('admin_panel') ? <AdminPanel /> : <FeatureLockedMessage feature="Admin Panel" />)}
           {currentView === 'branding' && (
             <BrandingSettings onBrandingChange={(b) => setBranding(b)} />
@@ -476,6 +505,11 @@ export default function App() {
               isSettingsMode={true}
               user={user}
             />
+          )}
+          {currentView === 'security' && (
+            <div className="p-8 max-w-2xl mx-auto">
+              <TwoFactorSettings />
+            </div>
           )}
           {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}

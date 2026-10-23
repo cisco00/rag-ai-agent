@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
+import { CardComments, CommentBubble } from './CardComments';
 
 interface Dashboard {
   id: number; name: string; description?: string; is_public: number;
@@ -82,6 +83,10 @@ export function DashboardsView({
   const [refreshAllProgress, setRefreshAllProgress] = useState<{ done: number; total: number } | null>(null);
   const [refreshedCards, setRefreshedCards] = useState<Set<number>>(new Set());
 
+  // Comments state
+  const [commentCardId, setCommentCardId] = useState<number | null>(null);
+  const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+
   // Drag-to-reorder state
   const [dragId, setDragId] = useState<number | null>(null);
   const [dragOverId, setDragOverId] = useState<number | null>(null);
@@ -110,6 +115,13 @@ export function DashboardsView({
         a.layout_y !== b.layout_y ? a.layout_y - b.layout_y : a.layout_x - b.layout_x
       );
       setCards(sorted);
+      // Fetch comment counts for all cards
+      if (sorted.length > 0) {
+        const cardIds = sorted.map(c => c.id).join(',');
+        api.get<{ counts: Record<number, number> }>(`/dashboards/${id}/comment-counts?card_ids=${cardIds}`)
+          .then(res => setCommentCounts(res.counts || {}))
+          .catch(() => {});
+      }
     } catch (e) { console.error(e); }
   };
 
@@ -512,6 +524,11 @@ export function DashboardsView({
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
+                          {/* Comments bubble */}
+                          <CommentBubble
+                            count={commentCounts[card.id] ?? 0}
+                            onClick={() => setCommentCardId(commentCardId === card.id ? null : card.id)}
+                          />
                           {/* Refresh */}
                           <button
                             onClick={() => handleRefreshCard(card.id)}
@@ -602,6 +619,22 @@ export function DashboardsView({
           </div>
         )}
       </main>
+
+      {/* Slide-out comments panel */}
+      {commentCardId !== null && selected && (
+        <div className="fixed inset-y-0 right-0 z-40 flex">
+          <div className="fixed inset-0 bg-black/20" onClick={() => setCommentCardId(null)} />
+          <div className="relative ml-auto w-80 bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+            <CardComments
+              dashboardId={selected.id}
+              cardId={commentCardId}
+              cardTitle={cards.find(c => c.id === commentCardId)?.title || cards.find(c => c.id === commentCardId)?.query_text}
+              currentUser={user as any}
+              onClose={() => setCommentCardId(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

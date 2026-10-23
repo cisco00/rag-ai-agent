@@ -172,14 +172,44 @@ async def register_first_user_route(request: Request,
 @router.post("/login")
 @limiter.limit("5/minute")
 async def login_route(request: Request, payload: LoginRequest, response: Response):
-    """Authenticate a user and set cookies."""
+    """
+    Authenticate a user.
+
+    Two-step TOTP flow (Feature #9):
+      Step 1 — POST with email + password only.
+               If 2FA is enabled on the account → 200 with {totp_required: true}.
+               Frontend shows the 6-digit prompt; no tokens are issued yet.
+      Step 2 — POST again with email + password + totp_code.
+               If the code is valid  → normal token response.
+               If the code is wrong  → 401.
+    """
+    from fastapi.responses import JSONResponse
+    import totp_auth
+
     try:
+        # Validate credentials first (raises 401 if wrong).
         res = auth_module.login_user(email=payload.email, password=payload.password)
-        auth_module._set_auth_cookies(response, res["refresh_token"], res["api_key"])
-        return res
     except Exception as e:
         logger.error(f"Login failed: {e}")
         raise HTTPException(status_code=401, detail=str(e))
+
+    user_id = res["user"]["id"]
+    totp_status = totp_auth.get_totp_status(user_id)
+
+    if totp_status.get("enabled"):
+        # 2FA is active on this account.
+        if not payload.totp_code:
+            # Step 1 complete — signal the frontend to ask for the TOTP code.
+            # We do NOT set cookies or return tokens here.
+            return JSONResponse(status_code=200, content={"totp_required": True})
+
+        # Step 2 — verify the supplied code.
+        if not totp_auth.check_totp_required(user_id, payload.totp_code.strip()):
+            raise HTTPException(status_code=401, detail="Invalid authenticator code.")
+
+    # 2FA passed (or not enabled) — issue tokens.
+    auth_module._set_auth_cookies(response, res["refresh_token"], res["api_key"])
+    return res
 
 
 @router.post("/logout")

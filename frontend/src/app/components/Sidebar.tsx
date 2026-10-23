@@ -16,10 +16,14 @@ import {
   LayoutGrid,
   BarChart2,
   History,
+  BookMarked,
+  FileSpreadsheet,
+  Network,
   LogOut,
   User as UserIcon,
   UserPlus,
   Shield,
+  ShieldCheck,
   X
 } from 'lucide-react';
 
@@ -69,6 +73,7 @@ export function Sidebar({
     { id: 'boards', label: 'Dashboards', icon: LayoutGrid, disabled: !isConfigured },
     { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured, badge: unseenAlerts > 0 ? unseenAlerts : undefined },
     { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
+    { id: 'schema', label: 'Schema Diagram', icon: Network, disabled: !isConfigured },
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
   ];
 
@@ -94,6 +99,9 @@ export function Sidebar({
 
   const adminItems = [
     { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
+    { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
+    { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured },
+    { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
     { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },

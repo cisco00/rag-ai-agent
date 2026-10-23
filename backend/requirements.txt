@@ -33,3 +33,12 @@ anthropic>=0.28.0
 # PDF and Word document support
 pdfplumber>=0.11.0
 python-docx>=1.1.0
+
+# Google Sheets / Excel Live Sync (Feature #8)
+gspread>=6.0.0
+google-auth>=2.28.0
+google-auth-oauthlib>=1.2.0
+
+# Two-Factor Authentication / TOTP (Feature #9)
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2

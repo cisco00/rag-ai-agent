@@ -39,6 +39,10 @@ from org_context_manager import ensure_context_tables
 from insight_engine import InsightScheduler, ensure_insight_tables
 from auth import ensure_auth_tables
 from alerts import ensure_alert_tables, evaluate_all_alerts, ALERT_CHECK_INTERVAL_MINUTES
+from query_templates import ensure_template_tables
+from card_comments import ensure_comment_tables
+from google_sheets import ensure_sheets_tables
+from totp_auth import ensure_totp_columns
 from dashboards import ensure_dashboard_tables
 from dependencies import get_org_connection_string
 from job_queue import start_job_queue, stop_job_queue
@@ -47,7 +51,7 @@ from update_checker import check_for_updates, get_current_version, UPDATE_CHECK_
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
-from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing
+from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing, query_templates, schema_diagram, card_comments, sheets, totp
 
 load_dotenv()
 
@@ -73,6 +77,10 @@ async def lifespan(app: FastAPI):
     ensure_auth_tables()
     ensure_alert_tables()
     ensure_dashboard_tables()
+    ensure_template_tables()
+    ensure_comment_tables()
+    ensure_sheets_tables()
+    ensure_totp_columns()
 
     # ── Alert evaluation via APScheduler ─────────────────────────────────────
     _ALERT_EVAL_TIMEOUT_S = int(ALERT_CHECK_INTERVAL_MINUTES * 60 * 0.8)
@@ -518,6 +526,7 @@ logger.info(f"Using static directory: {static_dir} (exists: {os.path.exists(stat
 
 app.include_router(integrations.router, prefix="/integrations", tags=["Integrations"])
 app.include_router(auth.router,            prefix="/auth",           tags=["Authentication"])
+app.include_router(totp.router,            prefix="/auth",           tags=["Two-Factor Auth"])
 app.include_router(data.router,                                      tags=["Data Management"])
 app.include_router(analytics.router,                                 tags=["Analytics"])
 app.include_router(branding.router,                                  tags=["Branding"])
@@ -529,6 +538,10 @@ app.include_router(insights.router,                                  tags=["Insi
 app.include_router(org_context.router,                               tags=["Organization Context"])
 app.include_router(admin.router,                                     tags=["Admin"])
 app.include_router(billing.router,         prefix="/billing",        tags=["Billing Analytics"])
+app.include_router(query_templates.router,                           tags=["Query Templates"])
+app.include_router(schema_diagram.router,                            tags=["Schema Diagram"])
+app.include_router(card_comments.router,                             tags=["Card Comments"])
+app.include_router(sheets.router,                                    tags=["Google Sheets Sync"])
 
 
 @app.get("/")

@@ -32,11 +32,14 @@ import {
   Play,
   Clock,
   Table2,
+  BookMarked,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
 import { ExportModal } from './ExportModal';
+import { SaveTemplateModal } from './SaveTemplateModal';
 
 // ── CSV / Excel download helpers ──────────────────────────────────────────────
 
@@ -90,6 +93,7 @@ interface QueryInterfaceProps {
   apiKey: string;
   initialQuery?: string;
   onQueryProcessed?: () => void;
+  onNavigate?: (view: string, query?: string) => void;
   user?: { permissions?: string[], id?: number, role?: string };
 }
 
@@ -151,7 +155,7 @@ interface Message {
   thinkingProcess?: any[];
 }
 
-export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }: QueryInterfaceProps) {
+export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavigate, user }: QueryInterfaceProps) {
   const hasManageDashboards = Array.isArray(user?.permissions) && user.permissions.includes('MANAGE_DASHBOARDS');
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -187,6 +191,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
   // Schedule report modal state
   const [showScheduleModal, setShowScheduleModal] = useState<{query: string} | null>(null);
   const [scheduleForm, setScheduleForm] = useState({ frequency: 'weekly', recipients: '' });
+  const [saveTemplateQuery, setSaveTemplateQuery] = useState<string | null>(null);
   const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
   const [scheduleSuccess, setScheduleSuccess] = useState(false);
 
@@ -981,6 +986,37 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
                         </button>
                       )}
 
+                      {/* Save as Template */}
+                      {(message.originalQuery || messages[index - 1]?.content) && (
+                        <button
+                          onClick={() => {
+                            const userMsg = messages.slice(0, index).reverse().find(m => m.role === 'user');
+                            setSaveTemplateQuery(message.originalQuery ?? userMsg?.content ?? '');
+                          }}
+                          title="Save as reusable template"
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors"
+                        >
+                          <BookMarked className="size-3 md:size-4" />
+                          Template
+                        </button>
+                      )}
+
+                      {/* Sync to Google Sheets */}
+                      {onNavigate && (message.originalQuery || messages[index - 1]?.content) && (
+                        <button
+                          onClick={() => {
+                            const userMsg = messages.slice(0, index).reverse().find(m => m.role === 'user');
+                            const q = message.originalQuery ?? userMsg?.content ?? '';
+                            onNavigate('sheets', q);
+                          }}
+                          title="Sync to Google Sheets"
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors"
+                        >
+                          <FileSpreadsheet className="size-3 md:size-4" />
+                          Sheets
+                        </button>
+                      )}
+
                       {/* Feedback buttons */}
                       <div className="ml-auto flex items-center gap-1 md:gap-2">
                         <button
@@ -1117,6 +1153,14 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, user }:
             message={selectedMessage}
             onClose={() => setShowExportModal(false)}
             apiKey={apiKey}
+          />
+        )}
+
+        {/* Save as Template Modal */}
+        {saveTemplateQuery !== null && (
+          <SaveTemplateModal
+            initialQuery={saveTemplateQuery}
+            onClose={() => setSaveTemplateQuery(null)}
           />
         )}
 
