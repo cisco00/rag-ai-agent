@@ -33,6 +33,7 @@ import { GoogleSheetsSync } from './components/GoogleSheetsSync';
 import { SchemaDiagram } from './components/SchemaDiagram';
 import { TwoFactorSettings } from './components/TwoFactorSettings';
 import { DataPermissions } from './components/DataPermissions';
+import { AuditTrail } from './components/AuditTrail';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
@@ -60,7 +61,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -513,6 +514,7 @@ export default function App() {
             </div>
           )}
           {currentView === 'permissions' && <DataPermissions />}
+          {currentView === 'audit' && <AuditTrail />}
           {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}
         </main>

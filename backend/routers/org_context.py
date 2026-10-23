@@ -252,6 +252,24 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
         except Exception as _pe:
             logger.warning(f"Permission enforcement skipped: {_pe}")
 
+        # Feature #11 — log query to audit trail (fire-and-forget)
+        try:
+            import time as _time
+            from audit_log import log_query as _log_query
+            _log_query(
+                org_id=org.id,
+                user_id=user.get("id", 0),
+                user_email=user.get("email", ""),
+                user_role=user.get("role", ""),
+                question=request.query,
+                sql_query=result.get("sql_query") or "",
+                status=result.get("status", "success"),
+                error_message=result.get("error") if result.get("status") == "error" else None,
+                row_count=len(result.get("last_result_rows") or []) if result.get("last_result_rows") else None,
+            )
+        except Exception as _ae:
+            logger.warning(f"Audit log write skipped: {_ae}")
+
         history_id: Optional[int] = None
         if result.get("status") == "success" and not request.verify_only:
              try:
@@ -388,6 +406,23 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
                             result["visualization"]["data"] = filtered_rows[:1000]
             except Exception as _pe:
                 logger.warning(f"Stream permission enforcement skipped: {_pe}")
+
+            # Feature #11 — audit log for streamed query (fire-and-forget)
+            try:
+                from audit_log import log_query as _log_query
+                _log_query(
+                    org_id=org.id,
+                    user_id=user.get("id", 0),
+                    user_email=user.get("email", ""),
+                    user_role=user.get("role", ""),
+                    question=request.query,
+                    sql_query=result.get("sql_query") or "",
+                    status=result.get("status", "success"),
+                    error_message=result.get("error") if result.get("status") == "error" else None,
+                    row_count=len(result.get("last_result_rows") or []) if result.get("last_result_rows") else None,
+                )
+            except Exception as _ae:
+                logger.warning(f"Audit log (stream) write skipped: {_ae}")
 
             # Persist history
             if result.get("status") == "success":
