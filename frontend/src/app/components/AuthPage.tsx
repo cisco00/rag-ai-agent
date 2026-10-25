@@ -201,7 +201,53 @@ function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoa
             >
                 {isLoading ? 'AUTHENTICATING...' : 'SIGN IN'}
             </button>
+
+            {/* SSO Login — only shown when an org_id can be inferred from URL params */}
+            <SSOLoginButton />
         </form>
+    );
+}
+
+function SSOLoginButton() {
+    // The org_id can be passed as a URL query param (?org_id=1) for SSO-only orgs
+    const params  = new URLSearchParams(window.location.search);
+    const orgId   = params.get('org_id');
+    const [ssoAvailable, setSsoAvailable] = useState(false);
+    const [providerName, setProviderName] = useState('SSO');
+
+    useEffect(() => {
+        if (!orgId) return;
+        // Quick check: fetch config (will fail gracefully if not enabled)
+        fetch(`/sso/config`, {
+            headers: { 'X-Org-Id': orgId },
+        })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (data?.is_enabled) {
+                    setSsoAvailable(true);
+                    setProviderName(data.provider_name || 'SSO');
+                }
+            })
+            .catch(() => {});
+    }, [orgId]);
+
+    if (!ssoAvailable || !orgId) return null;
+
+    return (
+        <>
+            <div className="relative flex items-center my-2">
+                <div className="flex-1 border-t border-slate-200" />
+                <span className="px-3 text-xs text-slate-400 font-semibold">or</span>
+                <div className="flex-1 border-t border-slate-200" />
+            </div>
+            <a
+                href={`/auth/saml/${orgId}/login?relay_state=${encodeURIComponent(window.location.href)}`}
+                className="flex items-center justify-center gap-2 w-full py-3 border-2 border-slate-200 rounded-2xl text-slate-700 font-bold hover:border-blue-400 hover:text-blue-700 transition-colors"
+            >
+                <KeyRound className="size-4" />
+                Sign in with {providerName}
+            </a>
+        </>
     );
 }
 
