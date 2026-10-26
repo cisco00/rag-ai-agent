@@ -143,7 +143,12 @@ def _build_postgres_url() -> str:
     # Only build a Postgres URL if a host was supplied
     if host:
         if password:
-            return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+            # URL-encode the password so that special characters (@ / # etc.)
+            # are not mis-parsed as part of the host/path.  This is the same
+            # treatment _encode_db_url_password applies to DATABASE_URL.
+            from urllib.parse import quote as _quote
+            encoded_password = _quote(password, safe="")
+            return f"postgresql://{user}:{encoded_password}@{host}:{port}/{db}"
         return f"postgresql://{user}@{host}:{port}/{db}"
 
     # Nothing configured — fall back to SQLite for local dev
