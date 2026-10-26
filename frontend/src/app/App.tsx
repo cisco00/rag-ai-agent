@@ -27,6 +27,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { TrialBanner } from './components/TrialBanner';
 import { SetupWizard } from './components/SetupWizard';
 import { SharedView } from './components/SharedView';
+import { EmbedView } from './components/EmbedView';
 import { QueryHistoryBrowser } from './components/QueryHistoryBrowser';
 import { QueryTemplatesLibrary } from './components/QueryTemplatesLibrary';
 import { GoogleSheetsSync } from './components/GoogleSheetsSync';
@@ -310,6 +311,16 @@ export default function App() {
   const sharedMatch = window.location.pathname.match(/^\/shared\/([^/?#]+)/);
   if (sharedMatch) {
     return <SharedView reportId={sharedMatch[1]} />;
+  }
+
+  // ── Embed views (no auth, no chrome — designed for iframes) ───────────
+  const embedCardMatch = window.location.pathname.match(/^\/embed\/card\/([^/?#]+)/);
+  if (embedCardMatch) {
+    return <EmbedView mode="card" token={embedCardMatch[1]} />;
+  }
+  const embedDashMatch = window.location.pathname.match(/^\/embed\/dashboard\/([^/?#]+)/);
+  if (embedDashMatch) {
+    return <EmbedView mode="dashboard" token={embedDashMatch[1]} />;
   }
 
   // ── Unauthenticated routing (web mode only) ────────────────────────────

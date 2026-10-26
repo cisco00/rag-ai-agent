@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw,
   X, Pin, Globe, EyeOff, FileText, Users, Maximize2, Minimize2,
   GripVertical, TrendingUp, CheckCircle2, Menu, PanelLeftClose,
+  Code2, Copy, Check,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -89,6 +90,16 @@ export function DashboardsView({
 
   // Mobile sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Embed modal state
+  const [embedModal, setEmbedModal] = useState<{
+    type: 'card' | 'dashboard';
+    cardId?: number;
+    cardTitle?: string;
+  } | null>(null);
+  const [embedUrl, setEmbedUrl]     = useState<string | null>(null);
+  const [embedLoading, setEmbedLoading] = useState(false);
+  const [copied, setCopied]         = useState(false);
 
   // Drag-to-reorder state
   const [dragId, setDragId] = useState<number | null>(null);
@@ -281,6 +292,44 @@ export function DashboardsView({
   };
 
   const handleDragEnd = () => { setDragId(null); setDragOverId(null); dragCounter.current = 0; };
+
+  // ── Embed helpers ────────────────────────────────────────────────────────────
+
+  const openEmbedCard = async (card: Card) => {
+    if (!selected) return;
+    setEmbedModal({ type: 'card', cardId: card.id, cardTitle: card.title || card.query_text });
+    setEmbedUrl(null);
+    setEmbedLoading(true);
+    try {
+      const r = await api.post<{ embed_url: string }>(
+        `/dashboards/${selected.id}/cards/${card.id}/embed-token`
+      );
+      setEmbedUrl(r.embed_url);
+    } catch (e: any) { alert(e.message || 'Could not generate embed token'); setEmbedModal(null); }
+    setEmbedLoading(false);
+  };
+
+  const openEmbedDashboard = () => {
+    if (!selected?.share_token) return;
+    const base = (window as any).__VANTAGE_API_URL__?.replace('/api', '') ||
+      (import.meta as any).env?.VITE_APP_URL ||
+      window.location.origin;
+    setEmbedModal({ type: 'dashboard' });
+    setEmbedUrl(`${base}/embed/dashboard/${selected.share_token}`);
+  };
+
+  const copyEmbed = () => {
+    if (!embedUrl) return;
+    const snippet = `<iframe\n  src="${embedUrl}"\n  width="800"\n  height="500"\n  frameborder="0"\n  allowtransparency="true"\n></iframe>`;
+    navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const embedSnippet = embedUrl
+    ? `<iframe\n  src="${embedUrl}"\n  width="800"\n  height="500"\n  frameborder="0"\n  allowtransparency="true"\n></iframe>`
+    : '';
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -484,6 +533,17 @@ export function DashboardsView({
                       : <><Globe className="size-4" />Publish</>}
                   </button>
                 )}
+                {/* Embed Dashboard — only when published */}
+                {hasManageDashboards && selected.is_public && selected.share_token && (
+                  <button
+                    onClick={openEmbedDashboard}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                    title="Get embed code for this dashboard"
+                  >
+                    <Code2 className="size-4" />
+                    <span className="hidden sm:inline">Embed</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -583,6 +643,16 @@ export function DashboardsView({
                                 ? <CheckCircle2 className="size-4 sm:size-3.5 text-emerald-500" />
                                 : <RefreshCw className="size-4 sm:size-3.5" />}
                           </button>
+                          {/* Embed card */}
+                          {hasManageDashboards && (
+                            <button
+                              onClick={() => openEmbedCard(card)}
+                              title="Get embed code for this card"
+                              className="p-2 sm:p-1.5 rounded-lg transition-colors text-purple-500 hover:bg-purple-50 min-w-[36px] min-h-[36px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+                            >
+                              <Code2 className="size-4 sm:size-3.5" />
+                            </button>
+                          )}
                           {/* Expand / Collapse — desktop only */}
                           {hasManageDashboards && (
                             <button
@@ -661,6 +731,98 @@ export function DashboardsView({
         )}
         </div>{/* /p-3 sm:p-6 */}
       </main>
+
+      {/* ── Embed modal ── */}
+      {embedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEmbedModal(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Code2 className="size-5 text-purple-600" />
+                <h3 className="font-bold text-gray-900">
+                  {embedModal.type === 'card'
+                    ? `Embed Card${embedModal.cardTitle ? `: ${embedModal.cardTitle}` : ''}`
+                    : `Embed Dashboard: ${selected?.name}`}
+                </h3>
+              </div>
+              <button
+                onClick={() => setEmbedModal(null)}
+                className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Description */}
+            <p className="text-sm text-gray-500">
+              {embedModal.type === 'card'
+                ? 'Paste this snippet anywhere to embed a single live card widget in your own site or app.'
+                : 'Paste this snippet to embed the full published dashboard. The dashboard must remain published for the embed to work.'}
+            </p>
+
+            {/* Loading state */}
+            {embedLoading && (
+              <div className="flex items-center justify-center py-6 gap-2 text-gray-400">
+                <RefreshCw className="size-5 animate-spin" />
+                <span className="text-sm">Generating embed token…</span>
+              </div>
+            )}
+
+            {/* Snippet */}
+            {!embedLoading && embedUrl && (
+              <>
+                {/* Preview URL */}
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Embed URL</p>
+                  <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                    <span className="text-xs text-gray-600 font-mono truncate flex-1">{embedUrl}</span>
+                    <a
+                      href={embedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-600 hover:text-blue-800 shrink-0"
+                      title="Open in new tab"
+                    >
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </div>
+                </div>
+
+                {/* Theme toggle hint */}
+                <p className="text-xs text-gray-400">
+                  Append <code className="bg-gray-100 px-1 rounded">?theme=dark</code> to the URL for dark mode.
+                </p>
+
+                {/* iframe snippet */}
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">HTML Snippet</p>
+                  <div className="relative">
+                    <pre className="bg-gray-900 text-green-300 text-xs rounded-xl p-4 overflow-x-auto leading-relaxed font-mono whitespace-pre">
+                      {embedSnippet}
+                    </pre>
+                    <button
+                      onClick={copyEmbed}
+                      className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 text-white text-xs rounded-lg transition-colors"
+                    >
+                      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+                      {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dimensions hint */}
+                <p className="text-xs text-gray-400">
+                  Adjust <code className="bg-gray-100 px-1 rounded">width</code> and{' '}
+                  <code className="bg-gray-100 px-1 rounded">height</code> to fit your layout.
+                  Use <code className="bg-gray-100 px-1 rounded">width="100%"</code> for responsive embeds.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Slide-out comments panel */}
       {commentCardId !== null && selected && (

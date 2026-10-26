@@ -12,7 +12,8 @@ from dashboards import (
     get_dashboards, create_dashboard, get_dashboard, get_cards,
     update_dashboard, delete_dashboard, publish_dashboard, unpublish_dashboard,
     get_dashboard_by_share_token, add_card, update_card, remove_card,
-    reorder_cards, refresh_card
+    reorder_cards, refresh_card,
+    generate_card_embed_token, get_card_by_embed_token, get_dashboard_embed_data,
 )
 from schemas import DashboardRequest, CardRequest, CardLayoutItem, PinQueryRequest
 
@@ -161,6 +162,44 @@ async def refresh_dashboard_card(
     agent  = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
     result = await refresh_card(card_id, org.id, conn_str, agent)
     return result
+
+
+@router.post("/dashboards/{dashboard_id}/cards/{card_id}/embed-token")
+async def get_or_create_card_embed_token(
+    dashboard_id: int, card_id: int, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
+):
+    """Generate (or return existing) embed token for a single card."""
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    token = generate_card_embed_token(card_id, org.id)
+    if not token:
+        raise HTTPException(status_code=404, detail="Card not found.")
+    base_url = os.getenv("APP_URL", "http://localhost:5173")
+    return {
+        "embed_token": token,
+        "embed_url": f"{base_url}/embed/card/{token}",
+    }
+
+
+# ── Public embed endpoints (no auth) ──────────────────────────────────────────
+
+@router.get("/embed/card/{token}")
+async def embed_card(token: str):
+    """Public endpoint — return card data for an embedded single-card widget."""
+    card = get_card_by_embed_token(token)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found or embed not enabled.")
+    return {"card": card}
+
+
+@router.get("/embed/dashboard/{share_token}")
+async def embed_dashboard(share_token: str):
+    """Public endpoint — return dashboard + all cards for an embedded full-dashboard widget."""
+    data = get_dashboard_embed_data(share_token)
+    if not data:
+        raise HTTPException(status_code=404, detail="Dashboard not found or not published.")
+    return data
 
 
 @router.post("/dashboards/pin")

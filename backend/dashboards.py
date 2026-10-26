@@ -85,6 +85,15 @@ def ensure_dashboard_tables():
                 conn.execute(text("ALTER TABLE dashboards ADD COLUMN is_shared INTEGER NOT NULL DEFAULT 0"))
             except Exception:
                 pass
+            # Feature #18: per-card embed tokens
+            try:
+                conn.execute(text("ALTER TABLE dashboard_cards ADD COLUMN embed_token TEXT"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_dashboard_cards_embed_token ON dashboard_cards (embed_token)"))
+            except Exception:
+                pass
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -447,3 +456,51 @@ async def refresh_card(card_id: int, org_id: int, org_conn_str: str, agent) -> d
     except Exception as exc:
         logger.error(f"[Dashboards] Card refresh failed: {exc}")
         return {"status": "error", "message": str(exc)}
+
+
+# ─── Embed token helpers (Feature #18) ───────────────────────────────────────
+
+def generate_card_embed_token(card_id: int, org_id: int) -> Optional[str]:
+    """
+    Create or return a stable embed token for a single card.
+    Once generated the token is permanent for that card — callers can call
+    this multiple times safely (idempotent).
+    """
+    with admin_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT embed_token FROM dashboard_cards WHERE id=:id AND org_id=:org_id"),
+            {"id": card_id, "org_id": org_id}
+        ).mappings().first()
+
+    if not row:
+        return None
+    if row["embed_token"]:
+        return row["embed_token"]
+
+    token = secrets.token_urlsafe(24)
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(
+                text("UPDATE dashboard_cards SET embed_token=:token WHERE id=:id AND org_id=:org_id"),
+                {"token": token, "id": card_id, "org_id": org_id}
+            )
+    return token
+
+
+def get_card_by_embed_token(token: str) -> Optional[dict]:
+    """Return card row (with its dashboard's org_id) for a given embed token."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM dashboard_cards WHERE embed_token=:token"),
+            {"token": token}
+        ).mappings().first()
+    return _parse_card(dict(row)) if row else None
+
+
+def get_dashboard_embed_data(share_token: str) -> Optional[dict]:
+    """Return dashboard + cards for the given public share_token (used by embed route)."""
+    dash = get_dashboard_by_share_token(share_token)
+    if not dash:
+        return None
+    cards = get_cards(dash["id"], dash["org_id"])
+    return {"dashboard": dash, "cards": cards}
