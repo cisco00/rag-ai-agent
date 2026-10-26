@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw,
   X, Pin, Globe, EyeOff, FileText, Users, Maximize2, Minimize2,
-  GripVertical, TrendingUp, CheckCircle2,
+  GripVertical, TrendingUp, CheckCircle2, Menu, PanelLeftClose,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -86,6 +86,9 @@ export function DashboardsView({
   // Comments state
   const [commentCardId, setCommentCardId] = useState<number | null>(null);
   const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+
+  // Mobile sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Drag-to-reorder state
   const [dragId, setDragId] = useState<number | null>(null);
@@ -282,23 +285,46 @@ export function DashboardsView({
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full overflow-hidden">
+      {/* ── Mobile sidebar backdrop ── */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-20 bg-black/30 sm:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* ── Sidebar ── */}
-      <aside className="w-72 border-r border-gray-200 bg-white flex flex-col shrink-0">
+      <aside className={[
+        'flex flex-col bg-white border-r border-gray-200 shrink-0 z-30 transition-transform duration-200',
+        'fixed inset-y-0 left-0 w-80 shadow-xl',
+        'sm:relative sm:w-72 sm:translate-x-0 sm:shadow-none',
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+      ].join(' ')}>
         <div className="p-4 border-b border-gray-200 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <LayoutDashboard className="size-5 text-blue-600" />
             <h2 className="font-semibold text-gray-900">Dashboards</h2>
           </div>
-          {hasManageDashboards && (
+          <div className="flex items-center gap-1">
+            {hasManageDashboards && (
+              <button
+                onClick={() => setShowCreate(true)}
+                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"
+                title="New dashboard"
+              >
+                <Plus className="size-4" />
+              </button>
+            )}
+            {/* Close button — mobile only */}
             <button
-              onClick={() => setShowCreate(true)}
-              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"
-              title="New dashboard"
+              onClick={() => setSidebarOpen(false)}
+              className="sm:hidden p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
+              title="Close sidebar"
             >
-              <Plus className="size-4" />
+              <PanelLeftClose className="size-4" />
             </button>
-          )}
+          </div>
         </div>
 
         {showCreate && (
@@ -360,7 +386,7 @@ export function DashboardsView({
           {dashboards.map(d => (
             <button
               key={d.id}
-              onClick={() => fetchCards(d.id)}
+              onClick={() => { fetchCards(d.id); setSidebarOpen(false); }}
               className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors group ${
                 selected?.id === d.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
               }`}
@@ -393,30 +419,45 @@ export function DashboardsView({
       </aside>
 
       {/* ── Main content ── */}
-      <main className="flex-1 overflow-auto p-6 bg-gray-50">
+      <main className="flex-1 overflow-auto bg-gray-50 min-w-0">
+        {/* Mobile top bar */}
+        <div className="sm:hidden flex items-center gap-3 px-3 py-2.5 bg-white border-b border-gray-200 sticky top-0 z-10">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="p-2 -ml-1 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Show dashboards"
+          >
+            <Menu className="size-5" />
+          </button>
+          <span className="font-semibold text-gray-900 text-sm truncate">
+            {selected ? selected.name : 'Dashboards'}
+          </span>
+        </div>
+
+        <div className="p-3 sm:p-6">
         {!selected ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
+          <div className="flex flex-col items-center justify-center h-[60vh] text-gray-400">
             <LayoutDashboard className="size-16 opacity-20 mb-4" />
             <p className="text-lg font-medium">Select a dashboard</p>
-            <p className="text-sm mt-1">Pin AI responses from the Query page using the 📌 button</p>
+            <p className="text-sm mt-1 text-center px-4">Pin AI responses from the Query page using the 📌 button</p>
           </div>
         ) : (
           <div className="max-w-6xl mx-auto space-y-4">
             {/* ── Dashboard header ── */}
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">{selected.name}</h1>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{selected.name}</h1>
                 {selected.description && (
                   <p className="text-sm text-gray-500 mt-0.5">{selected.description}</p>
                 )}
                 {cards.length > 0 && (
                   <p className="text-xs text-gray-400 mt-1">
                     {cards.length} card{cards.length !== 1 ? 's' : ''}
-                    {hasManageDashboards && ' · drag to reorder · click ⤢ to resize'}
+                    {hasManageDashboards && <span className="hidden sm:inline"> · drag to reorder · click ⤢ to resize</span>}
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
                 {/* Refresh All */}
                 <button
                   onClick={handleRefreshAll}
@@ -479,7 +520,7 @@ export function DashboardsView({
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 items-start">
                 {cards.map(card => {
                   const viz      = parseViz(card.visualization);
                   const hasChart = isValidViz(viz);
@@ -501,7 +542,7 @@ export function DashboardsView({
                       onDragEnd={handleDragEnd}
                       className={[
                         'bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col transition-all duration-200',
-                        isWide ? 'xl:col-span-2' : '',
+                        isWide ? 'md:col-span-2' : '',
                         isDragOver ? 'border-blue-400 shadow-md ring-2 ring-blue-200 scale-[1.01]' : 'border-gray-200',
                         dragId === card.id ? 'opacity-40' : 'opacity-100',
                       ].join(' ')}
@@ -509,9 +550,9 @@ export function DashboardsView({
                       {/* Card header */}
                       <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-gray-50 gap-2">
                         <div className="flex items-center gap-2 min-w-0">
-                          {/* Drag handle */}
+                          {/* Drag handle — desktop only */}
                           {hasManageDashboards && (
-                            <GripVertical className="size-4 text-gray-300 shrink-0 cursor-grab active:cursor-grabbing" />
+                            <GripVertical className="hidden sm:block size-4 text-gray-300 shrink-0 cursor-grab active:cursor-grabbing" />
                           )}
                           {hasChart
                             ? <div className="size-2 rounded-full bg-blue-500 shrink-0" />
@@ -534,20 +575,20 @@ export function DashboardsView({
                             onClick={() => handleRefreshCard(card.id)}
                             disabled={isRefreshing}
                             title="Refresh card"
-                            className="p-1.5 rounded-lg transition-colors text-blue-500 hover:bg-blue-50 disabled:opacity-50"
+                            className="p-2 sm:p-1.5 rounded-lg transition-colors text-blue-500 hover:bg-blue-50 disabled:opacity-50 min-w-[36px] min-h-[36px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
                           >
                             {isRefreshing
-                              ? <RefreshCw className="size-3.5 animate-spin" />
+                              ? <RefreshCw className="size-4 sm:size-3.5 animate-spin" />
                               : isRefreshed
-                                ? <CheckCircle2 className="size-3.5 text-emerald-500" />
-                                : <RefreshCw className="size-3.5" />}
+                                ? <CheckCircle2 className="size-4 sm:size-3.5 text-emerald-500" />
+                                : <RefreshCw className="size-4 sm:size-3.5" />}
                           </button>
-                          {/* Expand / Collapse */}
+                          {/* Expand / Collapse — desktop only */}
                           {hasManageDashboards && (
                             <button
                               onClick={() => handleToggleWidth(card)}
                               title={isWide ? 'Collapse to half width' : 'Expand to full width'}
-                              className="p-1.5 rounded-lg transition-colors text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                              className="hidden sm:flex p-1.5 rounded-lg transition-colors text-gray-400 hover:bg-gray-100 hover:text-gray-600 items-center justify-center"
                             >
                               {isWide
                                 ? <Minimize2 className="size-3.5" />
@@ -559,9 +600,9 @@ export function DashboardsView({
                             <button
                               onClick={() => handleRemoveCard(card.id)}
                               title="Remove card"
-                              className="p-1.5 rounded-lg transition-colors text-red-400 hover:bg-red-50"
+                              className="p-2 sm:p-1.5 rounded-lg transition-colors text-red-400 hover:bg-red-50 min-w-[36px] min-h-[36px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
                             >
-                              <X className="size-3.5" />
+                              <X className="size-4 sm:size-3.5" />
                             </button>
                           )}
                         </div>
@@ -618,13 +659,14 @@ export function DashboardsView({
             )}
           </div>
         )}
+        </div>{/* /p-3 sm:p-6 */}
       </main>
 
       {/* Slide-out comments panel */}
       {commentCardId !== null && selected && (
         <div className="fixed inset-y-0 right-0 z-40 flex">
           <div className="fixed inset-0 bg-black/20" onClick={() => setCommentCardId(null)} />
-          <div className="relative ml-auto w-80 bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+          <div className="relative ml-auto w-full sm:w-80 bg-white shadow-2xl border-l border-gray-200 flex flex-col">
             <CardComments
               dashboardId={selected.id}
               cardId={commentCardId}
