@@ -305,6 +305,9 @@ engine = create_engine(
     pool_pre_ping=True
 )
 
+# Alias used by many modules that import `from models import admin_engine`
+admin_engine = engine
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
