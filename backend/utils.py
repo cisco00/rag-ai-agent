@@ -119,10 +119,16 @@ def send_email_mock(to_email, subject, body):
     print("--- EMAIL OUT ---")
     print(msg_content)
     print("-----------------")
-    
-    # Write to file for verification
-    with open("email_out.txt", "a", encoding="utf-8") as f:
-        f.write(msg_content + "\n\n")
+
+    # Write to file alongside this module, not CWD (which varies by process launch dir)
+    _email_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "email_out.txt")
+    try:
+        with open(_email_log_path, "a", encoding="utf-8") as f:
+            f.write(msg_content + "\n\n")
+    except OSError as _e:
+        # Non-fatal: log the failure but don't break the calling flow
+        import logging
+        logging.getLogger(__name__).warning(f"Could not write email mock log: {_e}")
 
     if smtp_host and smtp_user and smtp_pass:
         try:

@@ -1250,9 +1250,12 @@ async def preview_table(table_name: str, org=Depends(get_current_org)):
         from main import AnalyticsAgent
         agent = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org.id}"])
         try:
-            # Sanitize table name to prevent SQL injection (basic check)
-            if not table_name.isidentifier():
-                 raise ValueError("Invalid table name")
+            # Sanitize table name to prevent SQL injection (consistent with rest of codebase)
+            from validators import TableNameValidator
+            try:
+                TableNameValidator.validate(table_name)
+            except Exception as e:
+                raise ValueError(str(e))
 
             # Get columns
             schema = agent.db.describe_table(table_name)
@@ -1369,8 +1372,11 @@ async def duplicate_table_endpoint(table_name: str, org=Depends(get_current_org)
         db_manager.duplicate_table(table_name, new_name)
         invalidate_schema_cache(conn_str)
         return {"status": "success", "new_table": new_name}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error duplicating table '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to duplicate table.")
     finally:
         if db_manager:
             db_manager.close()
@@ -1395,15 +1401,16 @@ async def update_cell_endpoint(table_name: str, request: UpdateCellRequest, org=
         )
         if not success:
             raise HTTPException(status_code=404, detail="Row not found or no change made")
-            
+
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating cell in '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update cell.")
     finally:
         if db_manager:
             db_manager.close()
-
-
 
 
 @router.post("/tables/{table_name}/columns/{column_name}/fill")
@@ -1429,8 +1436,11 @@ async def fill_missing_values_endpoint(
             request.weight_column
         )
         return {"status": "success", "rows_affected": rows_affected}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error filling missing values in '{table_name}'.'{column_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fill missing values.")
     finally:
         if db_manager:
             db_manager.close()
@@ -1455,9 +1465,11 @@ async def delete_table_endpoint(table_name: str, org=Depends(get_current_org),
         db_manager.drop_table(table_name)
         invalidate_schema_cache(conn_str)
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error deleting table: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error deleting table '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete table.")
     finally:
         if db_manager:
             db_manager.close()
@@ -1478,8 +1490,11 @@ async def rename_column_endpoint(table_name: str, request: RenameColumnRequest, 
         db_manager.rename_column(table_name, request.old_column, request.new_column)
         invalidate_schema_cache(conn_str)
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error renaming column in '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to rename column.")
     finally:
         if db_manager:
             db_manager.close()
@@ -1498,8 +1513,11 @@ async def drop_column_endpoint(table_name: str, column_name: str, org=Depends(ge
         db_manager.drop_column(table_name, column_name)
         invalidate_schema_cache(conn_str)
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error dropping column '{column_name}' from '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to drop column.")
     finally:
         if db_manager:
             db_manager.close()
@@ -1525,8 +1543,11 @@ async def delete_row_endpoint(table_name: str, row_id: str, org=Depends(get_curr
         if not success:
              raise HTTPException(status_code=404, detail="Row not found")
         return {"status": "success"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error deleting row '{row_id}' from '{table_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete row.")
     finally:
         if db_manager:
             db_manager.close()

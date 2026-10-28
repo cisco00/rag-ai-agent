@@ -37,12 +37,24 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
         # Determine target table
         source_table = request.table_name
         target_table = request.target_table
-        
+
+        # Validate table names before any SQL use
+        from validators import TableNameValidator
+        try:
+            TableNameValidator.validate(source_table)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid source table name: '{source_table}'")
+
         # If no target specified, default to creating a new one as requested by user
         if not target_table:
             target_table = f"transformed_{source_table}"
             logger.info(f"Auto-assigning target table: {target_table}")
-        
+
+        try:
+            TableNameValidator.validate(target_table)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid target table name: '{target_table}'")
+
         # Load table using threadpool
         def _load_df():
             query = f"SELECT * FROM {source_table}"

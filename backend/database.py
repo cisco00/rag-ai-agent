@@ -356,9 +356,10 @@ class DatabaseManager:
             
             selects = ["COUNT(*) as total_rows"]
             for col in cols:
-                selects.append(f"COUNT(*) - COUNT({col}) as nulls_{col}")
-                
-            sql = f"SELECT {', '.join(selects)} FROM {table_name}"
+                # Double-quote identifiers for SQL safety (handles reserved words, spaces in names)
+                selects.append(f'COUNT(*) - COUNT("{col}") as nulls_{col}')
+
+            sql = f'SELECT {", ".join(selects)} FROM "{table_name}"'
             
             with self.engine.connect() as conn:
                 # Start explicit transaction
@@ -563,7 +564,7 @@ class DatabaseManager:
             if table_name not in self.list_tables():
                 raise TableNotFoundError(table_name)
                 
-            return pd.read_sql(f"SELECT * FROM {table_name}", self.engine)
+            return pd.read_sql(f'SELECT * FROM "{table_name}"', self.engine)
             
         except Exception as e:
             logger.error(f"Error fetching table data: {e}", exc_info=True)
@@ -661,9 +662,8 @@ class DatabaseManager:
             if new_table_name in existing_tables:
                 raise QueryExecutionError(f"Table '{new_table_name}' already exists")
             
-            # Create copy
-            # Use safe interpolation since we validated table names
-            sql = f"CREATE TABLE {new_table_name} AS SELECT * FROM {table_name}"
+            # Create copy — double-quote identifiers for defence-in-depth
+            sql = f'CREATE TABLE "{new_table_name}" AS SELECT * FROM "{table_name}"'
             
             self.execute_query(sql, validate=True, allow_modifications=True)
             
@@ -713,12 +713,11 @@ class DatabaseManager:
             dialect = self.engine.dialect.name
             
             if dialect == 'postgresql':
-                 # Postgres uses ctid
-                 # row_id should be string 'TID(block,offset)' but we passed it as string from api.py
-                 sql = f"UPDATE {table_name} SET {column} = :value WHERE ctid = :row_id"
+                 # Postgres uses ctid; double-quote table/column identifiers for safety
+                 sql = f'UPDATE "{table_name}" SET "{column}" = :value WHERE ctid = :row_id'
             else:
                  # SQLite uses rowid
-                 sql = f"UPDATE {table_name} SET {column} = :value WHERE rowid = :row_id"
+                 sql = f'UPDATE "{table_name}" SET "{column}" = :value WHERE rowid = :row_id'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -756,8 +755,8 @@ class DatabaseManager:
             if column not in cols:
                 raise QueryExecutionError(f"Column '{column}' does not exist in table '{table_name}'")
             
-            # SQLite supports DROP COLUMN since 3.35.0
-            sql = f"ALTER TABLE {table_name} DROP COLUMN {column}"
+            # SQLite supports DROP COLUMN since 3.35.0 — quote identifiers
+            sql = f'ALTER TABLE "{table_name}" DROP COLUMN "{column}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -787,9 +786,11 @@ class DatabaseManager:
             from validators import TableNameValidator
             TableNameValidator.validate(table_name)
             
-            # Simple validation for new column name
-            if not new_column.isidentifier():
-                 raise QueryExecutionError(f"Invalid new column name: {new_column}")
+            # Validate new column name using the same strict validator as table names
+            try:
+                TableNameValidator.validate(new_column)
+            except Exception:
+                raise QueryExecutionError(f"Invalid new column name: '{new_column}'")
             
             # Verify old column exists
             schema = self.describe_table(table_name)
@@ -797,7 +798,7 @@ class DatabaseManager:
             if old_column not in cols:
                 raise QueryExecutionError(f"Column '{old_column}' does not exist in table '{table_name}'")
                 
-            sql = f"ALTER TABLE {table_name} RENAME COLUMN {old_column} TO {new_column}"
+            sql = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_column}" TO "{new_column}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -822,8 +823,8 @@ class DatabaseManager:
             from validators import TableNameValidator
             TableNameValidator.validate(table_name)
             
-            # Use execute_query for consistency
-            sql = f"DROP TABLE {table_name}"
+            # Double-quote identifier for defence-in-depth
+            sql = f'DROP TABLE "{table_name}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -869,8 +870,8 @@ class DatabaseManager:
                 fill_val = value
                 
             elif strategy == 'mean':
-                # Calculate mean
-                sql_mean = f"SELECT AVG({column}) FROM {table_name}"
+                # Calculate mean — double-quote identifiers for safety
+                sql_mean = f'SELECT AVG("{column}") FROM "{table_name}"'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_mean)).scalar()
                 if result is None:
@@ -879,16 +880,16 @@ class DatabaseManager:
                 fill_val = result
                 
             elif strategy == 'median':
-                # Calculate median (SQLite compatible)
+                # Calculate median (SQLite compatible) — double-quote identifiers
                 sql_median = f"""
-                    SELECT AVG({column})
+                    SELECT AVG("{column}")
                     FROM (
-                        SELECT {column}
-                        FROM {table_name}
-                        WHERE {column} IS NOT NULL
-                        ORDER BY {column}
-                        LIMIT 2 - (SELECT COUNT(*) FROM {table_name} WHERE {column} IS NOT NULL) % 2
-                        OFFSET (SELECT (COUNT(*) - 1) / 2 FROM {table_name} WHERE {column} IS NOT NULL)
+                        SELECT "{column}"
+                        FROM "{table_name}"
+                        WHERE "{column}" IS NOT NULL
+                        ORDER BY "{column}"
+                        LIMIT 2 - (SELECT COUNT(*) FROM "{table_name}" WHERE "{column}" IS NOT NULL) % 2
+                        OFFSET (SELECT (COUNT(*) - 1) / 2 FROM "{table_name}" WHERE "{column}" IS NOT NULL)
                     )
                 """
                 with self.engine.connect() as conn:
@@ -904,8 +905,8 @@ class DatabaseManager:
                 if weight_column not in cols:
                     raise QueryExecutionError(f"Weight column '{weight_column}' does not exist")
 
-                # Calculate weighted mean: SUM(col * weight) / SUM(weight)
-                sql_weighted = f"SELECT SUM({column} * {weight_column}) / SUM({weight_column}) FROM {table_name}"
+                # Calculate weighted mean: SUM(col * weight) / SUM(weight) — quote identifiers
+                sql_weighted = f'SELECT SUM("{column}" * "{weight_column}") / SUM("{weight_column}") FROM "{table_name}"'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_weighted)).scalar()
                 if result is None:
@@ -914,8 +915,8 @@ class DatabaseManager:
                 fill_val = result
 
             elif strategy == 'mode':
-                # Calculate mode
-                sql_mode = f"SELECT {column} FROM {table_name} WHERE {column} IS NOT NULL GROUP BY {column} ORDER BY COUNT(*) DESC LIMIT 1"
+                # Calculate mode — quote identifiers
+                sql_mode = f'SELECT "{column}" FROM "{table_name}" WHERE "{column}" IS NOT NULL GROUP BY "{column}" ORDER BY COUNT(*) DESC LIMIT 1'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_mode)).scalar()
                 if result is None:
@@ -926,8 +927,8 @@ class DatabaseManager:
             else:
                 raise QueryExecutionError(f"Unknown strategy: {strategy}")
             
-            # Execute Update
-            sql_update = f"UPDATE {table_name} SET {column} = :fill_val WHERE {column} IS NULL"
+            # Execute Update — quote identifiers
+            sql_update = f'UPDATE "{table_name}" SET "{column}" = :fill_val WHERE "{column}" IS NULL'
             
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql_update), {"fill_val": fill_val})
@@ -956,9 +957,9 @@ class DatabaseManager:
             
             dialect = self.engine.dialect.name
             if dialect == 'postgresql':
-                 sql = f"DELETE FROM {table_name} WHERE ctid = :row_id"
+                 sql = f'DELETE FROM "{table_name}" WHERE ctid = :row_id'
             else:
-                 sql = f"DELETE FROM {table_name} WHERE rowid = :row_id"
+                 sql = f'DELETE FROM "{table_name}" WHERE rowid = :row_id'
             
             with self.engine.connect() as conn:
                 with conn.begin():

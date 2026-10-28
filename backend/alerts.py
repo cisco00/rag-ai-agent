@@ -310,6 +310,11 @@ def _evaluate_metric_rule(rule: dict, org_conn_str: str) -> tuple[bool, Optional
     threshold = rule["threshold_value"]
     hours     = rule.get("lookback_hours", 24)
 
+    # Allowlist aggregate functions to prevent second-order SQL injection
+    _ALLOWED_AGGS = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
+    if agg not in _ALLOWED_AGGS:
+        return False, None, f"Unsupported aggregate function: {agg}"
+
     dm = DatabaseManager(connection_string=org_conn_str)
     try:
         dialect = dm.engine.dialect.name

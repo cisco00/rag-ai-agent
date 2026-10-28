@@ -487,7 +487,12 @@ Score the recommendation using this rubric:
 
     # Built-in production Gemini key — web deployments only.
     # Desktop mode never uses this; the setup wizard always asks the user.
-    _WEB_GEMINI_KEY: str = "AIzaSyCogBb4GM3ZX6tzfI9FzSYfl1wIhiVoxOM"
+    # Security fix: read from environment instead of hardcoding in source.
+    # Set BUILTIN_GOOGLE_API_KEY in your deployment environment (e.g. via
+    # Secrets Manager, Doppler, or .env) — never commit the key to source.
+    _WEB_GEMINI_KEY: str = field(
+        default_factory=lambda: os.getenv("BUILTIN_GOOGLE_API_KEY", "")
+    )
 
     llm_api_key: Optional[str] = field(default_factory=lambda: os.getenv("LLM_API_KEY"))
     hf_token: Optional[str] = field(default_factory=lambda: os.getenv("HF_TOKEN"))
