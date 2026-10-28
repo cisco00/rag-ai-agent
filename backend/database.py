@@ -108,18 +108,27 @@ class DatabaseManager:
                 "pool_timeout": config.pool_timeout,
             })
             
-            # Add driver-specific timeouts for production safety
+            # Add driver-specific timeouts and SSL for production safety
             try:
                 dialect = self.connection_string.split("://")[0].lower()
                 if "postgresql" in dialect:
-                    engine_kwargs["connect_args"] = {
+                    pg_connect_args: dict = {
                         "connect_timeout": 10,
-                        "options": "-c statement_timeout=30000"  # 30 seconds
+                        "sslmode": "require",  # required by Neon, Supabase, and most managed PG
                     }
+                    # Neon's *pooled* endpoint (hostname contains "-pooler.") rejects
+                    # custom startup parameters such as statement_timeout — they must be
+                    # set on the server or passed only via an *unpooled* connection.
+                    # For all other Postgres hosts we keep the application-level timeout.
+                    _host = self.connection_string.split("@")[-1].split("/")[0].split(":")[0]
+                    _is_neon_pooler = "neon.tech" in _host and "-pooler." in _host
+                    if not _is_neon_pooler:
+                        pg_connect_args["options"] = "-c statement_timeout=30000"  # 30 s
+                    engine_kwargs["connect_args"] = pg_connect_args
                 elif "mysql" in dialect:
                     engine_kwargs["connect_args"] = {
                         "connect_timeout": 10,
-                        "read_timeout": 30
+                        "read_timeout": 30,
                     }
             except Exception:
                 pass
