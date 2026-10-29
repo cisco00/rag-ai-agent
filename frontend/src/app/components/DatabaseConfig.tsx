@@ -591,7 +591,32 @@ export function DatabaseConfig({ onConfigured, onNavigate }: DatabaseConfigProps
             <Plus className="size-6 text-blue-600" />
             <h2 className="text-xl font-bold text-gray-900">Create New Database User</h2>
           </div>
-          <p className="text-sm text-gray-500 mb-6">Create a dedicated user for an existing database or provision a brand new database.</p>
+
+          {/* Cloud provider warning */}
+          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-300 rounded-lg">
+            <AlertCircle className="size-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-amber-900 text-sm">Self-hosted PostgreSQL only</p>
+              <p className="text-sm text-amber-800 mt-1">
+                This panel creates a new database on a PostgreSQL server running inside your own infrastructure.
+                It does <strong>not</strong> work with cloud-managed providers such as{' '}
+                <strong>Neon, Supabase, RDS, or Cloud SQL</strong> — those providers manage databases through
+                their own dashboards and do not expose superuser access.
+              </p>
+              <p className="text-sm text-amber-800 mt-2">
+                Using Neon or another cloud database?{' '}
+                <button
+                  onClick={() => { setConfigMode('existing'); setStatus('idle'); }}
+                  className="font-semibold underline hover:text-amber-900"
+                >
+                  Switch to "Existing DB"
+                </button>{' '}
+                and paste your connection details from the provider's dashboard.
+              </p>
+            </div>
+          </div>
+
+          <p className="text-sm text-gray-500">Create a dedicated user for a self-hosted PostgreSQL database.</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
             <div className="md:col-span-2">
