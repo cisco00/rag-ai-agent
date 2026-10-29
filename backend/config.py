@@ -57,19 +57,25 @@ import secrets
 load_dotenv()
 
 
-def _encode_db_url_password(url: str) -> str:
+def _encode_db_url_credentials(url: str) -> str:
     """
-    Percent-encode special characters in the password portion of a DB URL.
+    Percent-encode special characters in BOTH the username and password of a
+    DB URL so the result is unambiguous per RFC 3986.
 
-    Providers like Supabase generate passwords that may contain '@', '/', '#',
-    etc.  When those characters appear un-encoded in the URL the host parser
-    mistakes part of the password for the hostname, e.g.:
+    Providers like Neon and Supabase may use an email address as the Postgres
+    username (e.g. user@example.com) and generate passwords that contain '@',
+    '/', '#', etc.  When those characters appear un-encoded the URL parser
+    mistakes part of the credentials for the hostname, e.g.:
 
+        failed to resolve host 'gmail.com:password@neon.tech'
         failed to resolve host 'Ab@aws-0-eu-west-1.pooler.supabase.com'
 
-    We recover by splitting on the LAST '@' (which is always the
-    credential/host separator) and percent-encoding everything between the
-    first ':' and that final '@'.
+    Strategy
+    --------
+    We split on the LAST '@' (which is always the credential/host separator)
+    and percent-encode:
+      • Any '@' in the username portion (replaces bare '@' with '%40')
+      • All special characters in the password ('@', '/', '#', ':', etc.)
     """
     from urllib.parse import quote
 
@@ -89,18 +95,31 @@ def _encode_db_url_password(url: str) -> str:
 
         first_colon = credentials.find(":")
         if first_colon == -1:
-            return url                          # username-only, no password
+            # username-only (no password); still encode '@' in username
+            encoded_user = quote(credentials, safe="!$&'()*+,;=")
+            if encoded_user == credentials:
+                return url
+            return f"{scheme}://{encoded_user}@{host_and_rest}"
 
         username = credentials[:first_colon]
         password = credentials[first_colon + 1:]
-        encoded  = quote(password, safe="")     # encode '@', '/', '#', etc.
 
-        if encoded == password:
+        # Encode '@' (and other reserved chars) in the username so the URL is
+        # unambiguous — e.g. "user@example.com" → "user%40example.com".
+        encoded_user = quote(username, safe="!$&'()*+,;=")
+        # Encode everything in the password: '@', '/', '#', '?', etc.
+        encoded_pass = quote(password, safe="")
+
+        if encoded_user == username and encoded_pass == password:
             return url                          # nothing needed encoding
 
-        return f"{scheme}://{username}:{encoded}@{host_and_rest}"
+        return f"{scheme}://{encoded_user}:{encoded_pass}@{host_and_rest}"
     except Exception:
         return url                              # never break startup over a URL fix
+
+
+# Keep the old name as an alias so any external callers are unaffected.
+_encode_db_url_password = _encode_db_url_credentials
 
 
 def _build_postgres_url() -> str:
@@ -123,8 +142,8 @@ def _build_postgres_url() -> str:
     if url := os.getenv("DATABASE_URL"):
         # SQLAlchemy 1.4+ rejects the legacy postgres:// scheme
         url = url.replace("postgres://", "postgresql://", 1)
-        # Fix unencoded special characters in the password (e.g. Supabase URLs)
-        url = _encode_db_url_password(url)
+        # Fix unencoded special characters in credentials (e.g. Neon/Supabase URLs)
+        url = _encode_db_url_credentials(url)
         # Railway sometimes emits postgresql+psycopg:// (psycopg v3 dialect).
         # We ship both psycopg2-binary AND psycopg[binary], so either works;
         # but if psycopg3 isn't available for any reason, fall back to psycopg2.
@@ -142,14 +161,14 @@ def _build_postgres_url() -> str:
 
     # Only build a Postgres URL if a host was supplied
     if host:
+        from urllib.parse import quote as _quote
+        # URL-encode both username and password so special characters (@ / # etc.)
+        # — including email addresses used as Neon usernames — are not mis-parsed.
+        encoded_user = _quote(user, safe="!$&'()*+,;=")
         if password:
-            # URL-encode the password so that special characters (@ / # etc.)
-            # are not mis-parsed as part of the host/path.  This is the same
-            # treatment _encode_db_url_password applies to DATABASE_URL.
-            from urllib.parse import quote as _quote
             encoded_password = _quote(password, safe="")
-            return f"postgresql://{user}:{encoded_password}@{host}:{port}/{db}"
-        return f"postgresql://{user}@{host}:{port}/{db}"
+            return f"postgresql://{encoded_user}:{encoded_password}@{host}:{port}/{db}"
+        return f"postgresql://{encoded_user}@{host}:{port}/{db}"
 
     # Nothing configured — fall back to SQLite for local dev
     return "sqlite:///identifier.sqlite.db"

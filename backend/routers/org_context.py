@@ -84,9 +84,15 @@ async def configure_db(request: ConfigRequest, org=Depends(get_current_org),
             db_path = f"/data/file_db_{safe_api_key}.sqlite"
             connection_string = f"sqlite:///{db_path}"
         elif request.db_type in ["postgresql", "mysql"]:
-            user_part = request.user or ""
-            pass_part = f":{request.password}" if request.password else ""
-            auth_part = f"{user_part}{pass_part}@" if user_part or pass_part else ""
+            from urllib.parse import quote as _url_quote
+            raw_user = request.user or ""
+            raw_pass = request.password or ""
+            # URL-encode username and password so that special characters
+            # (including '@' in email-style Neon usernames) don't break parsing.
+            enc_user = _url_quote(raw_user, safe="!$&'()*+,;=") if raw_user else ""
+            enc_pass = _url_quote(raw_pass, safe="")            if raw_pass else ""
+            pass_part = f":{enc_pass}" if enc_pass else ""
+            auth_part = f"{enc_user}{pass_part}@" if enc_user or pass_part else ""
             port_part = f":{request.port}" if request.port else ""
             host_part = request.host or "localhost"
             db_name_part = request.db_name or ""
