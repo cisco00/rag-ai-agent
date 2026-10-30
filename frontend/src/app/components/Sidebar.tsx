@@ -97,13 +97,13 @@ export function Sidebar({
     { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
     { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured, hide: !hasPerm('VIEW_ADVANCED') },
     { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') },
+    { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured },
     { id: 'integrations', label: 'Integrations', icon: Box, hide: !hasPerm('MANAGE_ORG') },
   ].filter(item => !item.hide);
 
   const adminItems = [
     { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
     { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
-    { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
     { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },
     { id: 'audit', label: 'Audit Trail', icon: ClipboardList, hide: !hasPerm('MANAGE_ORG') },
