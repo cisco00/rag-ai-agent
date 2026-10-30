@@ -54,10 +54,18 @@ async function launchOAuthPopup(): Promise<GoogleTokens> {
       return;
     }
 
-    // The popup redirects back to GOOGLE_REDIRECT_URI which should post a message
+    // The popup redirects back to GOOGLE_REDIRECT_URI (/sheets/callback) which
+    // posts a message back here with the OAuth code.
     const onMessage = async (e: MessageEvent) => {
+      if (e.data?.type === 'google-oauth-error') {
+        window.removeEventListener('message', onMessage);
+        clearInterval(poll);
+        reject(new Error(`Google sign-in failed: ${e.data.error}`));
+        return;
+      }
       if (e.data?.type !== 'google-oauth-code') return;
       window.removeEventListener('message', onMessage);
+      clearInterval(poll);
       popup.close();
       try {
         const tokens = await api.post<GoogleTokens>('/sheets/exchange-code', { code: e.data.code });
@@ -68,7 +76,7 @@ async function launchOAuthPopup(): Promise<GoogleTokens> {
     };
     window.addEventListener('message', onMessage);
 
-    // Fallback: poll for popup close
+    // Fallback: detect popup close before message arrives
     const poll = setInterval(() => {
       if (!popup || popup.closed) {
         clearInterval(poll);
@@ -376,15 +384,22 @@ export function GoogleSheetsSync({ initialQuery }: GoogleSheetsSyncProps) {
       {!serverConfigured && !loading && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-4 flex items-start gap-3">
           <AlertCircle className="size-5 text-amber-500 shrink-0 mt-0.5" />
-          <div>
+          <div className="space-y-2">
             <p className="font-semibold text-amber-800 text-sm">Google OAuth not configured</p>
-            <p className="text-xs text-amber-600 mt-1">
+            <p className="text-xs text-amber-600">
               Set <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code> and{' '}
-              <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code> environment variables,
-              then restart the backend. You'll also need to register{' '}
-              <code className="bg-amber-100 px-1 rounded">/sheets/callback</code> as an OAuth redirect URI
-              in your Google Cloud Console.
+              <code className="bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code> in your Railway
+              environment variables, then redeploy.
             </p>
+            <p className="text-xs text-amber-600">
+              Also add this exact URL as an <strong>Authorized redirect URI</strong> in your{' '}
+              <a href="https://console.cloud.google.com/apis/credentials"
+                 target="_blank" rel="noopener noreferrer"
+                 className="underline font-medium">Google Cloud Console → Credentials</a>:
+            </p>
+            <code className="block text-xs bg-amber-100 text-amber-900 px-2 py-1.5 rounded break-all select-all">
+              {(import.meta.env.VITE_API_URL || window.location.origin)}/sheets/callback
+            </code>
           </div>
         </div>
       )}

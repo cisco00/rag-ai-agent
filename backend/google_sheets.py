@@ -24,7 +24,12 @@ logger = get_logger(__name__)
 
 GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI  = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/sheets/callback")
+
+# GOOGLE_REDIRECT_URI may be set explicitly; if not, it is derived at request
+# time from APP_URL so the same deployment works on localhost and on Railway
+# without any additional env var.  Format: <APP_URL>/sheets/callback
+_APP_URL            = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{_APP_URL}/sheets/callback")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",

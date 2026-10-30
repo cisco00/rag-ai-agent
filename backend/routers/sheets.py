@@ -3,8 +3,8 @@ routers/sheets.py — Feature #8: Google Sheets / Excel Live Sync
 """
 
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 
 from dependencies import get_current_org
@@ -65,6 +65,54 @@ async def auth_url(
         return {"url": url}
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.get("/sheets/callback")
+async def oauth_callback(
+    request: Request,
+    code: str = Query(default=""),
+    error: str = Query(default=""),
+    state: str = Query(default=""),
+):
+    """
+    Google OAuth redirect landing page.
+
+    After the user approves access Google redirects here with ?code=... .
+    This page posts the code back to the opener window via postMessage so
+    the popup can close itself and the main page can exchange it for tokens.
+    """
+    if error:
+        html = f"""<!DOCTYPE html>
+<html>
+<head><title>Google Auth</title></head>
+<body>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{ type: 'google-oauth-error', error: {error!r} }}, '*');
+  }}
+  window.close();
+</script>
+<p>Authentication failed: {error}. You may close this window.</p>
+</body>
+</html>"""
+        return HTMLResponse(content=html)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><title>Google Auth</title></head>
+<body>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({{ type: 'google-oauth-code', code: {code!r}, state: {state!r} }}, '*');
+    window.close();
+  }} else {{
+    document.getElementById('msg').textContent = 'Sign-in complete. You may close this tab.';
+  }}
+</script>
+<p id="msg">Completing sign-in…</p>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 @router.post("/sheets/exchange-code")
