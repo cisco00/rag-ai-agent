@@ -1,4 +1,4 @@
-# Backend Dockerfile
+# Backend Dockerfile (build context = backend/ directory)
 FROM python:3.11-slim
 
 # Set working directory

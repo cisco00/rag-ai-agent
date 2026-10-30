@@ -1,0 +1,59 @@
+# ── Stage 1: Build the React frontend ────────────────────────────────────────
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /build/frontend
+
+# Install deps first (better layer caching)
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --prefer-offline
+
+# Copy full frontend source and build
+COPY frontend/ ./
+RUN npm run build
+# Compiled output is now at /build/frontend/dist
+
+# ── Stage 2: Python backend ───────────────────────────────────────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --timeout=300 --retries=5 -r requirements.txt
+
+# Backend source
+COPY backend/ .
+
+# Bake the compiled frontend into the image at the path api.py expects.
+# api.py resolves project_root = dirname(dirname(abspath(__file__)))
+# → __file__ = /app/api.py  →  dirname = /app  →  dirname again = /
+# so the relative path "frontend/dist" maps to /frontend/dist.
+# We also place it at /app/frontend/dist which matches the absolute fallback.
+RUN mkdir -p /app/frontend/dist
+COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
+
+# Non-root user
+RUN useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+ENV ENVIRONMENT=production
+ENV LLM_PROVIDER=google
+ENV LLM_MODEL_NAME=gemini-1.5-pro
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+CMD ["sh", "-c", "alembic upgrade head || echo '[WARN] DB migrations failed'; uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
