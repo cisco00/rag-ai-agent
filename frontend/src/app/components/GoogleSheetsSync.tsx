@@ -54,34 +54,58 @@ async function launchOAuthPopup(): Promise<GoogleTokens> {
       return;
     }
 
-    // The popup redirects back to GOOGLE_REDIRECT_URI (/sheets/callback) which
-    // posts a message back here with the OAuth code.
-    const onMessage = async (e: MessageEvent) => {
-      if (e.data?.type === 'google-oauth-error') {
-        window.removeEventListener('message', onMessage);
-        clearInterval(poll);
-        reject(new Error(`Google sign-in failed: ${e.data.error}`));
-        return;
-      }
-      if (e.data?.type !== 'google-oauth-code') return;
+    let settled = false;
+
+    const cleanup = () => {
       window.removeEventListener('message', onMessage);
       clearInterval(poll);
-      popup.close();
+      try { bc?.close(); } catch (_) {}
+    };
+
+    const handleOAuthMsg = async (data: { type: string; code?: string; error?: string }) => {
+      if (settled) return;
+      if (data.type === 'google-oauth-error') {
+        settled = true;
+        cleanup();
+        reject(new Error(`Google sign-in failed: ${data.error}`));
+        return;
+      }
+      if (data.type !== 'google-oauth-code') return;
+      settled = true;
+      cleanup();
+      try { popup.close(); } catch (_) {}
       try {
-        const tokens = await api.post<GoogleTokens>('/sheets/exchange-code', { code: e.data.code });
+        const tokens = await api.post<GoogleTokens>('/sheets/exchange-code', { code: data.code });
         resolve(tokens);
       } catch (err: any) {
         reject(err);
       }
     };
+
+    // Method 1 — window.postMessage (works when opener ref is preserved)
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'google-oauth-code' || e.data?.type === 'google-oauth-error') {
+        handleOAuthMsg(e.data);
+      }
+    };
     window.addEventListener('message', onMessage);
 
-    // Fallback: detect popup close before message arrives
+    // Method 2 — BroadcastChannel (same-origin; survives Google's COOP headers
+    // that null out window.opener before the callback page runs)
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('vantage-google-oauth');
+      bc.onmessage = (e: MessageEvent) => handleOAuthMsg(e.data);
+    } catch (_) { /* BroadcastChannel not supported */ }
+
+    // Fallback: detect popup closed without a code message
     const poll = setInterval(() => {
       if (!popup || popup.closed) {
-        clearInterval(poll);
-        window.removeEventListener('message', onMessage);
-        reject(new Error('OAuth popup closed without completing sign-in.'));
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new Error('OAuth popup closed without completing sign-in.'));
+        }
       }
     }, 1000);
   });

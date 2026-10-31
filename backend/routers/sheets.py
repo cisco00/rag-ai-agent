@@ -84,32 +84,80 @@ async def oauth_callback(
     if error:
         html = f"""<!DOCTYPE html>
 <html>
-<head><title>Google Auth</title></head>
+<head><title>Google Auth</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; margin: 0; background: #0f172a; color: #f1f5f9; }}
+  .card {{ background: #1e293b; border: 1px solid #ef4444; border-radius: 12px;
+           padding: 32px; max-width: 400px; text-align: center; }}
+  h2 {{ color: #ef4444; margin: 0 0 12px; }}
+</style>
+</head>
 <body>
+<div class="card">
+  <h2>Sign-in failed</h2>
+  <p style="color:#94a3b8">{error}</p>
+  <button onclick="window.close()" style="margin-top:16px;padding:8px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer">Close</button>
+</div>
 <script>
-  if (window.opener) {{
-    window.opener.postMessage({{ type: 'google-oauth-error', error: {error!r} }}, '*');
-  }}
-  window.close();
+  (function() {{
+    var msg = {{ type: 'google-oauth-error', error: {error!r} }};
+    try {{ if (window.opener) window.opener.postMessage(msg, '*'); }} catch(e) {{}}
+    try {{ var bc = new BroadcastChannel('vantage-google-oauth'); bc.postMessage(msg); bc.close(); }} catch(e) {{}}
+    setTimeout(function() {{ window.close(); }}, 300);
+  }})();
 </script>
-<p>Authentication failed: {error}. You may close this window.</p>
 </body>
 </html>"""
         return HTMLResponse(content=html)
 
     html = f"""<!DOCTYPE html>
 <html>
-<head><title>Google Auth</title></head>
+<head><title>Google Auth</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; margin: 0; background: #0f172a; color: #f1f5f9; }}
+  .card {{ background: #1e293b; border: 1px solid #22c55e; border-radius: 12px;
+           padding: 32px; max-width: 400px; text-align: center; }}
+  .spinner {{ width: 40px; height: 40px; border: 3px solid #334155;
+              border-top-color: #3b82f6; border-radius: 50%;
+              animation: spin 0.8s linear infinite; margin: 0 auto 16px; }}
+  @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  #msg {{ color: #94a3b8; margin: 0 0 16px; }}
+  #closebtn {{ display: none; margin-top: 12px; padding: 8px 20px;
+               background: #3b82f6; color: #fff; border: none;
+               border-radius: 8px; cursor: pointer; font-size: 14px; }}
+</style>
+</head>
 <body>
+<div class="card">
+  <div class="spinner" id="spinner"></div>
+  <p id="msg">Completing sign-in…</p>
+  <button id="closebtn" onclick="window.close()">Close this window</button>
+</div>
 <script>
-  if (window.opener) {{
-    window.opener.postMessage({{ type: 'google-oauth-code', code: {code!r}, state: {state!r} }}, '*');
+  (function() {{
+    var msg = {{ type: 'google-oauth-code', code: {code!r}, state: {state!r} }};
+
+    // Method 1 — BroadcastChannel (same-origin tabs, survives Google COOP headers)
+    try {{
+      var bc = new BroadcastChannel('vantage-google-oauth');
+      bc.postMessage(msg);
+      bc.close();
+    }} catch(e) {{}}
+
+    // Method 2 — postMessage to opener (works when opener ref is preserved)
+    try {{ if (window.opener) window.opener.postMessage(msg, '*'); }} catch(e) {{}}
+
+    // Close the popup; if blocked, show a manual close button after 1 s
     window.close();
-  }} else {{
-    document.getElementById('msg').textContent = 'Sign-in complete. You may close this tab.';
-  }}
+    setTimeout(function() {{
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('msg').textContent = 'Sign-in complete!';
+      document.getElementById('closebtn').style.display = 'inline-block';
+    }}, 1000);
+  }})();
 </script>
-<p id="msg">Completing sign-in…</p>
 </body>
 </html>"""
     return HTMLResponse(content=html)
