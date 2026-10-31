@@ -8,6 +8,8 @@ declare global {
   }
 }
 
+import { secureStorage } from './secureStorage';
+
 /** Check if running inside Tauri desktop wrapper */
 export const isDesktopMode = (): boolean =>
   !!(window.__VANTAGE_API_URL__ || window.__TAURI_INTERNALS__);
@@ -16,20 +18,20 @@ export const isDesktopMode = (): boolean =>
 const getBaseUrl = (): string =>
   window.__VANTAGE_API_URL__ || import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export const getApiKey = () => localStorage.getItem('vantage_api_key');
-export const getAccessToken = () => localStorage.getItem('vantage_access_token');
+export const getApiKey = () => secureStorage.getItem('vantage_api_key');
+export const getAccessToken = () => secureStorage.getItem('vantage_access_token');
 
 export const clearSession = () => {
-  localStorage.removeItem('vantage_api_key');
-  localStorage.removeItem('vantage_access_token');
-  localStorage.removeItem('vantage_refresh_token');
+  secureStorage.removeItem('vantage_api_key');
+  secureStorage.removeItem('vantage_access_token');
+  secureStorage.removeItem('vantage_refresh_token');
   localStorage.removeItem('vantage_user');
   localStorage.removeItem('vantage_branding');
 };
 
 /** Attempt to refresh access token. Returns new token or null on failure. */
 async function tryRefreshToken(): Promise<string | null> {
-  const refreshToken = localStorage.getItem('vantage_refresh_token');
+  const refreshToken = secureStorage.getItem('vantage_refresh_token');
   if (!refreshToken) {
     console.warn('[api] No refresh token available.');
     return null;
@@ -56,7 +58,7 @@ async function tryRefreshToken(): Promise<string | null> {
       return null;
     }
 
-    localStorage.setItem('vantage_access_token', data.access_token);
+    secureStorage.setItem('vantage_access_token', data.access_token);
     console.log('[api] Token successfully refreshed.');
     return data.access_token;
   } catch (err) {

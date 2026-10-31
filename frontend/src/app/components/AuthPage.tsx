@@ -5,6 +5,7 @@ import {
     ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2, KeyRound, Loader2
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { secureStorage } from '../../lib/secureStorage';
 
 // --- Shared Types ---
 
@@ -274,7 +275,7 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
 
             const apiKey = orgRes.api_key;
             setNewApiKey(apiKey);
-            localStorage.setItem('vantage_api_key', apiKey);
+            secureStorage.setItem('vantage_api_key', apiKey);
 
             const authRes = await api.post<any>('/auth/register-first-user', {
                 email: regEmail,
@@ -282,8 +283,8 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
                 display_name: regDisplayName || regEmail.split('@')[0]
             });
 
-            localStorage.setItem('vantage_access_token', authRes.access_token);
-            localStorage.setItem('vantage_refresh_token', authRes.refresh_token);
+            secureStorage.setItem('vantage_access_token', authRes.access_token);
+            secureStorage.setItem('vantage_refresh_token', authRes.refresh_token);
             localStorage.setItem('vantage_user', JSON.stringify(authRes.user || authRes));
 
             setStep(2); // Success step
@@ -661,10 +662,10 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
             setSuccess('Role updated successfully');
             
             if (newRole === 'owner') {
-                // We demoted ourselves! Update local storage user context and refresh page 
+                // We demoted ourselves! Update local storage user context and refresh page
                 const currentUser = JSON.parse(localStorage.getItem('vantage_user') || '{}');
                 currentUser.role = 'admin';
-                localStorage.setItem('vantage_user', JSON.stringify(currentUser));
+                localStorage.setItem('vantage_user', JSON.stringify(currentUser)); // non-sensitive profile data
                 window.location.reload();
             } else {
                 fetchInviteStatuses();
@@ -708,8 +709,8 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
     };
 
     const handleContinue = () => {
-        const accessToken = localStorage.getItem('vantage_access_token');
-        const refreshToken = localStorage.getItem('vantage_refresh_token');
+        const accessToken = secureStorage.getItem('vantage_access_token');
+        const refreshToken = secureStorage.getItem('vantage_refresh_token');
         const user = JSON.parse(localStorage.getItem('vantage_user') || '{}');
         if (newApiKey && accessToken && refreshToken) {
             onLoginSuccess(newApiKey, accessToken, refreshToken, user);

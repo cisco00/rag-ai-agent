@@ -37,6 +37,7 @@ import { DataPermissions } from './components/DataPermissions';
 import { AuditTrail } from './components/AuditTrail';
 import { SSOConfig } from './components/SSOConfig';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
+import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
 const langfuse = new LangfuseWeb({
@@ -92,7 +93,7 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(getAccessToken());
   const [user, setUser] = useState<any>(() => {
     try {
-      const saved = localStorage.getItem('vantage_user');
+      const saved = secureStorage.getItem('vantage_user') ?? localStorage.getItem('vantage_user');
       return saved ? JSON.parse(saved) : null;
     } catch { return null; }
   });
@@ -129,8 +130,8 @@ export default function App() {
           if (res.ok) {
             // Auto-create desktop session (no login needed)
             if (!getApiKey()) {
-              localStorage.setItem('vantage_api_key', 'desktop-local');
-              localStorage.setItem('vantage_access_token', 'desktop-local');
+              secureStorage.setItem('vantage_api_key', 'desktop-local');
+              secureStorage.setItem('vantage_access_token', 'desktop-local');
               localStorage.setItem('vantage_user', JSON.stringify({
                 display_name: 'Desktop User',
                 email: 'desktop@local',
@@ -169,7 +170,7 @@ export default function App() {
     if (!accessToken || !apiKey) return;
     if (!isTokenExpiredOrExpiring(accessToken)) return;
 
-    const refreshToken = localStorage.getItem('vantage_refresh_token');
+    const refreshToken = secureStorage.getItem('vantage_refresh_token');
     if (!refreshToken) return;
 
     console.log('[App] Access token expired on startup — proactively refreshing...');
@@ -181,7 +182,7 @@ export default function App() {
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => {
         if (data.access_token) {
-          localStorage.setItem('vantage_access_token', data.access_token);
+          secureStorage.setItem('vantage_access_token', data.access_token);
           setAccessToken(data.access_token);
           console.log('[App] Token refreshed proactively at startup.');
         }
@@ -222,7 +223,7 @@ export default function App() {
     api.get('/auth/me')
       .then((data) => {
         setUser(data);
-        localStorage.setItem('vantage_user', JSON.stringify(data));
+        localStorage.setItem('vantage_user', JSON.stringify(data)); // non-sensitive profile data
       })
       .catch((err) => {
         console.error('[App] Failed to recover user profile:', err);
@@ -272,15 +273,15 @@ export default function App() {
     setApiKey(key);
     setAccessToken(access);
     setUser(userData);
-    localStorage.setItem('vantage_api_key', key);
-    localStorage.setItem('vantage_access_token', access);
-    localStorage.setItem('vantage_refresh_token', refresh);
-    localStorage.setItem('vantage_user', JSON.stringify(userData));
+    secureStorage.setItem('vantage_api_key', key);
+    secureStorage.setItem('vantage_access_token', access);
+    secureStorage.setItem('vantage_refresh_token', refresh);
+    localStorage.setItem('vantage_user', JSON.stringify(userData)); // non-sensitive profile data
   };
 
   const handleLogout = async () => {
     try {
-      const refresh = localStorage.getItem('vantage_refresh_token');
+      const refresh = secureStorage.getItem('vantage_refresh_token');
       if (refresh) {
         await api.post(`/auth/logout?refresh_token=${encodeURIComponent(refresh)}`);
       }
