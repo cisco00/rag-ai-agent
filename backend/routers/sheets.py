@@ -2,6 +2,8 @@
 routers/sheets.py — Feature #8: Google Sheets / Excel Live Sync
 """
 
+import html as html_mod
+import json
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
@@ -82,6 +84,9 @@ async def oauth_callback(
     the popup can close itself and the main page can exchange it for tokens.
     """
     if error:
+        # Sanitise the user-supplied `error` parameter before embedding in HTML/JS
+        safe_error_html = html_mod.escape(error)           # for HTML text nodes
+        safe_error_js   = json.dumps(error)                # for JavaScript string literals
         html = f"""<!DOCTYPE html>
 <html>
 <head><title>Google Auth</title>
@@ -96,12 +101,12 @@ async def oauth_callback(
 <body>
 <div class="card">
   <h2>Sign-in failed</h2>
-  <p style="color:#94a3b8">{error}</p>
+  <p style="color:#94a3b8">{safe_error_html}</p>
   <button onclick="window.close()" style="margin-top:16px;padding:8px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer">Close</button>
 </div>
 <script>
   (function() {{
-    var msg = {{ type: 'google-oauth-error', error: {error!r} }};
+    var msg = {{ type: 'google-oauth-error', error: {safe_error_js} }};
     try {{ if (window.opener) window.opener.postMessage(msg, '*'); }} catch(e) {{}}
     try {{ var bc = new BroadcastChannel('vantage-google-oauth'); bc.postMessage(msg); bc.close(); }} catch(e) {{}}
     setTimeout(function() {{ window.close(); }}, 300);
@@ -111,6 +116,9 @@ async def oauth_callback(
 </html>"""
         return HTMLResponse(content=html)
 
+    # Sanitise user-supplied query parameters before embedding in HTML/JS
+    safe_code_js  = json.dumps(code)    # proper JSON string literal — safe in JS context
+    safe_state_js = json.dumps(state)   # ditto
     html = f"""<!DOCTYPE html>
 <html>
 <head><title>Google Auth</title>
@@ -137,7 +145,7 @@ async def oauth_callback(
 </div>
 <script>
   (function() {{
-    var msg = {{ type: 'google-oauth-code', code: {code!r}, state: {state!r} }};
+    var msg = {{ type: 'google-oauth-code', code: {safe_code_js}, state: {safe_state_js} }};
 
     // Method 1 — BroadcastChannel (same-origin tabs, survives Google COOP headers)
     try {{
