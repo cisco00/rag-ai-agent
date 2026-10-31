@@ -97,7 +97,7 @@ export function Sidebar({
     { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
     { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured, hide: !hasPerm('VIEW_ADVANCED') },
     { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') },
-    { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured },
+    { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured, title: 'Sync query results to Google Sheets' },
     { id: 'integrations', label: 'Integrations', icon: Box, hide: !hasPerm('MANAGE_ORG') },
   ].filter(item => !item.hide);
 
