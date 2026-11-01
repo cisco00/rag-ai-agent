@@ -58,36 +58,6 @@ def main():
     print(f"  Output:  {os.path.join(output_dir, output_name)}")
     print("=" * 50)
 
-    # Hidden imports PyInstaller can't detect automatically
-    hidden_imports = [
-        # Uvicorn internals
-        "uvicorn.logging", "uvicorn.loops", "uvicorn.loops.auto",
-        "uvicorn.protocols", "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto", "uvicorn.protocols.websockets",
-        "uvicorn.protocols.websockets.auto",
-        "uvicorn.lifespan", "uvicorn.lifespan.on",
-        # SQLAlchemy dialects
-        "sqlalchemy.dialects.sqlite", "sqlalchemy.dialects.postgresql",
-        "sqlalchemy.dialects.mysql", "pymysql", "psycopg2",
-        # ML / stats
-        "sklearn", "sklearn.utils._typedefs", "sklearn.utils._heap",
-        "sklearn.utils._sorting", "sklearn.utils._vector_sentinel",
-        "statsmodels", "statsmodels.tsa", "statsmodels.tsa.holtwinters",
-        # Email
-        "email.mime.multipart", "email.mime.text", "email.mime.base",
-        # LLM providers
-        "google.generativeai", "openai", "anthropic",
-        # Auth / crypto
-        "bcrypt", "jose", "jose.jwt", "jose.constants",
-        # Misc
-        "dotenv", "alembic", "alembic.config",
-        "reportlab", "pptx",
-        "matplotlib", "matplotlib.backends.backend_agg",
-        "apscheduler", "apscheduler.schedulers.background",
-        "apscheduler.executors.pool",
-        "langfuse",
-    ]
-
     is_windows = "windows" in target_triple
 
     cmd = [
@@ -102,15 +72,14 @@ def main():
     ]
 
     # Windows only: hide the console window so no blank terminal appears.
-    # The PyInstaller extraction still runs silently in the background while
-    # the Tauri loading screen is shown to the user.
     if is_windows:
         cmd.append("--noconsole")
 
-    # uvicorn uses string-based class references in its dictConfig that
-    # PyInstaller's static analyser cannot follow. Add them explicitly so
-    # they end up in the frozen bundle.
+    # Hidden imports PyInstaller's static analyser cannot detect automatically.
+    # NOTE: Only ONE definition of this list — a previous version had a duplicate
+    # that silently overwrote the first, stripping most packages from the bundle.
     hidden_imports = [
+        # ── Uvicorn internals (dictConfig uses string refs) ──────────────────
         "uvicorn.logging",
         "uvicorn.loops",
         "uvicorn.loops.auto",
@@ -125,9 +94,61 @@ def main():
         "uvicorn.lifespan",
         "uvicorn.lifespan.on",
         "uvicorn.lifespan.off",
+        # ── SQLAlchemy dialects ──────────────────────────────────────────────
+        "sqlalchemy.dialects.sqlite",
+        "sqlalchemy.dialects.postgresql",
+        "sqlalchemy.dialects.mysql",
+        "pymysql",
+        "psycopg2",
+        # ── Google Sheets / OAuth (Feature #8) ──────────────────────────────
+        "gspread",
+        "gspread.auth",
+        "gspread.client",
+        "gspread.spreadsheet",
+        "gspread.worksheet",
+        "google_auth_oauthlib",
+        "google_auth_oauthlib.flow",
+        "google.auth",
+        "google.auth.transport",
+        "google.auth.transport.requests",
+        "google.oauth2",
+        "google.oauth2.credentials",
+        "google.oauth2.service_account",
+        # ── ML / stats ───────────────────────────────────────────────────────
+        "sklearn",
+        "sklearn.utils._typedefs",
+        "sklearn.utils._heap",
+        "sklearn.utils._sorting",
+        "sklearn.utils._vector_sentinel",
+        "statsmodels",
+        "statsmodels.tsa",
+        "statsmodels.tsa.holtwinters",
+        # ── Email ────────────────────────────────────────────────────────────
+        "email.mime.multipart",
+        "email.mime.text",
+        "email.mime.base",
+        # ── LLM providers ────────────────────────────────────────────────────
+        "google.generativeai",
+        "openai",
+        "anthropic",
+        # ── Auth / crypto ────────────────────────────────────────────────────
+        "bcrypt",
+        "jose",
+        "jose.jwt",
+        "jose.constants",
+        # ── Misc ─────────────────────────────────────────────────────────────
+        "dotenv",
+        "alembic",
+        "alembic.config",
+        "reportlab",
+        "pptx",
+        "matplotlib",
+        "matplotlib.backends.backend_agg",
+        "apscheduler",
+        "apscheduler.schedulers.background",
+        "apscheduler.executors.pool",
+        "langfuse",
     ]
-    for imp in hidden_imports:
-        cmd.extend(["--hidden-import", imp])
 
     for imp in hidden_imports:
         cmd.extend(["--hidden-import", imp])
