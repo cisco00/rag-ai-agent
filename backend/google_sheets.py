@@ -31,6 +31,12 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 _APP_URL            = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{_APP_URL}/sheets/callback")
 
+# google-auth-oauthlib refuses http:// redirect URIs unless this is set.
+# Required for any local / non-TLS deployment (localhost, Docker, etc.).
+# Production deployments using https:// are unaffected.
+if GOOGLE_REDIRECT_URI.startswith("http://"):
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -166,9 +172,13 @@ def push_to_sheet(
 
     creds = _build_credentials(access_token, refresh_token)
 
-    # gspread.authorize() was removed in gspread 6.0 — use Client(auth=) instead
-    client       = gspread.Client(auth=creds)
-    spreadsheet  = client.open_by_key(spreadsheet_id)
+    # gspread.authorize() was removed in gspread 6.0.
+    # Build an AuthorizedSession explicitly so google-auth handles token
+    # refresh automatically (access tokens expire after ~1 hour).
+    from google.auth.transport.requests import AuthorizedSession
+    authed_session = AuthorizedSession(creds)
+    client        = gspread.Client(auth=creds, session=authed_session)
+    spreadsheet   = client.open_by_key(spreadsheet_id)
 
     # Create worksheet if it doesn't exist
     try:
@@ -178,7 +188,9 @@ def push_to_sheet(
 
     ws.clear()
     if rows:
-        ws.update(rows, "A1")
+        # value_input_option="RAW" prevents gspread 6 from interpreting values
+        # as formulas or dates (default changed to USER_ENTERED in 6.x).
+        ws.update(rows, "A1", value_input_option="RAW")
         # Bold the header
         try:
             ws.format("A1:ZZ1", {"textFormat": {"bold": True}})
@@ -198,8 +210,9 @@ def create_new_sheet(name: str, access_token: str, refresh_token: str) -> dict:
     except ImportError:
         raise RuntimeError("gspread not installed")
 
-    creds       = _build_credentials(access_token, refresh_token)
-    client      = gspread.Client(auth=creds)  # gspread.authorize() removed in 6.0
+    creds  = _build_credentials(access_token, refresh_token)
+    from google.auth.transport.requests import AuthorizedSession
+    client = gspread.Client(auth=creds, session=AuthorizedSession(creds))
     spreadsheet = client.create(name)
     return {
         "spreadsheet_id":  spreadsheet.id,

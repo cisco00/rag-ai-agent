@@ -64,6 +64,9 @@ services:
       # APP_URL must match the externally reachable backend port (8080 in this compose file).
       # This is used to build GOOGLE_REDIRECT_URI; mismatching it causes OAuth failures.
       - APP_URL=http://localhost:8080
+      # Allow http:// redirect URIs for local development (oauthlib blocks them by default).
+      # Safe to leave on — production deployments behind a TLS proxy send https:// URIs.
+      - OAUTHLIB_INSECURE_TRANSPORT=1
       # Update Checker (in-app notifications)
       - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-true}
       - UPDATE_CHECK_URL=${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/VERSION}
