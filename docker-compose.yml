@@ -61,6 +61,9 @@ services:
       - ADMIN_DB_URL=sqlite:////data/admin.db
       - ADMIN_DB_PATH=/data/admin.db
       - CORS_ORIGINS=http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1
+      # APP_URL must match the externally reachable backend port (8080 in this compose file).
+      # This is used to build GOOGLE_REDIRECT_URI; mismatching it causes OAuth failures.
+      - APP_URL=http://localhost:8080
       # Update Checker (in-app notifications)
       - UPDATE_CHECK_ENABLED=${UPDATE_CHECK_ENABLED:-true}
       - UPDATE_CHECK_URL=${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/VERSION}

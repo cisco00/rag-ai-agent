@@ -166,7 +166,8 @@ def push_to_sheet(
 
     creds = _build_credentials(access_token, refresh_token)
 
-    client       = gspread.authorize(creds)
+    # gspread.authorize() was removed in gspread 6.0 — use Client(auth=) instead
+    client       = gspread.Client(auth=creds)
     spreadsheet  = client.open_by_key(spreadsheet_id)
 
     # Create worksheet if it doesn't exist
@@ -198,7 +199,7 @@ def create_new_sheet(name: str, access_token: str, refresh_token: str) -> dict:
         raise RuntimeError("gspread not installed")
 
     creds       = _build_credentials(access_token, refresh_token)
-    client      = gspread.authorize(creds)
+    client      = gspread.Client(auth=creds)  # gspread.authorize() removed in 6.0
     spreadsheet = client.create(name)
     return {
         "spreadsheet_id":  spreadsheet.id,
