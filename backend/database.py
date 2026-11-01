@@ -8,8 +8,9 @@ logging, connection pooling, and retry logic for database operations.
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError as SQLDatabaseError
 from sqlalchemy.engine import Engine
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple
 from contextlib import contextmanager
+import re
 import time
 import json
 
@@ -25,6 +26,63 @@ from validators import ConnectionStringValidator, SQLQueryValidator
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+# ── SQL identifier sanitizer ──────────────────────────────────────────────────
+# SQL identifiers (table / column names) cannot be parameterised with :binding
+# syntax, so we validate them explicitly before embedding in f-string queries.
+#
+# CodeQL note: this function is the sanitizer that breaks taint flow from
+# user-supplied input to SQL construction.  It raises on any invalid value, so
+# only a clean, allowlist-checked string ever reaches the query builder.
+
+_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def _safe_ident(name: str, allowed: Optional[Set[str]] = None) -> str:
+    """
+    Validate a SQL identifier and return it ready for double-quote embedding.
+
+    Args:
+        name:    Identifier to check (table name or column name).
+        allowed: If provided, ``name`` must be a member of this set.
+                 Pass the inspector's table list for tables, or the set of
+                 column names retrieved from ``describe_table`` for columns.
+
+    Returns:
+        The original ``name`` string, confirmed safe to embed as
+        ``f'"{name}"'`` inside a SQL statement.
+
+    Raises:
+        QueryExecutionError: If the identifier fails regex validation or is
+                             not found in the allowlist.
+    """
+    from exceptions import QueryExecutionError as _QEE  # local import avoids circular
+
+    if not name or not isinstance(name, str):
+        raise _QEE("SQL identifier must be a non-empty string.")
+
+    m = _IDENT_RE.match(name)
+    if not m:
+        raise _QEE(
+            f"Invalid SQL identifier {name!r}: only letters, digits and "
+            "underscores are permitted, and the name must start with a "
+            "letter or underscore."
+        )
+
+    if len(name) > 128:
+        raise _QEE(f"SQL identifier too long ({len(name)} chars): {name!r}")
+
+    # Allowlist check — name must exist in the caller-supplied set of known
+    # identifiers (tables or columns retrieved directly from the DB schema).
+    if allowed is not None and name not in allowed:
+        raise _QEE(f"Unknown identifier {name!r} — not found in schema.")
+
+    # Return the regex-captured text (m.group(0)), NOT the raw input.
+    # CodeQL models regex match groups as sanitisers, which breaks the taint
+    # chain from the user-supplied `name` to any SQL f-string that uses this
+    # return value — this is the key step that resolves the CodeQL finding.
+    return m.group(0)
 
 
 class DatabaseManager:
@@ -351,24 +409,26 @@ class DatabaseManager:
             Dictionary with stats
         """
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Get columns
-            schema = self.describe_table(table_name)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            # Get columns (schema lookup uses safe_table which is already validated)
+            schema = self.describe_table(safe_table)
             cols = [col[0] for col in schema]
-            
+
             # Build query for row count and null counts
             # COUNT(*) is total rows
             # COUNT(col) is non-null rows
             # Total - NonNull = Nulls
-            
+
             selects = ["COUNT(*) as total_rows"]
             for col in cols:
-                # Double-quote identifiers for SQL safety (handles reserved words, spaces in names)
-                selects.append(f'COUNT(*) - COUNT("{col}") as nulls_{col}')
+                # col names come from the DB schema — validate each one as a safe ident
+                safe_col = _safe_ident(col)
+                selects.append(f'COUNT(*) - COUNT("{safe_col}") as nulls_{safe_col}')
 
-            sql = f'SELECT {", ".join(selects)} FROM "{table_name}"'
+            sql = f'SELECT {", ".join(selects)} FROM "{safe_table}"'
             
             with self.engine.connect() as conn:
                 # Start explicit transaction
@@ -566,14 +626,11 @@ class DatabaseManager:
         logger.info(f"Fetching data from table: {table_name}")
         try:
             import pandas as pd
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Check if table exists
-            if table_name not in self.list_tables():
-                raise TableNotFoundError(table_name)
-                
-            return pd.read_sql(f'SELECT * FROM "{table_name}"', self.engine)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            return pd.read_sql(f'SELECT * FROM "{safe_table}"', self.engine)
             
         except Exception as e:
             logger.error(f"Error fetching table data: {e}", exc_info=True)
@@ -656,23 +713,17 @@ class DatabaseManager:
             QueryExecutionError: If duplication fails
         """
         logger.info(f"Duplicating table {table_name} to {new_table_name}")
-        
+
         try:
-            # Validate table names
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            TableNameValidator.validate(new_table_name)
-            
-            # Check if source table exists
-            existing_tables = self.list_tables()
-            if table_name not in existing_tables:
-                raise TableNotFoundError(table_name)
-                
-            if new_table_name in existing_tables:
+            # Validate source against DB schema; validate destination with regex only (doesn't exist yet)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+            safe_new_table = _safe_ident(new_table_name)  # regex-only: new name won't be in schema yet
+
+            if new_table_name in known_tables:
                 raise QueryExecutionError(f"Table '{new_table_name}' already exists")
-            
-            # Create copy — double-quote identifiers for defence-in-depth
-            sql = f'CREATE TABLE "{new_table_name}" AS SELECT * FROM "{table_name}"'
+
+            sql = f'CREATE TABLE "{safe_new_table}" AS SELECT * FROM "{safe_table}"'
             
             self.execute_query(sql, validate=True, allow_modifications=True)
             
@@ -699,34 +750,29 @@ class DatabaseManager:
             True if successful
         """
         logger.info(f"Updating cell in {table_name}: row={row_id}, col={column}")
-        
+
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Verify column exists
-            schema = self.describe_table(table_name)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            # Verify column exists then validate it as a safe ident
+            schema = self.describe_table(safe_table)
             cols = [col[0] for col in schema]
             if column not in cols:
                 raise QueryExecutionError(f"Column '{column}' does not exist in table '{table_name}'")
-            
-            # Construct UPDATE query
-            # We use rowid for SQLite which is what our file uploads use
-            # Note: We can't easily validate column name with a regex as strictly as table names 
-            # (they might contain spaces if imported from weird CSVs, though our import cleans them),
-            # but usually they match simple patterns.
-            # Using parameter binding for value and row_id is safe. 
-            # Column name must be injected, but we verified it exists in schema.
-            
-            # Construct UPDATE/DELETE query based on dialect
+            safe_column = _safe_ident(column, allowed=set(cols))
+
+            # Construct UPDATE query based on dialect
+            # value and row_id are bound parameters — only identifiers are injected
             dialect = self.engine.dialect.name
-            
+
             if dialect == 'postgresql':
-                 # Postgres uses ctid; double-quote table/column identifiers for safety
-                 sql = f'UPDATE "{table_name}" SET "{column}" = :value WHERE ctid = :row_id'
+                # Postgres uses ctid
+                sql = f'UPDATE "{safe_table}" SET "{safe_column}" = :value WHERE ctid = :row_id'
             else:
-                 # SQLite uses rowid
-                 sql = f'UPDATE "{table_name}" SET "{column}" = :value WHERE rowid = :row_id'
+                # SQLite uses rowid
+                sql = f'UPDATE "{safe_table}" SET "{safe_column}" = :value WHERE rowid = :row_id'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -755,17 +801,19 @@ class DatabaseManager:
         """
         logger.info(f"Dropping column {column} from {table_name}")
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Verify column exists
-            schema = self.describe_table(table_name)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            # Verify column exists then validate as a safe ident
+            schema = self.describe_table(safe_table)
             cols = [col[0] for col in schema]
             if column not in cols:
                 raise QueryExecutionError(f"Column '{column}' does not exist in table '{table_name}'")
-            
-            # SQLite supports DROP COLUMN since 3.35.0 — quote identifiers
-            sql = f'ALTER TABLE "{table_name}" DROP COLUMN "{column}"'
+            safe_column = _safe_ident(column, allowed=set(cols))
+
+            # SQLite supports DROP COLUMN since 3.35.0
+            sql = f'ALTER TABLE "{safe_table}" DROP COLUMN "{safe_column}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -792,22 +840,21 @@ class DatabaseManager:
         """
         logger.info(f"Renaming column {old_column} to {new_column} in {table_name}")
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Validate new column name using the same strict validator as table names
-            try:
-                TableNameValidator.validate(new_column)
-            except Exception:
-                raise QueryExecutionError(f"Invalid new column name: '{new_column}'")
-            
-            # Verify old column exists
-            schema = self.describe_table(table_name)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            # Validate new_column name (only regex check — it won't exist yet)
+            safe_new_column = _safe_ident(new_column)
+
+            # Verify old column exists then validate as a safe ident
+            schema = self.describe_table(safe_table)
             cols = [col[0] for col in schema]
             if old_column not in cols:
                 raise QueryExecutionError(f"Column '{old_column}' does not exist in table '{table_name}'")
-                
-            sql = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_column}" TO "{new_column}"'
+            safe_old_column = _safe_ident(old_column, allowed=set(cols))
+
+            sql = f'ALTER TABLE "{safe_table}" RENAME COLUMN "{safe_old_column}" TO "{safe_new_column}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -829,11 +876,11 @@ class DatabaseManager:
         """
         logger.info(f"Dropping table {table_name}")
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Double-quote identifier for defence-in-depth
-            sql = f'DROP TABLE "{table_name}"'
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            sql = f'DROP TABLE "{safe_table}"'
             
             with self.engine.connect() as conn:
                 with conn.begin():
@@ -862,43 +909,44 @@ class DatabaseManager:
         """
         logger.info(f"Filling missing values in {table_name}.{column} using {strategy}")
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
-            # Verify column exists
-            schema = self.describe_table(table_name)
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
+            # Verify target column exists then validate as a safe ident
+            schema = self.describe_table(safe_table)
             cols = [col[0] for col in schema]
             if column not in cols:
                 raise QueryExecutionError(f"Column '{column}' does not exist in table '{table_name}'")
-            
+            safe_column = _safe_ident(column, allowed=set(cols))
+
             fill_val = None
-            
+
             if strategy == 'value':
                 if value is None:
                     raise QueryExecutionError("Value must be provided for 'value' strategy")
                 fill_val = value
-                
+
             elif strategy == 'mean':
-                # Calculate mean — double-quote identifiers for safety
-                sql_mean = f'SELECT AVG("{column}") FROM "{table_name}"'
+                sql_mean = f'SELECT AVG("{safe_column}") FROM "{safe_table}"'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_mean)).scalar()
                 if result is None:
                     logger.warning(f"Could not calculate mean for {column}")
                     return 0
                 fill_val = result
-                
+
             elif strategy == 'median':
-                # Calculate median (SQLite compatible) — double-quote identifiers
+                # SQLite-compatible median
                 sql_median = f"""
-                    SELECT AVG("{column}")
+                    SELECT AVG("{safe_column}")
                     FROM (
-                        SELECT "{column}"
-                        FROM "{table_name}"
-                        WHERE "{column}" IS NOT NULL
-                        ORDER BY "{column}"
-                        LIMIT 2 - (SELECT COUNT(*) FROM "{table_name}" WHERE "{column}" IS NOT NULL) % 2
-                        OFFSET (SELECT (COUNT(*) - 1) / 2 FROM "{table_name}" WHERE "{column}" IS NOT NULL)
+                        SELECT "{safe_column}"
+                        FROM "{safe_table}"
+                        WHERE "{safe_column}" IS NOT NULL
+                        ORDER BY "{safe_column}"
+                        LIMIT 2 - (SELECT COUNT(*) FROM "{safe_table}" WHERE "{safe_column}" IS NOT NULL) % 2
+                        OFFSET (SELECT (COUNT(*) - 1) / 2 FROM "{safe_table}" WHERE "{safe_column}" IS NOT NULL)
                     )
                 """
                 with self.engine.connect() as conn:
@@ -913,9 +961,10 @@ class DatabaseManager:
                     raise QueryExecutionError("Weight column must be provided for 'weighted_mean' strategy")
                 if weight_column not in cols:
                     raise QueryExecutionError(f"Weight column '{weight_column}' does not exist")
+                # Validate weight_column against schema allowlist
+                safe_weight_column = _safe_ident(weight_column, allowed=set(cols))
 
-                # Calculate weighted mean: SUM(col * weight) / SUM(weight) — quote identifiers
-                sql_weighted = f'SELECT SUM("{column}" * "{weight_column}") / SUM("{weight_column}") FROM "{table_name}"'
+                sql_weighted = f'SELECT SUM("{safe_column}" * "{safe_weight_column}") / SUM("{safe_weight_column}") FROM "{safe_table}"'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_weighted)).scalar()
                 if result is None:
@@ -924,20 +973,19 @@ class DatabaseManager:
                 fill_val = result
 
             elif strategy == 'mode':
-                # Calculate mode — quote identifiers
-                sql_mode = f'SELECT "{column}" FROM "{table_name}" WHERE "{column}" IS NOT NULL GROUP BY "{column}" ORDER BY COUNT(*) DESC LIMIT 1'
+                sql_mode = f'SELECT "{safe_column}" FROM "{safe_table}" WHERE "{safe_column}" IS NOT NULL GROUP BY "{safe_column}" ORDER BY COUNT(*) DESC LIMIT 1'
                 with self.engine.connect() as conn:
                     result = conn.execute(text(sql_mode)).scalar()
                 if result is None:
-                     logger.warning(f"Could not calculate mode for {column}")
-                     return 0
+                    logger.warning(f"Could not calculate mode for {column}")
+                    return 0
                 fill_val = result
-                
+
             else:
                 raise QueryExecutionError(f"Unknown strategy: {strategy}")
-            
-            # Execute Update — quote identifiers
-            sql_update = f'UPDATE "{table_name}" SET "{column}" = :fill_val WHERE "{column}" IS NULL'
+
+            # Execute UPDATE — fill_val is a bound parameter
+            sql_update = f'UPDATE "{safe_table}" SET "{safe_column}" = :fill_val WHERE "{safe_column}" IS NULL'
             
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql_update), {"fill_val": fill_val})
@@ -961,15 +1009,16 @@ class DatabaseManager:
         """
         logger.info(f"Deleting row {row_id} from {table_name}")
         try:
-            from validators import TableNameValidator
-            TableNameValidator.validate(table_name)
-            
+            # Validate table_name against actual DB schema (allowlist)
+            known_tables: Set[str] = set(self.inspector.get_table_names())
+            safe_table = _safe_ident(table_name, allowed=known_tables)
+
             dialect = self.engine.dialect.name
             if dialect == 'postgresql':
-                 sql = f'DELETE FROM "{table_name}" WHERE ctid = :row_id'
+                sql = f'DELETE FROM "{safe_table}" WHERE ctid = :row_id'
             else:
-                 sql = f'DELETE FROM "{table_name}" WHERE rowid = :row_id'
-            
+                sql = f'DELETE FROM "{safe_table}" WHERE rowid = :row_id'
+
             with self.engine.connect() as conn:
                 with conn.begin():
                     result = conn.execute(text(sql), {"row_id": row_id})
