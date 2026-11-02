@@ -56,6 +56,51 @@ except ImportError:
     HAS_LANGFUSE = False
 
 # ---------------------------------------------------------------------------
+# Native usage tracker (always available — no external service required)
+# ---------------------------------------------------------------------------
+
+try:
+    from usage_tracker import record_usage as _record_usage
+    HAS_USAGE_TRACKER = True
+except ImportError:
+    HAS_USAGE_TRACKER = False
+
+
+def _extract_org_id(tags: Optional[List[str]]) -> Optional[int]:
+    """Pull org_id from observability_tags like ['org:42', ...]."""
+    if not tags:
+        return None
+    for tag in tags:
+        if tag.startswith("org:"):
+            try:
+                return int(tag.split(":", 1)[1])
+            except (ValueError, IndexError):
+                pass
+    return None
+
+
+def _track(
+    org_id: Optional[int],
+    model: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> None:
+    """Record usage to native tracker if available and org_id is known."""
+    if HAS_USAGE_TRACKER and org_id:
+        try:
+            _record_usage(
+                org_id=org_id,
+                model=model,
+                provider=provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+        except Exception:
+            pass  # Never let tracking break inference
+
+
+# ---------------------------------------------------------------------------
 # Langfuse (observability)
 # ---------------------------------------------------------------------------
 
@@ -176,6 +221,13 @@ class OpenAIClientWrapper(LLMClient):
             })
             generation.end()
 
+        # Native usage tracking
+        if response.usage:
+            _track(
+                _extract_org_id(observability_tags), model, "openai",
+                response.usage.prompt_tokens, response.usage.completion_tokens,
+            )
+
         return CompletionResponse(choices=[
             CompletionChoice(message=Message(
                 role=response.choices[0].message.role,
@@ -256,6 +308,13 @@ class AzureOpenAIClientWrapper(LLMClient):
                 "tool_calls": [{"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in tool_calls],
             })
             generation.end()
+
+        # Native usage tracking
+        if response.usage:
+            _track(
+                _extract_org_id(observability_tags), model, "azure_openai",
+                response.usage.prompt_tokens, response.usage.completion_tokens,
+            )
 
         return CompletionResponse(choices=[
             CompletionChoice(message=Message(
@@ -400,6 +459,14 @@ class AnthropicClientWrapper(LLMClient):
                 "tool_calls": [{"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in tool_calls],
             })
             generation.end()
+
+        # Native usage tracking — Anthropic uses input_tokens / output_tokens
+        if hasattr(response, "usage") and response.usage:
+            _track(
+                _extract_org_id(observability_tags), model, "anthropic",
+                getattr(response.usage, "input_tokens", 0),
+                getattr(response.usage, "output_tokens", 0),
+            )
 
         return CompletionResponse(choices=[
             CompletionChoice(message=Message(
@@ -618,6 +685,18 @@ class GoogleGeminiClient(LLMClient):
             }
             generation.update(output=output_data)
             generation.end()
+
+        # Native usage tracking — Gemini uses usage_metadata
+        try:
+            usage_meta = getattr(response, "usage_metadata", None)
+            if usage_meta:
+                _track(
+                    _extract_org_id(observability_tags), model, "google",
+                    getattr(usage_meta, "prompt_token_count", 0),
+                    getattr(usage_meta, "candidates_token_count", 0),
+                )
+        except Exception:
+            pass
 
         return CompletionResponse(choices=[
             CompletionChoice(message=Message(

@@ -43,6 +43,7 @@ from query_templates import ensure_template_tables
 from card_comments import ensure_comment_tables
 from google_sheets import ensure_sheets_tables
 from cloud_storage import ensure_cloud_storage_tables
+from usage_tracker import ensure_usage_tables
 from totp_auth import ensure_totp_columns
 from data_permissions import ensure_permission_tables
 from audit_log import ensure_audit_tables
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     ensure_audit_tables()
     ensure_sso_tables()
     ensure_cloud_storage_tables()
+    ensure_usage_tables()
 
     # ── Alert evaluation via APScheduler ─────────────────────────────────────
     _ALERT_EVAL_TIMEOUT_S = int(ALERT_CHECK_INTERVAL_MINUTES * 60 * 0.8)

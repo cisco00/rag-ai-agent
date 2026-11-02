@@ -77,7 +77,7 @@ export function UsageAnalytics() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight">Usage & Billing</h1>
-          <p className="text-slate-500 mt-1">Monitor organization-wide AI compute usage and token costs, powered by Langfuse.</p>
+          <p className="text-slate-500 mt-1">Monitor organization-wide AI compute usage and token costs.</p>
         </div>
         <button
           onClick={fetchUsage}
@@ -99,13 +99,12 @@ export function UsageAnalytics() {
         </div>
       )}
 
-      {data?.status === 'partial' && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded-xl flex items-start gap-3">
-          <AlertCircle className="shrink-0 mt-0.5 text-amber-500" size={18} />
+      {data?.status === 'partial' && data?.message && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-xl flex items-start gap-3">
+          <AlertCircle className="shrink-0 mt-0.5 text-blue-500" size={18} />
           <div className="text-sm">
-            <p className="font-bold">Telemetry Disabled or Unconfigured</p>
-            <p className="mt-1 opacity-90">{data.message}</p>
-            <p className="mt-2 opacity-90">To enable cost and usage tracking, configure <code className="bg-amber-200/50 px-1 py-0.5 rounded">LANGFUSE_PUBLIC_KEY</code> and <code className="bg-amber-200/50 px-1 py-0.5 rounded">LANGFUSE_SECRET_KEY</code> in the backend environment variables.</p>
+            <p className="font-bold">Enhanced Observability Available</p>
+            <p className="mt-1 opacity-90">Usage data is tracked natively. Configure <code className="bg-blue-200/50 px-1 py-0.5 rounded">LANGFUSE_PUBLIC_KEY</code> and <code className="bg-blue-200/50 px-1 py-0.5 rounded">LANGFUSE_SECRET_KEY</code> to enable detailed per-request cost breakdowns via Langfuse.</p>
           </div>
         </div>
       )}
@@ -169,7 +168,11 @@ export function UsageAnalytics() {
                     {formatShortCurrency(data.totals.estimated_cost_usd)}
                   </div>
                   <div className="mt-2 text-xs text-slate-400 font-medium">
-                    Pricing applied: <span className="font-mono text-emerald-600 break-all">{data.pricing_model === 'none' ? 'No telemetry data' : '$0.001 per token (Fallback)'}</span>
+                    Pricing applied: <span className="font-mono text-emerald-600 break-all">
+                      {data.pricing_model === 'native_tracker' ? 'Market rates (built-in)' :
+                       data.pricing_model === 'none' ? 'No data yet' :
+                       '$0.001 per token (Fallback)'}
+                    </span>
                   </div>
                 </div>
                 
