@@ -42,6 +42,7 @@ from alerts import ensure_alert_tables, evaluate_all_alerts, ALERT_CHECK_INTERVA
 from query_templates import ensure_template_tables
 from card_comments import ensure_comment_tables
 from google_sheets import ensure_sheets_tables
+from cloud_storage import ensure_cloud_storage_tables
 from totp_auth import ensure_totp_columns
 from data_permissions import ensure_permission_tables
 from audit_log import ensure_audit_tables
@@ -55,6 +56,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 # Domain Routers
 from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing, query_templates, schema_diagram, card_comments, sheets, totp, data_permissions, audit, sso
+from routers import cloud_storage as cloud_storage_router
 
 load_dotenv()
 
@@ -87,6 +89,7 @@ async def lifespan(app: FastAPI):
     ensure_permission_tables()
     ensure_audit_tables()
     ensure_sso_tables()
+    ensure_cloud_storage_tables()
 
     # ── Alert evaluation via APScheduler ─────────────────────────────────────
     _ALERT_EVAL_TIMEOUT_S = int(ALERT_CHECK_INTERVAL_MINUTES * 60 * 0.8)
@@ -551,6 +554,7 @@ app.include_router(sheets.router,                                    tags=["Goog
 app.include_router(data_permissions.router,                          tags=["Data Permissions"])
 app.include_router(audit.router,                                     tags=["Audit Trail"])
 app.include_router(sso.router,                                       tags=["SSO / SAML"])
+app.include_router(cloud_storage_router.router,                      tags=["Cloud Storage"])
 
 
 @app.get("/")

@@ -136,6 +136,12 @@ def main():
         "jose",
         "jose.jwt",
         "jose.constants",
+        # ── S3 / Cloud Storage ───────────────────────────────────────────────
+        "boto3",
+        "botocore",
+        "botocore.config",
+        "botocore.exceptions",
+        "s3transfer",
         # ── Misc ─────────────────────────────────────────────────────────────
         "dotenv",
         "alembic",

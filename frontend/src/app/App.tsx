@@ -36,6 +36,7 @@ import { TwoFactorSettings } from './components/TwoFactorSettings';
 import { DataPermissions } from './components/DataPermissions';
 import { AuditTrail } from './components/AuditTrail';
 import { SSOConfig } from './components/SSOConfig';
+import { CloudStorageSettings } from './components/CloudStorageSettings';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
@@ -64,7 +65,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -529,6 +530,11 @@ export default function App() {
           {currentView === 'permissions' && <DataPermissions />}
           {currentView === 'audit' && <AuditTrail />}
           {currentView === 'sso' && <SSOConfig />}
+          {currentView === 'cloud-storage' && (
+            <div className="p-8 max-w-3xl mx-auto">
+              <CloudStorageSettings />
+            </div>
+          )}
           {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}
         </main>

@@ -45,3 +45,6 @@ qrcode[pil]>=7.4.2
 
 # SSO / SAML Integration (Feature #12)
 python3-saml>=1.15.0
+
+# S3 / Cloud Storage Export
+boto3>=1.34.0

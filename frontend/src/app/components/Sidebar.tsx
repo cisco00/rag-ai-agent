@@ -27,6 +27,7 @@ import {
   ShieldAlert,
   ClipboardList,
   KeyRound,
+  CloudUpload,
   X
 } from 'lucide-react';
 
@@ -108,6 +109,7 @@ export function Sidebar({
     { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },
     { id: 'audit', label: 'Audit Trail', icon: ClipboardList, hide: !hasPerm('MANAGE_ORG') },
     { id: 'sso', label: 'SSO / SAML', icon: KeyRound, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'cloud-storage', label: 'Cloud Storage', icon: CloudUpload, hide: !hasPerm('MANAGE_ORG') },
     { id: 'reports', label: 'Reports', icon: FileText, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },
