@@ -38,6 +38,7 @@ import { DataCatalog } from './components/DataCatalog';
 import { AuditTrail } from './components/AuditTrail';
 import { SSOConfig } from './components/SSOConfig';
 import { CloudStorageSettings } from './components/CloudStorageSettings';
+import { SharedDashboard } from './components/SharedDashboard';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
@@ -314,6 +315,12 @@ export default function App() {
   const sharedMatch = window.location.pathname.match(/^\/shared\/([^/?#]+)/);
   if (sharedMatch) {
     return <SharedView reportId={sharedMatch[1]} />;
+  }
+
+  // ── Public shared-dashboard viewer (no auth required) ────────────────
+  const sharedDashMatch = window.location.pathname.match(/^\/dashboards\/shared\/([^/?#]+)/);
+  if (sharedDashMatch) {
+    return <SharedDashboard token={sharedDashMatch[1]} />;
   }
 
   // ── Embed views (no auth, no chrome — designed for iframes) ───────────

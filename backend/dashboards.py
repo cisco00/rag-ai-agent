@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 # ─── Schema ──────────────────────────────────────────────────────────────────
 
 def ensure_dashboard_tables():
-    """Create dashboards and dashboard_cards tables. Call from lifespan startup."""
+    """Create dashboards, dashboard_cards, and dashboard_snapshots tables."""
     dialect = admin_engine.dialect.name
     serial  = "SERIAL" if dialect == "postgresql" else "INTEGER"
     ai      = "" if dialect == "postgresql" else "AUTOINCREMENT"
@@ -92,6 +92,26 @@ def ensure_dashboard_tables():
                 pass
             try:
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_dashboard_cards_embed_token ON dashboard_cards (embed_token)"))
+            except Exception:
+                pass
+
+            # Version history snapshots table
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+                    id           {serial} PRIMARY KEY {ai},
+                    dashboard_id INTEGER NOT NULL,
+                    org_id       INTEGER NOT NULL,
+                    label        TEXT,
+                    snapshot     TEXT NOT NULL,
+                    created_by   INTEGER,
+                    created_at   TEXT NOT NULL
+                )
+            """))
+            try:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_dashboard_snapshots_dashboard_id "
+                    "ON dashboard_snapshots (dashboard_id)"
+                ))
             except Exception:
                 pass
 
@@ -504,3 +524,157 @@ def get_dashboard_embed_data(share_token: str) -> Optional[dict]:
         return None
     cards = get_cards(dash["id"], dash["org_id"])
     return {"dashboard": dash, "cards": cards}
+
+
+# ─── Version history (snapshots) ─────────────────────────────────────────────
+
+def create_snapshot(dashboard_id: int, org_id: int,
+                    label: Optional[str] = None,
+                    created_by: Optional[int] = None) -> dict:
+    """
+    Capture the current state of a dashboard (metadata + all cards) as a JSON
+    snapshot.  Returns the new snapshot row.  Automatically prunes to keep at
+    most 50 snapshots per dashboard.
+    """
+    dash  = get_dashboard(dashboard_id, org_id)
+    cards = get_cards(dashboard_id, org_id)
+    snapshot_data = json.dumps({"dashboard": dash, "cards": cards})
+
+    now     = datetime.utcnow().isoformat()
+    dialect = admin_engine.dialect.name
+
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            if dialect == "postgresql":
+                result = conn.execute(text("""
+                    INSERT INTO dashboard_snapshots
+                        (dashboard_id, org_id, label, snapshot, created_by, created_at)
+                    VALUES (:did, :org_id, :label, :snapshot, :created_by, :now)
+                    RETURNING id
+                """), {"did": dashboard_id, "org_id": org_id, "label": label,
+                       "snapshot": snapshot_data, "created_by": created_by, "now": now})
+                new_id = result.scalar()
+            else:
+                conn.execute(text("""
+                    INSERT INTO dashboard_snapshots
+                        (dashboard_id, org_id, label, snapshot, created_by, created_at)
+                    VALUES (:did, :org_id, :label, :snapshot, :created_by, :now)
+                """), {"did": dashboard_id, "org_id": org_id, "label": label,
+                       "snapshot": snapshot_data, "created_by": created_by, "now": now})
+                new_id = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+
+            # Prune oldest beyond 50
+            conn.execute(text("""
+                DELETE FROM dashboard_snapshots
+                WHERE dashboard_id=:did AND org_id=:org_id
+                  AND id NOT IN (
+                      SELECT id FROM dashboard_snapshots
+                      WHERE dashboard_id=:did AND org_id=:org_id
+                      ORDER BY created_at DESC LIMIT 50
+                  )
+            """), {"did": dashboard_id, "org_id": org_id})
+
+        row = conn.execute(
+            text("SELECT * FROM dashboard_snapshots WHERE id=:id"),
+            {"id": new_id}
+        ).mappings().first()
+
+    result_row = dict(row)
+    result_row.pop("snapshot", None)   # don't return the full blob in the list
+    return result_row
+
+
+def list_snapshots(dashboard_id: int, org_id: int) -> list[dict]:
+    """Return snapshot metadata (no blob) for a dashboard, newest first."""
+    with admin_engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT id, dashboard_id, org_id, label, created_by, created_at
+            FROM dashboard_snapshots
+            WHERE dashboard_id=:did AND org_id=:org_id
+            ORDER BY created_at DESC
+        """), {"did": dashboard_id, "org_id": org_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_snapshot(snapshot_id: int, org_id: int) -> Optional[dict]:
+    """Return a single snapshot row including the full JSON blob."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT * FROM dashboard_snapshots
+            WHERE id=:id AND org_id=:org_id
+        """), {"id": snapshot_id, "org_id": org_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def restore_snapshot(snapshot_id: int, dashboard_id: int, org_id: int,
+                     created_by: Optional[int] = None) -> dict:
+    """
+    Restore a dashboard to a previous snapshot.
+    Steps:
+      1. Auto-save a 'before restore' snapshot so the user can undo.
+      2. Delete all existing cards for this dashboard.
+      3. Re-insert cards from the snapshot.
+      4. Return the refreshed dashboard.
+    """
+    snap = get_snapshot(snapshot_id, org_id)
+    if not snap or snap["dashboard_id"] != dashboard_id:
+        raise ValueError("Snapshot not found")
+
+    state = json.loads(snap["snapshot"])
+    cards = state.get("cards", [])
+
+    # Step 1: auto-save current state before overwriting
+    create_snapshot(dashboard_id, org_id,
+                    label=f"Auto-save before restore #{snapshot_id}",
+                    created_by=created_by)
+
+    now     = datetime.utcnow().isoformat()
+    dialect = admin_engine.dialect.name
+
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            # Step 2: wipe current cards
+            conn.execute(
+                text("DELETE FROM dashboard_cards WHERE dashboard_id=:did AND org_id=:org_id"),
+                {"did": dashboard_id, "org_id": org_id}
+            )
+
+            # Step 3: re-insert from snapshot
+            for card in cards:
+                viz = card.get("visualization")
+                if isinstance(viz, dict):
+                    viz = json.dumps(viz)
+                conn.execute(text("""
+                    INSERT INTO dashboard_cards
+                        (dashboard_id, org_id, title, query_text, response_text,
+                         visualization, sql_query, card_type,
+                         layout_x, layout_y, layout_w, layout_h,
+                         refresh_minutes, created_at, updated_at)
+                    VALUES
+                        (:did, :org_id, :title, :query_text, :response_text,
+                         :viz, :sql_query, :card_type,
+                         :layout_x, :layout_y, :layout_w, :layout_h,
+                         :refresh_minutes, :now, :now)
+                """), {
+                    "did": dashboard_id, "org_id": org_id,
+                    "title": card.get("title"),
+                    "query_text": card.get("query_text"),
+                    "response_text": card.get("response_text"),
+                    "viz": viz,
+                    "sql_query": card.get("sql_query"),
+                    "card_type": card.get("card_type", "query"),
+                    "layout_x": card.get("layout_x", 0),
+                    "layout_y": card.get("layout_y", 0),
+                    "layout_w": card.get("layout_w", 6),
+                    "layout_h": card.get("layout_h", 4),
+                    "refresh_minutes": card.get("refresh_minutes"),
+                    "now": now,
+                })
+
+            # Step 4: bump dashboard updated_at
+            conn.execute(
+                text("UPDATE dashboards SET updated_at=:now WHERE id=:id AND org_id=:org_id"),
+                {"now": now, "id": dashboard_id, "org_id": org_id}
+            )
+
+    return get_dashboard(dashboard_id, org_id)

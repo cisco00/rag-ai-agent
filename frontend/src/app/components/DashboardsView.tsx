@@ -3,11 +3,12 @@ import {
   LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw,
   X, Pin, Globe, EyeOff, FileText, Users, Maximize2, Minimize2,
   GripVertical, TrendingUp, CheckCircle2, Menu, PanelLeftClose,
-  Code2, Copy, Check,
+  Code2, Copy, Check, History,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { CardComments, CommentBubble } from './CardComments';
+import { DashboardVersionHistory } from './DashboardVersionHistory';
 
 interface Dashboard {
   id: number; name: string; description?: string; is_public: number;
@@ -87,6 +88,9 @@ export function DashboardsView({
   // Comments state
   const [commentCardId, setCommentCardId] = useState<number | null>(null);
   const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+
+  // Version history panel
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
 
   // Mobile sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -518,6 +522,21 @@ export function DashboardsView({
                     ? `${refreshAllProgress.done} / ${refreshAllProgress.total}`
                     : 'Refresh All'}
                 </button>
+                {/* Version history */}
+                {hasManageDashboards && (
+                  <button
+                    onClick={() => setShowVersionHistory(v => !v)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      showVersionHistory
+                        ? 'bg-indigo-100 text-indigo-700'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                    title="Version history"
+                  >
+                    <History className="size-4" />
+                    <span className="hidden sm:inline">History</span>
+                  </button>
+                )}
                 {/* Publish / Unpublish */}
                 {hasManageDashboards && selected.created_by === user?.id && (
                   <button
@@ -838,6 +857,21 @@ export function DashboardsView({
             />
           </div>
         </div>
+      )}
+
+      {/* Version history panel */}
+      {showVersionHistory && selected && (
+        <DashboardVersionHistory
+          dashboardId={selected.id}
+          onClose={() => setShowVersionHistory(false)}
+          onRestored={(dash, restoredCards) => {
+            setDashboards(prev =>
+              prev.map(d => d.id === dash.id ? { ...d, ...dash } : d)
+            );
+            setSelected((prev: any) => prev ? { ...prev, ...dash } : prev);
+            setCards(restoredCards);
+          }}
+        />
       )}
     </div>
   );

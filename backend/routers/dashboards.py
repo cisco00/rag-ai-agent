@@ -14,6 +14,7 @@ from dashboards import (
     get_dashboard_by_share_token, add_card, update_card, remove_card,
     reorder_cards, refresh_card,
     generate_card_embed_token, get_card_by_embed_token, get_dashboard_embed_data,
+    create_snapshot, list_snapshots, get_snapshot, restore_snapshot,
 )
 from schemas import DashboardRequest, CardRequest, CardLayoutItem, PinQueryRequest
 
@@ -200,6 +201,49 @@ async def embed_dashboard(share_token: str):
     if not data:
         raise HTTPException(status_code=404, detail="Dashboard not found or not published.")
     return data
+
+
+# ── Version history (snapshots) ───────────────────────────────────────────────
+
+@router.get("/dashboards/{dashboard_id}/snapshots")
+async def list_dashboard_snapshots(
+    dashboard_id: int, org=Depends(get_current_org),
+    user: dict = Depends(get_current_user)
+):
+    """List all snapshots for a dashboard (metadata only, no blob)."""
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    return {"snapshots": list_snapshots(dashboard_id, org.id)}
+
+
+@router.post("/dashboards/{dashboard_id}/snapshots")
+async def save_dashboard_snapshot(
+    dashboard_id: int, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
+):
+    """Manually capture a snapshot of the current dashboard state."""
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    snap = create_snapshot(dashboard_id, org.id,
+                           label="Manual save",
+                           created_by=user["id"])
+    return {"status": "success", "snapshot": snap}
+
+
+@router.post("/dashboards/{dashboard_id}/snapshots/{snapshot_id}/restore")
+async def restore_dashboard_snapshot(
+    dashboard_id: int, snapshot_id: int, org=Depends(get_current_org),
+    user=Depends(require_permission("MANAGE_DASHBOARDS"))
+):
+    """Restore dashboard to a previous snapshot. Auto-saves current state first."""
+    if not get_dashboard(dashboard_id, org.id, user_id=user["id"], role_id=user["role"]):
+        raise HTTPException(status_code=404, detail="Dashboard not found.")
+    try:
+        dash = restore_snapshot(snapshot_id, dashboard_id, org.id, created_by=user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    cards = get_cards(dashboard_id, org.id)
+    return {"status": "success", "dashboard": dash, "cards": cards}
 
 
 @router.post("/dashboards/pin")
