@@ -817,6 +817,36 @@ async def regenerate_column_descriptions(
 
 
 
+# ── Data Freshness ────────────────────────────────────────────────────────────
+
+@router.get("/data/freshness")
+async def get_data_freshness(org=Depends(get_current_org)):
+    """
+    Return last-updated timestamps for all tables in the org.
+    Used by the frontend to show 'last updated X ago' badges.
+    """
+    from models import engine as admin_engine
+    from sqlalchemy import text as sa_text
+    try:
+        with admin_engine.connect() as conn:
+            rows = conn.execute(
+                sa_text(
+                    "SELECT table_name, last_updated FROM table_freshness "
+                    "WHERE org_id = :org_id ORDER BY last_updated DESC"
+                ),
+                {"org_id": org.id},
+            ).fetchall()
+        return {
+            "freshness": [
+                {"table_name": r[0], "last_updated": r[1]}
+                for r in rows
+            ]
+        }
+    except Exception as exc:
+        logger.warning(f"[freshness] query failed: {exc}")
+        return {"freshness": []}
+
+
 # ── CSV / Excel export ────────────────────────────────────────────────────────
 
 class ExportDataRequest(BaseModel):

@@ -32,7 +32,16 @@ import pandas as pd
 from sqlalchemy import text
 
 from database import DatabaseManager
-from models import DataSource, get_db, touch_table_freshness
+from models import DataSource, get_db
+
+
+def touch_table_freshness(org_id: int, table_name: str, source: str = "upload", row_count: int = 0) -> None:
+    """Thin shim so callers don't need to import from alerts directly."""
+    try:
+        from alerts import update_table_freshness
+        update_table_freshness(org_id, table_name)
+    except Exception as exc:
+        logger.warning(f"[pipeline] touch_table_freshness failed (non-fatal): {exc}")
 from validators import sanitize_table_name, URLValidator
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, Copy, Trash2, Edit2, Zap, AlertCircle, CheckCircle2, RefreshCw, BookOpen, ChevronDown, ChevronUp, Sparkles, Save, RotateCcw } from 'lucide-react';
+import { Database, Copy, Trash2, Edit2, Zap, AlertCircle, CheckCircle2, RefreshCw, BookOpen, ChevronDown, ChevronUp, Sparkles, Save, RotateCcw, Clock } from 'lucide-react';
 import { api } from '../../lib/api';
 
 interface DataManagementProps {
@@ -30,6 +30,9 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
     const [regenerating, setRegenerating] = useState(false);
     const [colDescsMsg, setColDescsMsg] = useState<string | null>(null);
 
+    // Data Freshness State
+    const [freshnessMap, setFreshnessMap] = useState<Record<string, string>>({});
+
     // Fill Missing State
     const [showFillModal, setShowFillModal] = useState(false);
     const [fillConfig, setFillConfig] = useState({
@@ -40,6 +43,13 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
 
     useEffect(() => {
         fetchTables();
+        api.get<{ freshness: { table_name: string; last_updated: string }[] }>('/data/freshness')
+            .then(data => {
+                const map: Record<string, string> = {};
+                data.freshness.forEach(f => { map[f.table_name] = f.last_updated; });
+                setFreshnessMap(map);
+            })
+            .catch(() => {}); // non-fatal
     }, [apiKey]);
 
     useEffect(() => {
@@ -257,13 +267,29 @@ export function DataManagement({ apiKey, onConfigured, user }: DataManagementPro
             {tableData && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                     <div className="flex flex-wrap items-center justify-between gap-4">
-                        <div className="flex gap-4 text-sm">
+                        <div className="flex flex-wrap gap-3 text-sm">
                             <div className="bg-blue-50 text-blue-700 font-medium px-4 py-2 rounded-lg">
                                 Records: {tableData.total_rows}
                             </div>
                             <div className="bg-purple-50 text-purple-700 font-medium px-4 py-2 rounded-lg">
                                 Columns: {tableData.columns?.length || 0}
                             </div>
+                            {selectedTable && freshnessMap[selectedTable] && (
+                                <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 font-medium px-4 py-2 rounded-lg">
+                                    <Clock className="size-3.5" />
+                                    Updated {(() => {
+                                        const diff = Date.now() - new Date(freshnessMap[selectedTable]).getTime();
+                                        const mins  = Math.floor(diff / 60_000);
+                                        const hours = Math.floor(diff / 3_600_000);
+                                        const days  = Math.floor(diff / 86_400_000);
+                                        if (mins < 2)   return 'just now';
+                                        if (hours < 1)  return `${mins}m ago`;
+                                        if (days < 1)   return `${hours}h ago`;
+                                        if (days < 30)  return `${days}d ago`;
+                                        return new Date(freshnessMap[selectedTable]).toLocaleDateString();
+                                    })()}
+                                </div>
+                            )}
                         </div>
 
                         {hasMutatePerm && (

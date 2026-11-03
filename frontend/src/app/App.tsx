@@ -34,6 +34,7 @@ import { GoogleSheetsSync } from './components/GoogleSheetsSync';
 import { SchemaDiagram } from './components/SchemaDiagram';
 import { TwoFactorSettings } from './components/TwoFactorSettings';
 import { DataPermissions } from './components/DataPermissions';
+import { DataCatalog } from './components/DataCatalog';
 import { AuditTrail } from './components/AuditTrail';
 import { SSOConfig } from './components/SSOConfig';
 import { CloudStorageSettings } from './components/CloudStorageSettings';
@@ -65,7 +66,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -527,6 +528,7 @@ export default function App() {
               <TwoFactorSettings />
             </div>
           )}
+          {currentView === 'catalog' && <DataCatalog />}
           {currentView === 'permissions' && <DataPermissions />}
           {currentView === 'audit' && <AuditTrail />}
           {currentView === 'sso' && <SSOConfig />}
