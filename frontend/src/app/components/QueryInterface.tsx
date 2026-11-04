@@ -410,8 +410,11 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
       });
 
       if (!resp.ok || !resp.body) {
-        // Fallback to regular endpoint if streaming fails
-        throw new Error(`Stream failed: ${resp.status}`);
+        // Fallback to regular endpoint if streaming fails.
+        // Preserve the HTTP status so the outer catch can distinguish 502/503.
+        const streamErr: any = new Error(`Stream failed: ${resp.status}`);
+        streamErr.status = resp.status;
+        throw streamErr;
       }
 
       const reader = resp.body.getReader();
@@ -493,9 +496,26 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
         };
         setMessages((prev) => [...prev, assistantMessage]);
       } catch (fallbackErr: any) {
+        // Detect network-level failures (no internet / server unreachable)
+        const isNetworkError =
+          fallbackErr instanceof TypeError ||
+          /failed to fetch|network request failed|load failed|networkerror/i.test(
+            fallbackErr?.message ?? '',
+          );
+        const isServiceUnavailable =
+          fallbackErr?.status === 502 ||
+          fallbackErr?.status === 503 ||
+          fallbackErr?.response?.status === 502 ||
+          fallbackErr?.response?.status === 503;
+
+        const userMessage =
+          isNetworkError || isServiceUnavailable
+            ? "You appear to be offline or the server is unreachable. Please check your internet connection and try again."
+            : `Error: ${fallbackErr.message || 'Failed to process your query.'}`;
+
         setMessages((prev) => [...prev, {
           role: 'assistant',
-          content: `Error: ${fallbackErr.message || 'Failed to process your query.'}`,
+          content: userMessage,
           timestamp: new Date(),
         }]);
       }

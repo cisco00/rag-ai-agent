@@ -139,3 +139,87 @@ async def dismiss_update(
     dismiss_version(version)
     return {"dismissed": version}
 
+
+@router.get("/admin/updates/release-url")
+async def get_release_url(
+    version: Optional[str] = Query(None, description="Specific version tag, e.g. '1.2.3'. Defaults to latest_version from cache."),
+    user: dict = Depends(_require_superuser),
+):
+    """
+    Return GitHub release info for the given version (or latest cached version).
+    Used by the desktop app to show a 'Download & Install' button with the
+    correct platform-specific asset URL.
+    """
+    from update_checker import get_release_info, get_update_status
+    target = version or get_update_status().get("latest_version")
+    info   = await get_release_info(target)
+    return info
+
+
+@router.get("/admin/updates/changelog")
+async def get_changelog(user: dict = Depends(_require_superuser)):
+    """
+    Fetch and return the CHANGELOG.md content from GitHub (or the local file
+    as fallback).  Returns raw Markdown so the frontend can render it.
+    Sections are split by version heading so the frontend can highlight the
+    latest entry.
+    """
+    import os, re
+    import httpx
+    from update_checker import get_update_status, CHANGELOG_URL, _GITHUB_TOKEN, _VERSION_FILE
+
+    # Try to fetch the raw CHANGELOG from GitHub
+    raw_url = (
+        "https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/CHANGELOG.md"
+    )
+    changelog_md: str = ""
+    source = "remote"
+
+    headers = {}
+    if _GITHUB_TOKEN:
+        headers["Authorization"] = f"token {_GITHUB_TOKEN}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(raw_url, headers=headers, follow_redirects=True)
+            resp.raise_for_status()
+            changelog_md = resp.text
+    except Exception:
+        # Fall back to the local CHANGELOG.md
+        source = "local"
+        local_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "..", "CHANGELOG.md"
+        )
+        try:
+            with open(os.path.normpath(local_path)) as f:
+                changelog_md = f.read()
+        except Exception:
+            changelog_md = "No changelog available."
+
+    # Split into version sections  (## [x.y.z] …)
+    status   = get_update_status()
+    latest_v = status.get("latest_version") or ""
+
+    sections: list[dict] = []
+    pattern  = re.compile(r'^## \[([^\]]+)\]', re.MULTILINE)
+    matches  = list(pattern.finditer(changelog_md))
+
+    for i, m in enumerate(matches):
+        version_str = m.group(1)
+        start       = m.start()
+        end         = matches[i + 1].start() if i + 1 < len(matches) else len(changelog_md)
+        sections.append({
+            "version": version_str,
+            "content": changelog_md[start:end].strip(),
+            "is_latest": version_str == latest_v,
+        })
+
+    return {
+        "markdown": changelog_md,
+        "sections": sections,
+        "source": source,
+        "latest_version": latest_v,
+        "changelog_url": CHANGELOG_URL,
+    }
+

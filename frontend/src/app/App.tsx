@@ -25,6 +25,7 @@ import { Integrations } from './components/Integrations';
 import { UsageAnalytics } from './components/UsageAnalytics';
 import { UpdateBanner } from './components/UpdateBanner';
 import { TrialBanner } from './components/TrialBanner';
+import { OfflineBanner } from './components/OfflineBanner';
 import { SetupWizard } from './components/SetupWizard';
 import { SharedView } from './components/SharedView';
 import { EmbedView } from './components/EmbedView';
@@ -422,8 +423,11 @@ export default function App() {
           </div>
         </header>
 
-        {/* Update notification banner (web mode, superuser only) */}
-        {!desktop && <UpdateBanner user={user} />}
+        {/* Update notification banner (superuser only — web + desktop) */}
+        <UpdateBanner user={user} desktop={desktop} />
+
+        {/* Offline / LLM-unreachable banner (authenticated users, desktop + web) */}
+        <OfflineBanner desktop={desktop} />
 
         {/* Desktop: trial/license banner */}
         {desktop && license && (

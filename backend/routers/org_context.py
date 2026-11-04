@@ -39,6 +39,78 @@ from schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ── No-auth ping (startup / pre-login connectivity check) ────────────────────
+
+@router.get("/system/ping")
+async def system_ping():
+    """
+    Unauthenticated liveness probe.  Used by the desktop app *before* login to
+    verify the local backend is up without needing a valid token.
+
+    Returns 200 { "ok": true, "ts": "<iso>" } always.
+    """
+    from datetime import datetime, timezone
+    return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+
+
+# ── Connectivity probe ────────────────────────────────────────────────────────
+
+@router.get("/system/connectivity")
+async def check_connectivity(org=Depends(get_current_org)):
+    """
+    Lightweight internet/LLM connectivity probe used by the desktop app to
+    distinguish 'offline' from 'API error'.
+
+    Returns:
+      { "internet": bool, "llm": bool, "llm_provider": str, "error": str|null }
+
+    * internet — reachable if a lightweight HTTPS HEAD to 1.1.1.1 (Cloudflare)
+                 responds within 3 s.
+    * llm      — reachable if the configured LLM provider's public hostname
+                 responds to a HEAD request within 5 s.
+    """
+    import httpx
+    import os
+
+    provider   = os.getenv("LLM_PROVIDER", "openai").lower()
+    llm_hosts  = {
+        "openai":       "https://api.openai.com",
+        "anthropic":    "https://api.anthropic.com",
+        "azure_openai": "https://login.microsoftonline.com",
+        "google":       "https://generativelanguage.googleapis.com",
+        "huggingface":  "https://huggingface.co",
+    }
+    llm_host = llm_hosts.get(provider, "https://api.openai.com")
+
+    internet = False
+    llm      = False
+    err      = None
+
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        # Internet probe — Cloudflare DNS-over-HTTPS; tiny, no auth needed
+        try:
+            r = await client.head("https://1.1.1.1", follow_redirects=True)
+            internet = r.status_code < 600
+        except Exception as exc:
+            err = str(exc)
+
+        # LLM provider probe
+        if internet:
+            try:
+                r2 = await client.head(llm_host, follow_redirects=True)
+                llm = r2.status_code < 600
+            except Exception as exc:
+                llm = False
+                err = str(exc)
+
+    return {
+        "internet":     internet,
+        "llm":          llm,
+        "llm_provider": provider,
+        "error":        err,
+    }
+
+
 # ── Routes ──
 
 @router.get("/config")

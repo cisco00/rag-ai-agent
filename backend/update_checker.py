@@ -41,6 +41,26 @@ CHANGELOG_URL: str = os.getenv(
 )
 _GITHUB_TOKEN: Optional[str] = os.getenv("GITHUB_TOKEN")
 
+# Derive owner/repo from UPDATE_CHECK_URL for GitHub Releases API calls
+# e.g. https://raw.githubusercontent.com/cisco00/rag-ai-agent/main/VERSION
+# → owner=cisco00, repo=rag-ai-agent
+def _github_owner_repo() -> tuple[str, str]:
+    import re
+    m = re.search(
+        r'github\.com/([^/]+)/([^/]+)',
+        UPDATE_CHECK_URL,
+    )
+    if m:
+        return m.group(1), m.group(2)
+    # Fallback: try raw.githubusercontent.com
+    m2 = re.search(
+        r'raw\.githubusercontent\.com/([^/]+)/([^/]+)',
+        UPDATE_CHECK_URL,
+    )
+    if m2:
+        return m2.group(1), m2.group(2)
+    return "cisco00", "rag-ai-agent"
+
 # ── In-memory cache ─────────────────────────────────────────────────────────
 
 _update_status: dict = {
@@ -142,3 +162,93 @@ def dismiss_version(version: str) -> None:
 def get_current_version() -> str:
     """Return the local VERSION string."""
     return _read_local_version()
+
+
+async def get_release_info(version: Optional[str] = None) -> dict:
+    """
+    Fetch GitHub release info for a given version (or the latest release).
+
+    Returns a dict with:
+      - release_url   : HTML URL of the release page on GitHub
+      - download_url  : URL for the platform-appropriate asset (or the page URL)
+      - tag_name      : release tag, e.g. "v1.2.3"
+      - body          : release notes markdown (may be empty)
+
+    Falls back gracefully — always returns at least the computed release_url.
+    """
+    owner, repo = _github_owner_repo()
+
+    # Build the GitHub Releases API URL
+    if version:
+        # Normalize: strip leading 'v' for tag lookup
+        tag = version if version.startswith("v") else f"v{version}"
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+    else:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+
+    headers = {"Accept": "application/vnd.github+json"}
+    if _GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {_GITHUB_TOKEN}"
+
+    # Fallback if the API call fails
+    latest = version or _update_status.get("latest_version") or "latest"
+    tag_fallback = latest if latest.startswith("v") else f"v{latest}"
+    fallback_url = f"https://github.com/{owner}/{repo}/releases/tag/{tag_fallback}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(api_url, headers=headers, follow_redirects=True)
+            resp.raise_for_status()
+            data = resp.json()
+
+        tag_name    = data.get("tag_name", tag_fallback)
+        release_url = data.get("html_url", fallback_url)
+        body        = data.get("body", "")
+
+        # Try to find a platform-specific binary asset
+        import platform
+        system = platform.system().lower()   # 'linux', 'darwin', 'windows'
+        machine = platform.machine().lower() # 'x86_64', 'arm64', etc.
+        platform_hints = {
+            "linux":   ["linux", ".tar.gz", ".deb", ".AppImage"],
+            "darwin":  ["macos", "darwin", ".dmg", ".app"],
+            "windows": ["windows", "win", ".exe", ".msi", ".zip"],
+        }
+        hints = platform_hints.get(system, [])
+        assets = data.get("assets", [])
+        download_url = release_url  # default to release page
+
+        for hint in hints:
+            for asset in assets:
+                name = asset.get("name", "").lower()
+                if hint in name:
+                    download_url = asset.get("browser_download_url", release_url)
+                    break
+            if download_url != release_url:
+                break
+
+        return {
+            "release_url":  release_url,
+            "download_url": download_url,
+            "tag_name":     tag_name,
+            "body":         body,
+            "assets":       [
+                {
+                    "name":         a.get("name"),
+                    "download_url": a.get("browser_download_url"),
+                    "size":         a.get("size"),
+                    "content_type": a.get("content_type"),
+                }
+                for a in assets
+            ],
+        }
+
+    except Exception as exc:
+        logger.warning(f"[UpdateChecker] Could not fetch release info: {exc}")
+        return {
+            "release_url":  fallback_url,
+            "download_url": fallback_url,
+            "tag_name":     tag_fallback,
+            "body":         "",
+            "assets":       [],
+        }
