@@ -1,14 +1,19 @@
 /**
  * QueryHistoryBrowser — paginated, searchable view of past queries.
  *
- * Uses GET /analytics/history?page=&per_page=&search=&saved_only=
- * Lets users re-run any past query, view its response, or filter to bookmarks.
+ * Two search modes:
+ *   Keyword  — GET /analytics/history?search=  (SQL ILIKE, paginated)
+ *   Semantic — GET /query-history/semantic-search?q=  (TF-IDF cosine similarity)
+ *
+ * When no search text is entered, both modes show the full paginated history.
+ * When text is entered in Semantic mode, results are ranked by similarity score.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   History, Search, X, ChevronLeft, ChevronRight,
   Bookmark, BookmarkCheck, RefreshCw, Clock,
   BarChart2, Code2, ChevronDown, ChevronUp, BookMarked,
+  Sparkles, AlignLeft,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -23,6 +28,8 @@ interface HistoryEntry {
   created_at: string;
   is_saved: boolean;
   saved_title?: string;
+  /** Similarity score 0-1, only present in semantic results */
+  similarity?: number;
 }
 
 interface HistoryPage {
@@ -33,10 +40,18 @@ interface HistoryPage {
   history: HistoryEntry[];
 }
 
+interface SemanticResult {
+  id: number;
+  query: string;
+  sql_query?: string;
+  created_at: string;
+  similarity: number;
+}
+
 interface QueryHistoryBrowserProps {
   apiKey?: string;
   onRerun?: (query: string) => void;
-  onRerunQuery?: (query: string) => void;  // alias used in App.tsx
+  onRerunQuery?: (query: string) => void;
 }
 
 function relTime(iso: string): string {
@@ -53,18 +68,43 @@ function relTime(iso: string): string {
   } catch { return ''; }
 }
 
+function SimilarityBadge({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const color =
+    pct >= 70 ? 'bg-green-100 text-green-700' :
+    pct >= 40 ? 'bg-yellow-100 text-yellow-700' :
+                'bg-gray-100 text-gray-500';
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${color}`}>
+      <Sparkles className="size-2.5" />
+      {pct}% match
+    </span>
+  );
+}
+
 export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrowserProps) {
   const rerun = onRerun || onRerunQuery;
-  const [data, setData] = useState<HistoryPage | null>(null);
-  const [saveTemplateQuery, setSaveTemplateQuery] = useState<string | null>(null);
+
+  // ── Keyword mode state ─────────────────────────────────────────────────────
+  const [data, setData]       = useState<HistoryPage | null>(null);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
+  const [page, setPage]       = useState(1);
   const [savedOnly, setSavedOnly] = useState(false);
-  const [page, setPage] = useState(1);
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expanded, setExpanded]   = useState<number | null>(null);
+  const [saveTemplateQuery, setSaveTemplateQuery] = useState<string | null>(null);
+
+  // ── Semantic mode state ────────────────────────────────────────────────────
+  const [semanticMode, setSemanticMode]     = useState(false);
+  const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [semanticMethod, setSemanticMethod]   = useState('');
+
+  // ── Shared ─────────────────────────────────────────────────────────────────
+  const [search, setSearch] = useState('');
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async (p: number, q: string, so: boolean) => {
+  // ── Keyword load ───────────────────────────────────────────────────────────
+  const loadKeyword = useCallback(async (p: number, q: string, so: boolean) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -82,30 +122,80 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
     }
   }, []);
 
-  useEffect(() => { load(1, '', false); }, [load]);
+  // ── Semantic load ──────────────────────────────────────────────────────────
+  const loadSemantic = useCallback(async (q: string) => {
+    if (!q.trim()) {
+      setSemanticResults([]);
+      setSemanticMethod('');
+      return;
+    }
+    setSemanticLoading(true);
+    try {
+      const params = new URLSearchParams({ q, limit: '30' });
+      const res = await api.get<{ results: SemanticResult[]; method: string }>(
+        `/query-history/semantic-search?${params}`
+      );
+      setSemanticResults(res.results || []);
+      setSemanticMethod(res.method || '');
+    } catch (err) {
+      console.error('Semantic search failed', err);
+      setSemanticResults([]);
+    } finally {
+      setSemanticLoading(false);
+    }
+  }, []);
 
+  // Initial load
+  useEffect(() => { loadKeyword(1, '', false); }, [loadKeyword]);
+
+  // Debounced search handler
   const handleSearch = (val: string) => {
     setSearch(val);
     setPage(1);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => load(1, val, savedOnly), 350);
+    if (semanticMode) {
+      searchTimer.current = setTimeout(() => loadSemantic(val), 400);
+    } else {
+      searchTimer.current = setTimeout(() => loadKeyword(1, val, savedOnly), 350);
+    }
+  };
+
+  const handleModeToggle = (semantic: boolean) => {
+    setSemanticMode(semantic);
+    setExpanded(null);
+    if (semantic && search.trim()) {
+      loadSemantic(search);
+    } else if (!semantic) {
+      loadKeyword(1, search, savedOnly);
+    }
   };
 
   const handleSavedOnly = (val: boolean) => {
     setSavedOnly(val);
     setPage(1);
-    load(1, search, val);
+    loadKeyword(1, search, val);
   };
 
   const goPage = (p: number) => {
     setPage(p);
-    load(p, search, savedOnly);
+    loadKeyword(p, search, savedOnly);
     setExpanded(null);
   };
 
-  const handleRerun = (q: string) => {
-    if (rerun) rerun(q);
-  };
+  const isLoading = semanticMode ? semanticLoading : loading;
+
+  // Build a unified entry list for rendering
+  const entries: HistoryEntry[] = semanticMode
+    ? semanticResults.map(r => ({
+        id: r.id,
+        query: r.query,
+        response: '',
+        sql_query: r.sql_query,
+        created_at: r.created_at,
+        is_saved: false,
+        similarity: r.similarity,
+      }))
+    : (data?.history ?? []);
 
   return (
     <>
@@ -121,13 +211,14 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
 
       {/* Controls */}
       <div className="flex flex-wrap gap-3 items-center">
+        {/* Search input */}
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
           <input
             type="text"
             value={search}
             onChange={e => handleSearch(e.target.value)}
-            placeholder="Search past queries…"
+            placeholder={semanticMode ? 'Describe what you are looking for…' : 'Search past queries…'}
             className="w-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
           />
           {search && (
@@ -137,51 +228,111 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
           )}
         </div>
 
-        <button
-          onClick={() => handleSavedOnly(!savedOnly)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
-            savedOnly
-              ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-              : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          {savedOnly ? <BookmarkCheck className="size-4" /> : <Bookmark className="size-4" />}
-          Saved only
-        </button>
+        {/* Keyword / Semantic toggle */}
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+          <button
+            onClick={() => handleModeToggle(false)}
+            className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${
+              !semanticMode ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+            title="Keyword search (exact match)"
+          >
+            <AlignLeft className="size-3.5" />
+            Keyword
+          </button>
+          <button
+            onClick={() => handleModeToggle(true)}
+            className={`flex items-center gap-1.5 px-3 py-2 transition-colors ${
+              semanticMode ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+            title="Semantic search — finds similar queries by meaning"
+          >
+            <Sparkles className="size-3.5" />
+            Semantic
+          </button>
+        </div>
+
+        {/* Saved-only toggle (keyword mode only) */}
+        {!semanticMode && (
+          <button
+            onClick={() => handleSavedOnly(!savedOnly)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              savedOnly
+                ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {savedOnly ? <BookmarkCheck className="size-4" /> : <Bookmark className="size-4" />}
+            Saved only
+          </button>
+        )}
 
         <button
-          onClick={() => load(page, search, savedOnly)}
-          disabled={loading}
+          onClick={() => semanticMode ? loadSemantic(search) : loadKeyword(page, search, savedOnly)}
+          disabled={isLoading}
           className="p-2 text-gray-500 hover:text-blue-600 transition-colors disabled:opacity-40"
           title="Refresh"
         >
-          <RefreshCw className={`size-5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`size-5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
 
-        {data && (
+        {!semanticMode && data && (
           <span className="text-xs text-gray-400 ml-auto">
             {data.total.toLocaleString()} result{data.total !== 1 ? 's' : ''}
           </span>
         )}
+        {semanticMode && semanticResults.length > 0 && (
+          <span className="text-xs text-gray-400 ml-auto">
+            {semanticResults.length} result{semanticResults.length !== 1 ? 's' : ''}
+            {semanticMethod && (
+              <span className="ml-1 text-indigo-400">· {semanticMethod}</span>
+            )}
+          </span>
+        )}
       </div>
 
-      {/* List */}
-      {loading && !data && (
+      {/* Semantic prompt */}
+      {semanticMode && !search && (
+        <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-sm text-indigo-700 flex items-start gap-2">
+          <Sparkles className="size-4 mt-0.5 shrink-0" />
+          <span>
+            Type a description to find semantically similar queries — e.g.{' '}
+            <button className="underline" onClick={() => handleSearch('revenue by region')}>
+              revenue by region
+            </button>{' '}
+            or{' '}
+            <button className="underline" onClick={() => handleSearch('top customers last month')}>
+              top customers last month
+            </button>.
+          </span>
+        </div>
+      )}
+
+      {/* Spinner */}
+      {isLoading && entries.length === 0 && (
         <div className="flex justify-center py-16">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
         </div>
       )}
 
-      {data && data.history.length === 0 && (
+      {/* Empty state */}
+      {!isLoading && entries.length === 0 && (
         <div className="text-center py-16 text-gray-400">
           <History className="size-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">{search ? 'No queries match your search.' : 'No query history yet.'}</p>
+          <p className="text-sm">
+            {semanticMode && search
+              ? 'No similar queries found — try different wording.'
+              : search
+              ? 'No queries match your search.'
+              : 'No query history yet.'}
+          </p>
         </div>
       )}
 
-      {data && data.history.length > 0 && (
+      {/* Result list */}
+      {entries.length > 0 && (
         <div className="space-y-3">
-          {data.history.map(item => (
+          {entries.map(item => (
             <div
               key={item.id}
               className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
@@ -190,11 +341,14 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
               <div className="flex items-start gap-3 px-5 py-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{item.query}</p>
-                  <div className="flex items-center gap-3 mt-1">
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <span className="flex items-center gap-1 text-xs text-gray-400">
                       <Clock className="size-3" />
                       {relTime(item.created_at)}
                     </span>
+                    {item.similarity !== undefined && (
+                      <SimilarityBadge score={item.similarity} />
+                    )}
                     {item.is_saved && (
                       <span className="flex items-center gap-1 text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded-full">
                         <BookmarkCheck className="size-3" />
@@ -219,7 +373,7 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
                 <div className="flex items-center gap-2 shrink-0">
                   {rerun && (
                     <button
-                      onClick={() => handleRerun(item.query)}
+                      onClick={() => rerun(item.query)}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
                     >
                       <RefreshCw className="size-3.5" />
@@ -247,22 +401,19 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
               {/* Expanded detail */}
               {expanded === item.id && (
                 <div className="border-t border-gray-100 px-5 py-4 space-y-4 bg-gray-50/50">
-                  {/* Chart */}
                   {item.visualization && (
                     <div className="bg-white rounded-lg border border-gray-200 p-4">
                       <ChartDisplay visualization={item.visualization} />
                     </div>
                   )}
-
-                  {/* Response text */}
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Response</p>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed line-clamp-6">
-                      {item.response}
-                    </p>
-                  </div>
-
-                  {/* SQL */}
+                  {item.response && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Response</p>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed line-clamp-6">
+                        {item.response}
+                      </p>
+                    </div>
+                  )}
                   {item.sql_query && (
                     <details className="group">
                       <summary className="text-xs font-semibold uppercase tracking-wide text-gray-400 cursor-pointer select-none hover:text-gray-600 flex items-center gap-1">
@@ -280,8 +431,8 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
         </div>
       )}
 
-      {/* Pagination */}
-      {data && data.pages > 1 && (
+      {/* Pagination (keyword mode only) */}
+      {!semanticMode && data && data.pages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-2">
           <button
             onClick={() => goPage(page - 1)}
@@ -292,7 +443,6 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
           </button>
 
           {Array.from({ length: Math.min(data.pages, 7) }, (_, i) => {
-            // Show pages around current, always show 1 and last
             const p = data.pages <= 7
               ? i + 1
               : i === 0 ? 1
@@ -324,7 +474,6 @@ export function QueryHistoryBrowser({ onRerun, onRerunQuery }: QueryHistoryBrows
       )}
     </div>
 
-    {/* Save as Template modal */}
     {saveTemplateQuery && (
       <SaveTemplateModal
         initialQuery={saveTemplateQuery}

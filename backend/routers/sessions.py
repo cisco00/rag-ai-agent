@@ -4,8 +4,9 @@ routers/sessions.py — Chat session management.
 
 import json
 import logging
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
 
 from models import (
     get_db, create_chat_session, get_chat_history, ChatSession, ChatMessage
@@ -188,7 +189,9 @@ async def get_session_messages(session_id: str, org=Depends(get_current_org), us
                 "content": msg.content,
                 "visualization": viz,
                 "thinking_process": thought,
-                "created_at": msg.created_at
+                "sql_query": msg.sql_query,
+                "query_id": msg.query_id,
+                "created_at": msg.created_at,
             })
         return responses
     except Exception as e:
@@ -217,4 +220,39 @@ async def delete_session(session_id: str, org=Depends(get_current_org), user=Dep
          raise
     except Exception as e:
         logger.error(f"Failed to delete session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+@router.patch("/chat/sessions/{session_id}", response_model=SessionResponse)
+async def rename_session(
+    session_id: str,
+    body: RenameSessionRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Rename a chat session."""
+    try:
+        from datetime import datetime, timezone
+        with get_db() as db:
+            session = db.query(ChatSession).filter(
+                ChatSession.id == session_id,
+                ChatSession.org_id == org.id,
+                ChatSession.user_id == user["id"],
+            ).first()
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            session.title = body.title.strip()[:255] or session.title
+            session.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(session)
+            db.expunge(session)
+            return session
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to rename session: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

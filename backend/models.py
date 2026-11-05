@@ -282,15 +282,17 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = 'chat_messages'
-    
+
     id = Column(Integer, primary_key=True)
-    session_id = Column(String(32), nullable=False, index=True) 
+    session_id = Column(String(32), nullable=False, index=True)
     role = Column(String(50), nullable=False) # 'user', 'assistant'
     content = Column(Text, nullable=False)
     visualization = Column(Text, nullable=True)  # JSON string
     thinking_process = Column(Text, nullable=True)  # JSON string
+    sql_query = Column(Text, nullable=True)        # SQL generated for this message
+    query_id = Column(Integer, nullable=True)       # FK → query_history.id
     created_at = Column(DateTime, default=_utcnow, nullable=False)
-    
+
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, role='{self.role}')>"
 
@@ -447,20 +449,26 @@ def create_chat_session(org_id: int, title: Optional[str] = None, user_id: Optio
         logger.error(f"Failed to create chat session: {e}", exc_info=True)
         raise DatabaseError(f"Failed to create chat session: {str(e)}") from e
 
-def add_chat_message(session_id: str, role: str, content: str, 
-                     visualization: Optional[dict] = None, 
-                     thinking_process: Optional[list] = None) -> ChatMessage:
-    """Add a message to a chat session."""
+def add_chat_message(
+    session_id: str,
+    role: str,
+    content: str,
+    visualization: Optional[dict] = None,
+    thinking_process: Optional[list] = None,
+    sql_query: Optional[str] = None,
+    query_id: Optional[int] = None,
+) -> ChatMessage:
+    """Add a message to a chat session, optionally storing the generated SQL and history id."""
     try:
         with get_db() as db:
-            viz_json = json.dumps(visualization) if visualization else None
-            thought_json = json.dumps(thinking_process) if thinking_process else None
             msg = ChatMessage(
-                session_id=session_id, 
-                role=role, 
-                content=content, 
-                visualization=viz_json,
-                thinking_process=thought_json
+                session_id=session_id,
+                role=role,
+                content=content,
+                visualization=json.dumps(visualization) if visualization else None,
+                thinking_process=json.dumps(thinking_process) if thinking_process else None,
+                sql_query=sql_query,
+                query_id=query_id,
             )
             db.add(msg)
             db.flush()

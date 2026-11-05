@@ -68,6 +68,8 @@ class QueryRequest(BaseModel):
     verify_only: bool = False
     confirmed_sql: Optional[str] = None
     use_file: bool = False
+    # Cross-database federation: IDs of additional DataSource records to join
+    secondary_source_ids: Optional[List[int]] = None
 
 class QueryResponse(BaseModel):
     query: str
@@ -250,6 +252,7 @@ class SessionResponse(BaseModel):
     id: str
     title: Optional[str] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
     class Config:
         from_attributes = True
 
@@ -259,6 +262,8 @@ class MessageResponse(BaseModel):
     content: str
     visualization: Optional[Dict[str, Any]] = None
     thinking_process: Optional[List[Dict[str, Any]]] = None
+    sql_query: Optional[str] = None
+    query_id: Optional[int] = None
     created_at: datetime
     class Config:
         from_attributes = True

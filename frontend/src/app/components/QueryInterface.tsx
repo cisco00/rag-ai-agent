@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   BarChart3,
   Send,
@@ -34,6 +34,12 @@ import {
   Table2,
   BookMarked,
   FileSpreadsheet,
+  Database,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  GitMerge,
+  Pencil,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -199,6 +205,16 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
   const [sessions, setSessions] = useState<any[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // ── Multi-DB federation ───────────────────────────────────────────────────
+  const [dataSources, setDataSources] = useState<any[]>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const sourcePickerRef = useRef<HTMLDivElement>(null);
+
+  // ── Session rename ─────────────────────────────────────────────────────────
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [exampleQueries, setExampleQueries] = useState<string[]>([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
@@ -212,7 +228,24 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
     fetchSessions();
     fetchSuggestions();
     fetchSavedQueries();
+    // Load connected database sources for the multi-DB federation picker
+    api.get<any[]>('/data/sources')
+      .then(sources => setDataSources(
+        (sources || []).filter((s: any) => s.source_type === 'database' && s.is_active !== false)
+      ))
+      .catch(() => {}); // non-critical
   }, []);
+
+  // Close source picker when clicking outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (sourcePickerRef.current && !sourcePickerRef.current.contains(e.target as Node)) {
+        setShowSourcePicker(false);
+      }
+    };
+    if (showSourcePicker) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSourcePicker]);
 
   useEffect(() => {
     if (initialQuery && !isLoading) {
@@ -340,6 +373,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
           timestamp: new Date(msg.created_at || Date.now()),
           visualization: msg.visualization || undefined,
           queryId: msg.query_id || undefined,
+          sqlQuery: msg.sql_query || undefined,
           thinkingProcess: msg.thinking_process || undefined,
         })));
       }
@@ -348,6 +382,16 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
       console.error('Failed to load session:', err);
       alert('Failed to load chat history.');
     }
+  };
+
+  const commitRename = async (id: string) => {
+    const title = renameValue.trim();
+    if (!title) { setRenamingSessionId(null); return; }
+    try {
+      const updated = await api.patch<any>(`/chat/sessions/${id}`, { title });
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, title: updated.title } : s));
+    } catch { /* non-critical */ }
+    setRenamingSessionId(null);
   };
 
   const deleteSession = async (e: React.MouseEvent, id: string) => {
@@ -398,7 +442,11 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
       const accessToken = localStorage.getItem('vantage_access_token');
       const apiKey = localStorage.getItem('vantage_api_key');
 
-      const body = JSON.stringify({ query: queryText, session_id: activeSessionId });
+      const body = JSON.stringify({
+        query: queryText,
+        session_id: activeSessionId,
+        ...(selectedSourceIds.length > 0 ? { secondary_source_ids: selectedSourceIds } : {}),
+      });
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
       if (apiKey) headers['X-API-KEY'] = apiKey;
@@ -481,6 +529,7 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
         const response = await api.post<any>('/query', {
           query: queryText,
           session_id: activeSessionId,
+          ...(selectedSourceIds.length > 0 ? { secondary_source_ids: selectedSourceIds } : {}),
         });
         const assistantMessage: Message = {
           role: 'assistant',
@@ -773,17 +822,34 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
               <div className="flex items-start gap-3 overflow-hidden min-w-0">
                 <MessageSquare className="size-4 shrink-0 opacity-60 mt-0.5" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="truncate text-sm font-medium block">
-                      <HighlightedText text={session.title || 'New Chat'} term={sessionSearch} />
-                    </span>
-                    {session.updated_at && (
-                      <span className="text-[10px] text-gray-400 shrink-0 ml-1 tabular-nums">
-                        {relativeTime(session.updated_at)}
+                  {renamingSessionId === session.id ? (
+                    /* Inline rename input */
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onBlur={() => commitRename(session.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') commitRename(session.id);
+                        if (e.key === 'Escape') setRenamingSessionId(null);
+                        e.stopPropagation();
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      className="w-full text-sm font-medium border border-blue-400 rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate text-sm font-medium block">
+                        <HighlightedText text={session.title || 'New Chat'} term={sessionSearch} />
                       </span>
-                    )}
-                  </div>
-                  {session.snippet && (
+                      {session.updated_at && (
+                        <span className="text-[10px] text-gray-400 shrink-0 ml-1 tabular-nums">
+                          {relativeTime(session.updated_at)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {session.snippet && renamingSessionId !== session.id && (
                     <span className="text-xs text-gray-400 line-clamp-2 mt-0.5 leading-relaxed block">
                       <HighlightedText text={session.snippet} term={sessionSearch} />
                     </span>
@@ -796,13 +862,26 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
                 </div>
               </div>
               {!sessionSearch && (
-                <button
-                  onClick={(e) => deleteSession(e, session.id)}
-                  className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded transition-all shrink-0 mt-0.5"
-                  title="Delete Chat"
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 mt-0.5">
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      setRenameValue(session.title || '');
+                      setRenamingSessionId(session.id);
+                    }}
+                    className="p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600 rounded transition-all"
+                    title="Rename"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={(e) => deleteSession(e, session.id)}
+                    className="p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 rounded transition-all"
+                    title="Delete Chat"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -1121,7 +1200,86 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
 
         {/* Input */}
         <div className="bg-white border-t border-gray-200 p-4 md:p-6">
-          <form onSubmit={handleSubmit} className="max-w-5xl mx-auto">
+          <form onSubmit={handleSubmit} className="max-w-5xl mx-auto space-y-2">
+
+            {/* ── Multi-DB source picker ──────────────────────────────────── */}
+            {dataSources.length > 0 && (
+              <div className="relative" ref={sourcePickerRef}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setShowSourcePicker(v => !v)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-all ${
+                      selectedSourceIds.length > 0
+                        ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                        : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    <GitMerge className="size-3" />
+                    {selectedSourceIds.length > 0
+                      ? `${selectedSourceIds.length} source${selectedSourceIds.length > 1 ? 's' : ''} joined`
+                      : 'Join sources'}
+                    <ChevronDown className="size-3" />
+                  </button>
+
+                  {/* Active source chips */}
+                  {selectedSourceIds.map(id => {
+                    const src = dataSources.find(s => s.id === id);
+                    return src ? (
+                      <span key={id} className="flex items-center gap-1 pl-2 pr-1 py-0.5 bg-indigo-100 text-indigo-700 text-xs rounded-full">
+                        <Database className="size-3" />
+                        {src.name}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSourceIds(prev => prev.filter(i => i !== id))}
+                          className="ml-0.5 hover:text-indigo-900"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+
+                {/* Dropdown */}
+                {showSourcePicker && (
+                  <div className="absolute bottom-full mb-1 left-0 z-30 bg-white border border-gray-200 rounded-xl shadow-lg p-2 min-w-[220px]">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 px-2 pb-1">
+                      Available databases
+                    </p>
+                    {dataSources.map(src => (
+                      <label key={src.id} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded-lg cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedSourceIds.includes(src.id)}
+                          onChange={e => {
+                            setSelectedSourceIds(prev =>
+                              e.target.checked ? [...prev, src.id] : prev.filter(i => i !== src.id)
+                            );
+                          }}
+                          className="accent-indigo-600"
+                        />
+                        <Database className="size-3.5 text-gray-400 shrink-0" />
+                        <span className="text-sm text-gray-800 truncate">{src.name}</span>
+                        {src.source_type && (
+                          <span className="ml-auto text-[10px] text-gray-400">{src.source_type}</span>
+                        )}
+                      </label>
+                    ))}
+                    {selectedSourceIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSourceIds([])}
+                        className="mt-1 w-full text-xs text-red-500 hover:text-red-700 py-1"
+                      >
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-2 md:gap-3">
               <input
                 type="text"

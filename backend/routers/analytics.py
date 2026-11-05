@@ -4,7 +4,7 @@ routers/analytics.py — Data analytics, forecasting, and anomaly detection.
 
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
 from fastapi.concurrency import run_in_threadpool
 import re
 
@@ -278,3 +278,102 @@ async def get_history(
     except Exception as e:
         logger.error(f"Error fetching history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch history")
+
+
+# ── Semantic search over query history ───────────────────────────────────────
+
+@router.get("/query-history/semantic-search")
+async def semantic_search_queries(
+    q: str = QueryParam(""),
+    limit: int = QueryParam(10, le=50),
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """
+    Find semantically similar queries in this org's query history.
+
+    Uses TF-IDF cosine similarity (scikit-learn) when available; falls back to
+    Jaccard word-overlap when sklearn is not installed.  Returns results sorted
+    by similarity score, highest first.
+
+    Query params:
+      q     – the search phrase
+      limit – max results (default 10, max 50)
+    """
+    if not q or not q.strip():
+        return {"results": [], "method": "empty"}
+
+    # Pull up to 500 recent queries for this user/org to build the corpus
+    with get_db() as db:
+        rows = (
+            db.query(QueryHistory)
+            .filter(
+                QueryHistory.org_id == org.id,
+                QueryHistory.user_id == user["id"],
+            )
+            .order_by(QueryHistory.created_at.desc())
+            .limit(500)
+            .all()
+        )
+        for r in rows:
+            db.expunge(r)
+
+    if not rows:
+        return {"results": [], "method": "empty"}
+
+    queries_text = [r.query for r in rows]
+
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+
+        all_texts = [q.strip()] + queries_text
+        vec = TfidfVectorizer(ngram_range=(1, 2), stop_words="english", max_features=8000)
+        tfidf = vec.fit_transform(all_texts)
+        scores: np.ndarray = cosine_similarity(tfidf[0:1], tfidf[1:])[0]
+        top_idx = np.argsort(scores)[::-1][:limit]
+
+        results = []
+        for idx in top_idx:
+            if scores[idx] < 0.05:
+                break
+            r = rows[int(idx)]
+            results.append(
+                {
+                    "id": r.id,
+                    "query": r.query,
+                    "sql_query": r.sql_query,
+                    "created_at": r.created_at.isoformat(),
+                    "similarity": round(float(scores[idx]), 4),
+                }
+            )
+        return {"results": results, "method": "tfidf"}
+
+    except ImportError:
+        # Fallback: Jaccard word-overlap score
+        q_words = set(q.lower().split())
+        scored = []
+        for r in rows:
+            rw = set(r.query.lower().split())
+            union = q_words | rw
+            score = len(q_words & rw) / len(union) if union else 0.0
+            if score > 0:
+                scored.append((score, r))
+        scored.sort(reverse=True)
+        return {
+            "results": [
+                {
+                    "id": r.id,
+                    "query": r.query,
+                    "sql_query": r.sql_query,
+                    "created_at": r.created_at.isoformat(),
+                    "similarity": round(score, 4),
+                }
+                for score, r in scored[:limit]
+            ],
+            "method": "word_overlap",
+        }
+    except Exception as exc:
+        logger.warning(f"[semantic-search] failed: {exc}")
+        return {"results": [], "method": "error", "error": str(exc)}

@@ -279,6 +279,20 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
     except Exception as _cd_err:
         logger.warning("column_describer inject failed: %s", _cd_err)
 
+    # ── Cross-database federation (optional) ─────────────────────────────────
+    fed_session = None
+    if request.secondary_source_ids:
+        try:
+            from federation import FederationSession, load_secondary_sources
+            secondary_sources = load_secondary_sources(org.id, request.secondary_source_ids)
+            if secondary_sources:
+                fed_session = FederationSession()
+                await run_in_threadpool(fed_session.setup, conn_str, secondary_sources)
+                if fed_session.schema_addendum:
+                    enriched_prompt += fed_session.schema_addendum
+        except Exception as _fe:
+            logger.warning(f"[federation] setup failed (non-fatal): {_fe}")
+
     from main import AnalyticsAgent
     agent = AnalyticsAgent(
         connection_string=conn_str,
@@ -384,11 +398,13 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
 
         if request.session_id:
             try:
-                response_text = result.get("text", "")
-                visualization = result.get("visualization")
-                thinking_process = result.get("thinking_process")
-                add_chat_message(request.session_id, "assistant", response_text,
-                                 visualization=visualization, thinking_process=thinking_process)
+                add_chat_message(
+                    request.session_id, "assistant", result.get("text", ""),
+                    visualization=result.get("visualization"),
+                    thinking_process=result.get("thinking_process"),
+                    sql_query=result.get("sql_query") or (request.confirmed_sql if request.confirmed_sql else None),
+                    query_id=history_id,
+                )
             except Exception as e:
                 logger.error(f"Failed to save assistant message: {e}")
 
@@ -403,6 +419,11 @@ async def execute_query(request: QueryRequest, org=Depends(get_current_org), use
         )
     finally:
         agent.close()
+        if fed_session:
+            try:
+                fed_session.close(conn_str)
+            except Exception:
+                pass
 
 
 @router.post("/query/stream")
@@ -428,6 +449,20 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
             enriched_prompt = enriched_prompt + "\n\n" + desc_block
     except Exception as _cd_err:
         logger.warning("column_describer inject failed: %s", _cd_err)
+
+    # ── Cross-database federation (optional) ─────────────────────────────────
+    stream_fed_session = None
+    if request.secondary_source_ids:
+        try:
+            from federation import FederationSession, load_secondary_sources
+            secondary_sources = load_secondary_sources(org.id, request.secondary_source_ids)
+            if secondary_sources:
+                stream_fed_session = FederationSession()
+                stream_fed_session.setup(conn_str, secondary_sources)
+                if stream_fed_session.schema_addendum:
+                    enriched_prompt += stream_fed_session.schema_addendum
+        except Exception as _fe:
+            logger.warning(f"[federation] stream setup failed (non-fatal): {_fe}")
 
     from main import AnalyticsAgent
     agent = AnalyticsAgent(
@@ -524,6 +559,8 @@ async def stream_query(request: QueryRequest, org=Depends(get_current_org), user
                         request.session_id, "assistant", result.get("text", ""),
                         visualization=result.get("visualization"),
                         thinking_process=result.get("thinking_process"),
+                        sql_query=result.get("sql_query"),
+                        query_id=result.get("query_id"),
                     )
                 except Exception as ex:
                     logger.error(f"Failed to save assistant message: {ex}")
