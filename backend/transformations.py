@@ -60,8 +60,15 @@ class DataTransformer:
     def _apply_filter(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
         col = op["column"]
         val = op["value"]
-        operator = op.get("op", "==")
-        
+        # Accept both 'op' (backend canonical) and 'operator' (frontend form field)
+        operator = op.get("op") or op.get("operator", "==")
+
+        # Attempt numeric coercion so "100" filters numeric columns correctly
+        try:
+            val = float(val) if '.' in str(val) else int(val)
+        except (ValueError, TypeError):
+            pass
+
         if operator == ">":
             return df[df[col] > val]
         elif operator == "<":
@@ -99,41 +106,53 @@ class DataTransformer:
     @staticmethod
     def _normalize(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
         """
-        Apply normalization/scaling to a column.
-        Methods: min-max, z-score, log, box-cox
+        Apply normalization/scaling to one or more columns.
+        Accepts 'column' (singular str) OR 'columns' (list of str).
+        Methods: minmax/min-max, zscore/z-score, log, box-cox
         """
-        col = op["column"]
-        method = op.get("method", "min-max")
-        
-        if method == "min-max":
-            min_val = df[col].min()
-            max_val = df[col].max()
-            if max_val - min_val != 0:
-                df[f"{col}_scaled"] = (df[col] - min_val) / (max_val - min_val)
-            else:
-                df[f"{col}_scaled"] = 0
-                
-        elif method == "z-score":
-            mean_val = df[col].mean()
-            std_val = df[col].std()
-            if std_val != 0:
-                df[f"{col}_zscore"] = (df[col] - mean_val) / std_val
-            else:
-                df[f"{col}_zscore"] = 0
-                
-        elif method == "log":
-            # Add small epsilon to avoid log(0)
-            epsilon = op.get("epsilon", 1e-6)
-            df[f"{col}_log"] = np.log(df[col] + epsilon)
-            
-        elif method == "box-cox":
-            from scipy import stats
-            # Requires positive data
-            if (df[col] <= 0).any():
-                logger.warning(f"Box-Cox requires positive values. Skipping for {col}")
-            else:
-                df[f"{col}_boxcox"], _ = stats.boxcox(df[col])
-                
+        # Accept both 'column' (singular) and 'columns' (array)
+        raw = op.get("columns") or op.get("column")
+        if not raw:
+            logger.warning("normalize: no column(s) specified")
+            return df
+        cols: List[str] = [raw] if isinstance(raw, str) else list(raw)
+        method = op.get("method", "minmax")
+
+        for col in cols:
+            if col not in df.columns:
+                logger.warning(f"normalize: column '{col}' not in DataFrame, skipping")
+                continue
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                logger.warning(f"normalize: column '{col}' is not numeric, skipping")
+                continue
+
+            if method in ("minmax", "min-max"):
+                min_val = df[col].min()
+                max_val = df[col].max()
+                if max_val - min_val != 0:
+                    df[f"{col}_scaled"] = (df[col] - min_val) / (max_val - min_val)
+                else:
+                    df[f"{col}_scaled"] = 0
+
+            elif method in ("zscore", "z-score"):
+                mean_val = df[col].mean()
+                std_val = df[col].std()
+                if std_val != 0:
+                    df[f"{col}_zscore"] = (df[col] - mean_val) / std_val
+                else:
+                    df[f"{col}_zscore"] = 0
+
+            elif method == "log":
+                epsilon = op.get("epsilon", 1e-6)
+                df[f"{col}_log"] = np.log(df[col] + epsilon)
+
+            elif method == "box-cox":
+                from scipy import stats
+                if (df[col] <= 0).any():
+                    logger.warning(f"Box-Cox requires positive values. Skipping for {col}")
+                else:
+                    df[f"{col}_boxcox"], _ = stats.boxcox(df[col])
+
         return df
 
     @staticmethod

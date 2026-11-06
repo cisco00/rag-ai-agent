@@ -55,9 +55,9 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid target table name: '{target_table}'")
 
-        # Load table using threadpool
+        # Load table using threadpool (quoted identifier for mixed-case/reserved-word safety)
         def _load_df():
-            query = f"SELECT * FROM {source_table}"
+            query = f'SELECT * FROM "{source_table}"'
             return pd.read_sql(query, db_manager.get_engine())
             
         df = await run_in_threadpool(_load_df)
@@ -165,7 +165,7 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
         response = client.chat_completion(
             model=config.model_name,
             messages=messages,
-            max_tokens=500
+            max_tokens=2000
         )
         
         content = response.choices[0].message.content
@@ -181,4 +181,86 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
 
     except Exception as e:
         logger.error(f"Error suggesting transformations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/transform/preview")
+async def preview_transform_data(
+    request: TransformRequest,
+    org=Depends(get_current_org),
+    user=Depends(require_permission("MUTATE_TABLES")),
+):
+    """
+    Dry-run the pipeline on a 50-row sample and return before/after rows.
+    Nothing is written to the database.
+    """
+    try:
+        from fastapi.concurrency import run_in_threadpool
+        import math
+        import numpy as np
+        import pandas as pd
+        from transformations import DataTransformer
+        from validators import TableNameValidator
+
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured for this organization.")
+
+        source_table = request.table_name
+        try:
+            TableNameValidator.validate(source_table)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid table name: '{source_table}'")
+
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        def _load_sample():
+            query = f'SELECT * FROM "{source_table}" LIMIT 50'
+            return pd.read_sql(query, db_manager.get_engine())
+
+        df_before = await run_in_threadpool(_load_sample)
+        db_manager.close()
+
+        def _apply():
+            return DataTransformer.apply_transformations(df_before.copy(), request.operations)
+
+        try:
+            df_after = await run_in_threadpool(_apply)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
+
+        def _clean(rows):
+            out = []
+            for row in rows:
+                cleaned = {}
+                for k, v in row.items():
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                        cleaned[k] = None
+                    elif isinstance(v, (np.int64, np.int32)):
+                        cleaned[k] = int(v)
+                    elif isinstance(v, (np.bool_, bool)):
+                        cleaned[k] = bool(v)
+                    else:
+                        cleaned[k] = v
+                out.append(cleaned)
+            return out
+
+        before_rows = _clean(df_before.head(10).to_dict(orient="records"))
+        after_rows  = _clean(df_after.head(10).to_dict(orient="records"))
+
+        return {
+            "status": "ok",
+            "before": before_rows,
+            "after": after_rows,
+            "before_columns": list(df_before.columns),
+            "after_columns": list(df_after.columns),
+            "sample_size": len(df_before),
+            "rows_before": len(df_before),
+            "rows_after": len(df_after),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Preview failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
