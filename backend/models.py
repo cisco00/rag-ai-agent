@@ -316,6 +316,34 @@ class SavedPipeline(Base):
     def __repr__(self):
         return f"<SavedPipeline(id={self.id}, name='{self.name}', table='{self.table_name}')>"
 
+
+class PipelineSchedule(Base):
+    """
+    Recurring schedule that re-runs a SavedPipeline automatically.
+    frequency: hourly | daily | weekly | monthly
+    target_table: overrides the pipeline's default table_name when set
+    last_run_at / next_run_at: managed by the scheduler
+    last_run_status: 'pending' | 'success' | 'error'
+    last_run_message: human-readable outcome or error detail
+    """
+    __tablename__ = 'pipeline_schedules'
+
+    id              = Column(Integer, primary_key=True)
+    org_id          = Column(Integer, nullable=False, index=True)
+    user_id         = Column(Integer, nullable=False, index=True)
+    pipeline_id     = Column(Integer, nullable=False, index=True)   # FK → saved_pipelines.id
+    frequency       = Column(String(20), nullable=False)             # hourly|daily|weekly|monthly
+    is_active       = Column(Integer, default=1, nullable=False)
+    next_run_at     = Column(DateTime, nullable=False)
+    last_run_at     = Column(DateTime, nullable=True)
+    last_run_status = Column(String(20), nullable=True)
+    last_run_message= Column(Text, nullable=True)
+    created_at      = Column(DateTime, default=_utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<PipelineSchedule(id={self.id}, pipeline_id={self.pipeline_id}, freq='{self.frequency}')>"
+
+
 # Setup admin database
 ADMIN_DB_URL = os.getenv("ADMIN_DB_URL", "sqlite:///./admin.db")
 
@@ -468,6 +496,35 @@ def init_admin_db():
                     logger.info("Migration: saved_pipelines table ready")
                 except Exception as e:
                     logger.warning(f"Migration: saved_pipelines error: {e}")
+
+                # pipeline_schedules table
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS pipeline_schedules (
+                            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                            org_id           INTEGER NOT NULL,
+                            user_id          INTEGER NOT NULL,
+                            pipeline_id      INTEGER NOT NULL,
+                            frequency        VARCHAR(20) NOT NULL,
+                            is_active        INTEGER NOT NULL DEFAULT 1,
+                            next_run_at      DATETIME NOT NULL,
+                            last_run_at      DATETIME,
+                            last_run_status  VARCHAR(20),
+                            last_run_message TEXT,
+                            created_at       DATETIME NOT NULL
+                        )
+                    """))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_pipeline_schedules_org_user "
+                        "ON pipeline_schedules (org_id, user_id)"
+                    ))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_pipeline_schedules_pipeline "
+                        "ON pipeline_schedules (pipeline_id)"
+                    ))
+                    logger.info("Migration: pipeline_schedules table ready")
+                except Exception as e:
+                    logger.warning(f"Migration: pipeline_schedules error: {e}")
 
         logger.info("Admin database tables created and migrations applied")
     except Exception as e:

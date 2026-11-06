@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 
-from models import get_db, ScheduledReport, Organization, DataSource, update_data_source_sync
+from models import get_db, ScheduledReport, Organization, DataSource, update_data_source_sync, PipelineSchedule, SavedPipeline
 from email_service import send_scheduled_report_email
 from org_context_manager import OrgContextManager
 from database import DatabaseManager
@@ -234,9 +234,133 @@ def refresh_jobs():
                 
                 schedule_job_for_source(source.id, run_at)
                 
-            logger.info(f"Loaded {len(reports)} reports and {len(sources)} data source syncs")
+            # Load active pipeline schedules
+            pipeline_scheds = db.query(PipelineSchedule).filter(
+                PipelineSchedule.is_active == 1
+            ).all()
+            for ps in pipeline_scheds:
+                run_at = ps.next_run_at
+                if run_at < datetime.utcnow():
+                    run_at = datetime.utcnow() + timedelta(seconds=10)
+                schedule_pipeline_job(ps.id, run_at)
+
+            logger.info(
+                f"Loaded {len(reports)} reports, {len(sources)} data source syncs, "
+                f"{len(pipeline_scheds)} pipeline schedules"
+            )
     except Exception as e:
         logger.error(f"Failed to refresh jobs: {e}", exc_info=True)
+
+# ── Pipeline schedule helpers ────────────────────────────────────────────────
+
+def _next_run_for_frequency(freq: str, from_dt: datetime) -> datetime:
+    """Return the next scheduled datetime given a frequency string."""
+    freq = freq.lower()
+    if freq == 'hourly':
+        return from_dt + timedelta(hours=1)
+    elif freq == 'daily':
+        return from_dt + timedelta(days=1)
+    elif freq == 'weekly':
+        return from_dt + timedelta(weeks=1)
+    elif freq == 'monthly':
+        return from_dt + timedelta(days=30)
+    else:
+        return from_dt + timedelta(days=1)
+
+
+def execute_pipeline_schedule(schedule_id: int):
+    """
+    Background job: re-run a saved pipeline and write the transformed result.
+    Called by APScheduler. Runs in its own thread — no async.
+    """
+    logger.info(f"Executing pipeline schedule {schedule_id}")
+    try:
+        with get_db() as db:
+            sched = db.query(PipelineSchedule).filter(PipelineSchedule.id == schedule_id).first()
+            if not sched or not sched.is_active:
+                logger.warning(f"PipelineSchedule {schedule_id} not found or inactive — skipping")
+                return
+
+            pipeline = db.query(SavedPipeline).filter(SavedPipeline.id == sched.pipeline_id).first()
+            if not pipeline:
+                sched.last_run_status = 'error'
+                sched.last_run_message = f"SavedPipeline {sched.pipeline_id} not found"
+                db.commit()
+                return
+
+            org = db.query(Organization).filter(Organization.id == sched.org_id).first()
+            if not org or not org.db_connection_string:
+                sched.last_run_status = 'error'
+                sched.last_run_message = "No DB configured for organisation"
+                db.commit()
+                return
+
+            # Run the pipeline
+            from transformations import DataTransformer
+            from database import DatabaseManager
+            import pandas as pd
+
+            db_manager = DatabaseManager(connection_string=org.db_connection_string)
+            try:
+                df = db_manager.execute_query(f'SELECT * FROM "{pipeline.table_name}"')
+                if df is None or df.empty:
+                    raise ValueError(f"Source table '{pipeline.table_name}' is empty or unreachable")
+
+                ops = json.loads(pipeline.operations)
+                df_out = DataTransformer.apply_transformations(df, ops)
+
+                target = f"transformed_{pipeline.table_name}"
+                ok = db_manager.load_dataframe(df_out, target, if_exists='replace')
+                if not ok:
+                    raise RuntimeError(f"Failed to write to '{target}'")
+
+                sched.last_run_status  = 'success'
+                sched.last_run_message = (
+                    f"Wrote {len(df_out):,} rows → {target} "
+                    f"({datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')})"
+                )
+            finally:
+                db_manager.close()
+
+            # Advance next_run_at
+            sched.last_run_at  = datetime.utcnow()
+            sched.next_run_at  = _next_run_for_frequency(sched.frequency, datetime.utcnow())
+            db.commit()
+
+            # Schedule the next run
+            schedule_pipeline_job(sched.id, sched.next_run_at)
+            logger.info(
+                f"Pipeline schedule {schedule_id} OK — "
+                f"next run: {sched.next_run_at}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error executing pipeline schedule {schedule_id}: {e}", exc_info=True)
+        try:
+            with get_db() as db:
+                sched = db.query(PipelineSchedule).filter(PipelineSchedule.id == schedule_id).first()
+                if sched:
+                    sched.last_run_status  = 'error'
+                    sched.last_run_message = str(e)
+                    sched.last_run_at      = datetime.utcnow()
+                    db.commit()
+        except Exception:
+            pass
+
+
+def schedule_pipeline_job(schedule_id: int, run_date: datetime):
+    """Add (or replace) an APScheduler job for a pipeline schedule."""
+    scheduler.add_job(
+        execute_pipeline_schedule,
+        'date',
+        run_date=run_date,
+        args=[schedule_id],
+        id=f"pipeline_schedule_{schedule_id}",
+        replace_existing=True,
+        misfire_grace_time=None,
+    )
+    logger.info(f"Scheduled pipeline job {schedule_id} at {run_date}")
+
 
 def run_organizational_learning():
     """

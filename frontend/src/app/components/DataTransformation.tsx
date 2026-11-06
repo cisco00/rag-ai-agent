@@ -4,6 +4,7 @@ import {
   Trash2, ArrowRightLeft, Save, FolderOpen, BarChart2,
   GripVertical, X, ChevronDown, ChevronUp, Download,
   Lightbulb, MessageSquare, Send, RotateCcw,
+  Clock, Layers, CheckSquare, Square, RefreshCw,
 } from 'lucide-react';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -59,6 +60,25 @@ interface ConversationTurn {
   role: 'user' | 'assistant';
   content: string;
   operations?: Operation[];  // operations generated in this turn
+}
+
+interface PipelineScheduleInfo {
+  scheduled: boolean;
+  schedule_id?: number;
+  frequency?: string;
+  is_active?: boolean;
+  next_run_at?: string;
+  last_run_at?: string;
+  last_run_status?: string;
+  last_run_message?: string;
+}
+
+interface BatchResult {
+  table: string;
+  status: 'success' | 'error' | 'skipped';
+  target?: string;
+  rows?: number;
+  message?: string;
 }
 
 // ── Helper: download array-of-objects as CSV ─────────────────────────────────
@@ -249,6 +269,18 @@ export function DataTransformation({ }: { apiKey?: string }) {
   const [aiConversation, setAiConversation] = useState<ConversationTurn[]>([]);
   const [showAiChat, setShowAiChat]         = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Schedule (feature 7) — per-pipeline schedule info cache
+  const [schedules, setSchedules]           = useState<Record<number, PipelineScheduleInfo>>({});
+  const [schedulingId, setSchedulingId]     = useState<number | null>(null); // which pipeline is open in schedule picker
+  const [scheduleFreq, setScheduleFreq]     = useState('daily');
+
+  // Batch apply (feature 8)
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchPipelineId, setBatchPipelineId] = useState<number | null>(null);
+  const [batchSelected, setBatchSelected]   = useState<Set<string>>(new Set());
+  const [isBatching, setIsBatching]         = useState(false);
+  const [batchResults, setBatchResults]     = useState<BatchResult[] | null>(null);
 
   // DnD sensors
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -608,6 +640,76 @@ export function DataTransformation({ }: { apiKey?: string }) {
       await api.delete(`/transform/pipelines/${id}`);
       setSavedPipelines(prev => prev.filter(p => p.id !== id));
     } catch {}
+  };
+
+  // ── Schedule handlers (feature 7) ──────────────────────────────────────────
+  const fetchSchedule = useCallback(async (pipelineId: number) => {
+    try {
+      const data = await api.get<PipelineScheduleInfo>(`/transform/pipelines/${pipelineId}/schedule`);
+      setSchedules(prev => ({ ...prev, [pipelineId]: data }));
+    } catch {}
+  }, []);
+
+  const openSchedulePicker = async (pipelineId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await fetchSchedule(pipelineId);
+    const existing = schedules[pipelineId];
+    if (existing?.scheduled && existing.frequency) setScheduleFreq(existing.frequency);
+    setSchedulingId(prev => prev === pipelineId ? null : pipelineId);
+  };
+
+  const handleSetSchedule = async (pipelineId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const data = await api.post<PipelineScheduleInfo>(`/transform/pipelines/${pipelineId}/schedule`, { frequency: scheduleFreq });
+      setSchedules(prev => ({ ...prev, [pipelineId]: { ...data, scheduled: true } }));
+      setSchedulingId(null);
+    } catch (err: any) {
+      setError(`Schedule failed: ${err.message ?? 'Unknown error'}`);
+    }
+  };
+
+  const handleRemoveSchedule = async (pipelineId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await api.delete(`/transform/pipelines/${pipelineId}/schedule`);
+      setSchedules(prev => ({ ...prev, [pipelineId]: { scheduled: false } }));
+      setSchedulingId(null);
+    } catch (err: any) {
+      setError(`Remove schedule failed: ${err.message ?? 'Unknown error'}`);
+    }
+  };
+
+  // ── Batch handlers (feature 8) ──────────────────────────────────────────────
+  const openBatchModal = (pipelineId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBatchPipelineId(pipelineId);
+    setBatchSelected(new Set());
+    setBatchResults(null);
+    setShowBatchModal(true);
+    setShowLoadMenu(false);
+  };
+
+  const toggleBatchTable = (t: string) => {
+    setBatchSelected(prev => {
+      const next = new Set(prev);
+      next.has(t) ? next.delete(t) : next.add(t);
+      return next;
+    });
+  };
+
+  const handleBatchRun = async () => {
+    if (!batchPipelineId || batchSelected.size === 0) return;
+    setIsBatching(true); setBatchResults(null);
+    try {
+      const result = await api.post<{ results: BatchResult[] }>('/transform/batch', {
+        pipeline_id: batchPipelineId,
+        tables: [...batchSelected],
+      });
+      setBatchResults(result.results ?? []);
+    } catch (err: any) {
+      setError(`Batch run failed: ${err.message ?? 'Unknown error'}`);
+    } finally { setIsBatching(false); }
   };
 
   // ── Data profiling ──────────────────────────────────────────────────────────
@@ -980,19 +1082,88 @@ export function DataTransformation({ }: { apiKey?: string }) {
                         {savedPipelines.length === 0 ? (
                           <p className="p-4 text-sm text-gray-500 text-center">No saved pipelines for this table.</p>
                         ) : (
-                          <div className="max-h-64 overflow-y-auto">
-                            {savedPipelines.map(p => (
-                              <div key={p.id} onClick={()=>handleLoadPipeline(p)}
-                                className="flex items-center justify-between px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-gray-50">
-                                <div>
-                                  <p className="text-sm font-medium text-gray-900">{p.name}</p>
-                                  <p className="text-xs text-gray-400">{p.operations.length} ops · {new Date(p.updated_at).toLocaleDateString()}</p>
+                          <div className="max-h-80 overflow-y-auto">
+                            {savedPipelines.map(p => {
+                              const sched = schedules[p.id];
+                              const isScheduled = sched?.scheduled;
+                              const isOpenSched = schedulingId === p.id;
+                              return (
+                                <div key={p.id} className="border-b border-gray-50">
+                                  {/* Main row */}
+                                  <div onClick={()=>handleLoadPipeline(p)}
+                                    className="flex items-center justify-between px-4 py-3 hover:bg-blue-50 cursor-pointer">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
+                                        {isScheduled && (
+                                          <span className="shrink-0 text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">
+                                            {sched.frequency}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-xs text-gray-400">{p.operations.length} ops · {new Date(p.updated_at).toLocaleDateString()}</p>
+                                    </div>
+                                    {/* Action icons */}
+                                    <div className="flex items-center gap-0.5 ml-2 shrink-0" onClick={e=>e.stopPropagation()}>
+                                      <button title="Run on multiple tables" onClick={e=>openBatchModal(p.id, e)}
+                                        className="p-1.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded">
+                                        <Layers className="size-3.5"/>
+                                      </button>
+                                      <button title={isScheduled ? 'Edit schedule' : 'Schedule this pipeline'}
+                                        onClick={e=>openSchedulePicker(p.id, e)}
+                                        className={`p-1.5 rounded ${isScheduled ? 'text-green-600 hover:bg-green-50' : 'text-gray-300 hover:text-amber-600 hover:bg-amber-50'}`}>
+                                        <Clock className="size-3.5"/>
+                                      </button>
+                                      <button onClick={e=>handleDeletePipeline(p.id,e)}
+                                        className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded">
+                                        <Trash2 className="size-3.5"/>
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Inline schedule picker */}
+                                  {isOpenSched && (
+                                    <div className="mx-3 mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg" onClick={e=>e.stopPropagation()}>
+                                      <p className="text-xs font-semibold text-amber-800 mb-2">
+                                        {isScheduled ? '✏️ Edit schedule' : '⏰ Schedule pipeline'}
+                                      </p>
+                                      <div className="flex gap-2">
+                                        <select value={scheduleFreq} onChange={e=>setScheduleFreq(e.target.value)}
+                                          className="flex-1 px-2 py-1.5 border border-amber-300 rounded text-xs bg-white">
+                                          <option value="hourly">Every hour</option>
+                                          <option value="daily">Every day</option>
+                                          <option value="weekly">Every week</option>
+                                          <option value="monthly">Every month</option>
+                                        </select>
+                                        <button onClick={e=>handleSetSchedule(p.id, e)}
+                                          className="px-3 py-1.5 bg-amber-600 text-white rounded text-xs hover:bg-amber-700 font-medium">
+                                          Save
+                                        </button>
+                                        {isScheduled && (
+                                          <button onClick={e=>handleRemoveSchedule(p.id, e)}
+                                            className="px-3 py-1.5 bg-red-100 text-red-600 rounded text-xs hover:bg-red-200 font-medium">
+                                            Remove
+                                          </button>
+                                        )}
+                                      </div>
+                                      {sched?.last_run_at && (
+                                        <p className="mt-2 text-xs text-amber-700">
+                                          Last run: {new Date(sched.last_run_at).toLocaleString()} —{' '}
+                                          <span className={sched.last_run_status === 'success' ? 'text-green-700' : 'text-red-600'}>
+                                            {sched.last_run_status}
+                                          </span>
+                                        </p>
+                                      )}
+                                      {sched?.next_run_at && (
+                                        <p className="text-xs text-amber-600">
+                                          Next run: {new Date(sched.next_run_at).toLocaleString()}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                                <button onClick={e=>handleDeletePipeline(p.id,e)} className="p-1 text-gray-300 hover:text-red-500 rounded">
-                                  <Trash2 className="size-3.5"/>
-                                </button>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                         <div className="p-2 border-t border-gray-100">
@@ -1146,7 +1317,8 @@ export function DataTransformation({ }: { apiKey?: string }) {
                 <ul className="space-y-1 text-sm text-blue-800">
                   <li>• Drag <GripVertical className="size-3 inline"/> to reorder operations</li>
                   <li>• Preview runs on a 50-row sample before you commit</li>
-                  <li>• Save pipelines to reuse on fresh data</li>
+                  <li>• <Clock className="size-3 inline"/> schedules a pipeline to run hourly / daily / weekly / monthly</li>
+                  <li>• <Layers className="size-3 inline"/> runs the same pipeline on multiple tables at once</li>
                   <li>• Original table is never modified</li>
                 </ul>
               </div>
@@ -1154,6 +1326,109 @@ export function DataTransformation({ }: { apiKey?: string }) {
           </div>
         </div>
       </div>
+
+      {/* ── Batch Apply Modal (feature 8) ── */}
+      {showBatchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-100 rounded-lg"><Layers className="size-5 text-blue-600"/></div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Run on Multiple Tables</h2>
+                  <p className="text-sm text-gray-500">Select tables to apply the same pipeline to each</p>
+                </div>
+              </div>
+              <button onClick={()=>setShowBatchModal(false)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                <X className="size-5"/>
+              </button>
+            </div>
+
+            {/* Table checklist */}
+            {!batchResults ? (
+              <>
+                <div className="p-4 border-b border-gray-100 shrink-0 flex items-center justify-between gap-3">
+                  <p className="text-xs text-gray-500 font-medium">{batchSelected.size} of {tables.length} selected</p>
+                  <div className="flex gap-2">
+                    <button onClick={()=>setBatchSelected(new Set(tables))} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600">Select all</button>
+                    <button onClick={()=>setBatchSelected(new Set())} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600">Clear</button>
+                  </div>
+                </div>
+                <div className="overflow-y-auto flex-1 px-4 py-2">
+                  {tables.map(t => {
+                    const checked = batchSelected.has(t);
+                    return (
+                      <label key={t} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-gray-50 ${checked ? 'bg-blue-50' : ''}`}>
+                        <div onClick={()=>toggleBatchTable(t)} className={`size-4 rounded border-2 flex items-center justify-center shrink-0 cursor-pointer ${checked ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
+                          {checked && <svg className="size-2.5 text-white" fill="currentColor" viewBox="0 0 12 12"><path d="M10 3L5 8.5 2 5.5"/><path stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" d="M10 3L5 8.5 2 5.5"/></svg>}
+                        </div>
+                        <span className={`font-mono text-sm ${checked ? 'text-blue-900 font-semibold' : 'text-gray-700'}`}>{t}</span>
+                        {t === selectedTable && <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded ml-auto">current</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="p-4 border-t border-gray-200 shrink-0 flex gap-3">
+                  <button onClick={()=>setShowBatchModal(false)} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                  <button onClick={handleBatchRun} disabled={isBatching || batchSelected.size === 0}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                    {isBatching
+                      ? <><RefreshCw className="size-4 animate-spin"/> Running…</>
+                      : <><Play className="size-4"/> Run on {batchSelected.size} table{batchSelected.size !== 1 ? 's' : ''}</>}
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Results view */
+              <>
+                <div className="p-5 border-b border-gray-100 shrink-0">
+                  <div className="flex items-center gap-4">
+                    {(() => {
+                      const ok  = batchResults.filter(r=>r.status==='success').length;
+                      const err = batchResults.filter(r=>r.status==='error').length;
+                      const skp = batchResults.filter(r=>r.status==='skipped').length;
+                      return <>
+                        <div className="text-center"><p className="text-2xl font-bold text-green-600">{ok}</p><p className="text-xs text-gray-500">succeeded</p></div>
+                        {err > 0 && <div className="text-center"><p className="text-2xl font-bold text-red-500">{err}</p><p className="text-xs text-gray-500">failed</p></div>}
+                        {skp > 0 && <div className="text-center"><p className="text-2xl font-bold text-gray-400">{skp}</p><p className="text-xs text-gray-500">skipped</p></div>}
+                      </>;
+                    })()}
+                  </div>
+                </div>
+                <div className="overflow-y-auto flex-1 px-4 py-2">
+                  {batchResults.map(r => (
+                    <div key={r.table} className="flex items-start gap-3 py-2.5 border-b border-gray-50 last:border-0">
+                      <div className={`mt-0.5 size-5 rounded-full flex items-center justify-center shrink-0 ${r.status==='success'?'bg-green-100':r.status==='skipped'?'bg-gray-100':'bg-red-100'}`}>
+                        {r.status==='success'
+                          ? <CheckCircle className="size-3.5 text-green-600"/>
+                          : r.status==='skipped'
+                          ? <span className="text-gray-400 text-xs">–</span>
+                          : <AlertCircle className="size-3.5 text-red-500"/>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-mono text-sm font-medium text-gray-900">{r.table}</p>
+                        {r.status==='success' && <p className="text-xs text-gray-500">{r.rows?.toLocaleString()} rows → <span className="font-mono">{r.target}</span></p>}
+                        {r.message && <p className="text-xs text-red-600">{r.message}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="p-4 border-t border-gray-200 shrink-0 flex gap-3">
+                  <button onClick={()=>setBatchResults(null)} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50">
+                    Run again
+                  </button>
+                  <button onClick={()=>setShowBatchModal(false)} className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+                    Done
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

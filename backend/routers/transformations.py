@@ -376,6 +376,209 @@ async def delete_pipeline(
     return {"status": "deleted"}
 
 
+# ── Pipeline scheduling ───────────────────────────────────────────────────────
+
+class SchedulePipelineRequest(BaseModel):
+    frequency: str   # hourly | daily | weekly | monthly
+
+
+@router.post("/transform/pipelines/{pipeline_id}/schedule")
+async def schedule_pipeline(
+    pipeline_id: int,
+    body: SchedulePipelineRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Create or replace the schedule for a saved pipeline."""
+    allowed = {"hourly", "daily", "weekly", "monthly"}
+    if body.frequency not in allowed:
+        raise HTTPException(status_code=400, detail=f"frequency must be one of {allowed}")
+
+    from models import get_db, SavedPipeline, PipelineSchedule
+    from scheduler import schedule_pipeline_job, _next_run_for_frequency
+    from datetime import datetime, timedelta
+
+    with get_db() as db:
+        # Verify pipeline ownership
+        pipeline = db.query(SavedPipeline).filter(
+            SavedPipeline.id == pipeline_id,
+            SavedPipeline.org_id == org.id,
+            SavedPipeline.user_id == user["id"],
+        ).first()
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+
+        # Upsert schedule
+        existing = db.query(PipelineSchedule).filter(
+            PipelineSchedule.pipeline_id == pipeline_id,
+            PipelineSchedule.org_id == org.id,
+        ).first()
+
+        now = datetime.utcnow()
+        next_run = _next_run_for_frequency(body.frequency, now)
+
+        if existing:
+            existing.frequency   = body.frequency
+            existing.is_active   = 1
+            existing.next_run_at = next_run
+            sched = existing
+        else:
+            sched = PipelineSchedule(
+                org_id=org.id, user_id=user["id"],
+                pipeline_id=pipeline_id,
+                frequency=body.frequency,
+                is_active=1,
+                next_run_at=next_run,
+                created_at=now,
+            )
+            db.add(sched)
+            db.flush()
+            db.refresh(sched)
+
+        db.commit()
+        schedule_pipeline_job(sched.id, next_run)
+
+        return {
+            "status": "scheduled",
+            "schedule_id": sched.id,
+            "frequency": sched.frequency,
+            "next_run_at": sched.next_run_at.isoformat(),
+        }
+
+
+@router.delete("/transform/pipelines/{pipeline_id}/schedule")
+async def unschedule_pipeline(
+    pipeline_id: int,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Remove the schedule for a saved pipeline."""
+    from models import get_db, PipelineSchedule
+    from scheduler import scheduler as apscheduler
+
+    with get_db() as db:
+        sched = db.query(PipelineSchedule).filter(
+            PipelineSchedule.pipeline_id == pipeline_id,
+            PipelineSchedule.org_id == org.id,
+        ).first()
+        if not sched:
+            raise HTTPException(status_code=404, detail="No schedule found for this pipeline")
+        job_id = f"pipeline_schedule_{sched.id}"
+        try:
+            apscheduler.remove_job(job_id)
+        except Exception:
+            pass   # already gone
+        db.delete(sched)
+    return {"status": "unscheduled"}
+
+
+@router.get("/transform/pipelines/{pipeline_id}/schedule")
+async def get_pipeline_schedule(
+    pipeline_id: int,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Return the current schedule (if any) for a saved pipeline."""
+    from models import get_db, PipelineSchedule
+
+    with get_db() as db:
+        sched = db.query(PipelineSchedule).filter(
+            PipelineSchedule.pipeline_id == pipeline_id,
+            PipelineSchedule.org_id == org.id,
+        ).first()
+        if not sched:
+            return {"scheduled": False}
+        return {
+            "scheduled":        True,
+            "schedule_id":      sched.id,
+            "frequency":        sched.frequency,
+            "is_active":        bool(sched.is_active),
+            "next_run_at":      sched.next_run_at.isoformat() if sched.next_run_at else None,
+            "last_run_at":      sched.last_run_at.isoformat()  if sched.last_run_at  else None,
+            "last_run_status":  sched.last_run_status,
+            "last_run_message": sched.last_run_message,
+        }
+
+
+# ── Batch apply ───────────────────────────────────────────────────────────────
+
+class BatchTransformRequest(BaseModel):
+    pipeline_id: Optional[int] = None          # run a saved pipeline
+    operations:  Optional[list] = None          # or inline operations
+    tables: list                                # list of table names to run against
+
+
+@router.post("/transform/batch")
+async def batch_transform(
+    body: BatchTransformRequest,
+    org=Depends(get_current_org),
+    user=Depends(require_permission("MUTATE_TABLES")),
+):
+    """
+    Apply the same pipeline to multiple tables.
+    Returns per-table success/error status and row counts.
+    """
+    if not body.tables:
+        raise HTTPException(status_code=400, detail="No tables specified")
+
+    # Resolve operations
+    ops_list = body.operations
+    if body.pipeline_id:
+        from models import get_db, SavedPipeline
+        with get_db() as db:
+            pipeline = db.query(SavedPipeline).filter(
+                SavedPipeline.id == body.pipeline_id,
+                SavedPipeline.org_id == org.id,
+                SavedPipeline.user_id == user["id"],
+            ).first()
+            if not pipeline:
+                raise HTTPException(status_code=404, detail="Pipeline not found")
+            ops_list = json.loads(pipeline.operations)
+    if not ops_list:
+        raise HTTPException(status_code=400, detail="No operations found in pipeline")
+
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured")
+
+    from transformations import DataTransformer
+    import pandas as pd
+
+    results = []
+    for table_name in body.tables:
+        db_manager = None
+        try:
+            db_manager = DatabaseManager(connection_string=conn_str)
+            df = db_manager.execute_query(f'SELECT * FROM "{table_name}"')
+            if df is None or df.empty:
+                results.append({"table": table_name, "status": "skipped", "message": "Table is empty", "rows": 0})
+                continue
+
+            df_out = DataTransformer.apply_transformations(df.copy(), ops_list)
+            target = f"transformed_{table_name}"
+            ok = db_manager.load_dataframe(df_out, target, if_exists='replace')
+
+            if ok:
+                results.append({"table": table_name, "status": "success", "target": target, "rows": len(df_out)})
+            else:
+                results.append({"table": table_name, "status": "error", "message": "Failed to write output"})
+        except Exception as e:
+            logger.error(f"Batch transform error on table '{table_name}': {e}", exc_info=True)
+            results.append({"table": table_name, "status": "error", "message": str(e)})
+        finally:
+            if db_manager:
+                db_manager.close()
+
+    success_count = sum(1 for r in results if r["status"] == "success")
+    return {
+        "status": "done",
+        "total": len(results),
+        "success": success_count,
+        "failed": len(results) - success_count,
+        "results": results,
+    }
+
+
 # ── Column profiling ──────────────────────────────────────────────────────────
 
 @router.get("/tables/{table}/profile")
