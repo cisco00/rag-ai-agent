@@ -160,11 +160,16 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
             "Example: [{{\"type\": \"clean_text\", \"column\": \"first_name\", \"clean_type\": \"title\", \"friendly_description\": \"Capitalize first names\"}}]"
         )
 
+        system_msg = {"role": "system", "content": operations_spec.format(schema_summary=schema_summary, table_name=request.table_name)}
+        messages = [system_msg]
+
+        # Inject prior conversation turns so the AI has context for follow-ups
+        if request.conversation:
+            for turn in request.conversation:
+                messages.append({"role": turn.role, "content": turn.content})
+
         user_prompt = f"Table: {request.table_name}. Prompt: {request.prompt}"
-        messages = [
-            {"role": "system", "content": operations_spec.format(schema_summary=schema_summary, table_name=request.table_name)},
-            {"role": "user", "content": user_prompt}
-        ]
+        messages.append({"role": "user", "content": user_prompt})
         
         response = client.chat_completion(
             model=config.model_name,
@@ -181,7 +186,13 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
             logger.error(f"Failed to parse LLM suggestions: {content}")
             raise HTTPException(status_code=500, detail="AI output format was invalid")
             
-        return {"status": "success", "operations": operations}
+        return {
+            "status": "success",
+            "operations": operations,
+            # Return the raw LLM reply so the frontend can append it to conversation history
+            "assistant_message": content,
+            "user_message": user_prompt,
+        }
 
     except Exception as e:
         logger.error(f"Error suggesting transformations: {e}", exc_info=True)

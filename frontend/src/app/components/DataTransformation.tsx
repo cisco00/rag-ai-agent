@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Wrench, Plus, Play, Eye, AlertCircle, CheckCircle,
   Trash2, ArrowRightLeft, Save, FolderOpen, BarChart2,
-  GripVertical, X, ChevronDown, ChevronUp,
+  GripVertical, X, ChevronDown, ChevronUp, Download,
+  Lightbulb, MessageSquare, Send, RotateCcw,
 } from 'lucide-react';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -44,6 +45,39 @@ interface ColProfile {
   histogram?: { counts: number[]; edges: number[] };
   // categorical
   top_values?: { value: string; count: number }[];
+}
+
+interface AutoSuggestion {
+  id: string;
+  label: string;
+  detail: string;
+  severity: 'warn' | 'info';
+  operation: { type: string; params: Record<string, any> };
+}
+
+interface ConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  operations?: Operation[];  // operations generated in this turn
+}
+
+// ── Helper: download array-of-objects as CSV ─────────────────────────────────
+
+function downloadCSV(rows: Record<string, any>[], filename = 'preview.csv') {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const escape = (v: any) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+  const csv = [headers.join(','), ...rows.map(r => headers.map(h => escape(r[h])).join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Helper: map frontend ops → backend canonical format ──────────────────────
@@ -207,6 +241,15 @@ export function DataTransformation({ }: { apiKey?: string }) {
   const [profileData, setProfileData]       = useState<Record<string, ColProfile> | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
+  // Auto-suggestions (feature 5)
+  const [autoSuggestions, setAutoSuggestions] = useState<AutoSuggestion[]>([]);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+
+  // Multi-step AI conversation (feature 6)
+  const [aiConversation, setAiConversation] = useState<ConversationTurn[]>([]);
+  const [showAiChat, setShowAiChat]         = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
   // DnD sensors
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -236,9 +279,11 @@ export function DataTransformation({ }: { apiKey?: string }) {
     })();
   }, [selectedTable]);
 
-  // ── Missing-values summary ──────────────────────────────────────────────────
+  // ── Missing-values summary + auto-suggestions ──────────────────────────────
   useEffect(() => {
     if (!selectedTable) return;
+    setAutoSuggestions([]);
+    setDismissedSuggestions(new Set());
     (async () => {
       try {
         const data = await api.get<any>(`/tables/${selectedTable}/preview?limit=500`);
@@ -247,14 +292,122 @@ export function DataTransformation({ }: { apiKey?: string }) {
           const rows: any[] = data.rows;
           const total = rows.length;
           if (total === 0) return;
+
+          const suggestions: AutoSuggestion[] = [];
+
+          const colMeta = data.columns as Array<{ name: string; type: string }>;
           const summary = colNames.map(col => {
             const missing = rows.filter((r:any) => r[col] === null || r[col] === '' || r[col] === undefined).length;
             const pct = Math.round((missing/total)*100);
-            const colType = (data.columns.find((c:any) => c.name===col)?.type||'').toLowerCase();
+            const colType = (colMeta.find((c) => c.name===col)?.type||'').toLowerCase();
             const isNumeric = ['int','float','number','numeric','bigint','double','decimal'].some(t => colType.includes(t));
-            return { column: col, missing, pct, suggested: isNumeric ? 'mean' : 'mode' };
-          }).filter(s => s.missing > 0);
-          setMissingSummary(summary);
+            return { column: col, missing, pct, suggested: isNumeric ? 'mean' : 'mode', isNumeric, colType };
+          });
+          setMissingSummary(summary.filter(s => s.missing > 0));
+
+          // ── Suggestion rules ───────────────────────────────────────────────
+
+          // 1. Columns with >10% nulls
+          summary.filter(s => s.pct > 10).forEach(s => {
+            suggestions.push({
+              id: `fill_${s.column}`,
+              label: `Fill nulls in "${s.column}"`,
+              detail: `${s.pct}% missing — suggest filling with ${s.suggested}`,
+              severity: s.pct > 30 ? 'warn' : 'info',
+              operation: { type: 'fill_na', params: { column: s.column, method: s.suggested, value: '' } },
+            });
+          });
+
+          // 2. Text columns that look like they should be lowercase (e.g. email, name)
+          const EMAIL_COLS = /email|e_mail|mail/i;
+          const NAME_COLS  = /name|first_name|last_name|fname|lname|title/i;
+          colNames.forEach(col => {
+            const isText = !summary.find(s=>s.column===col)?.isNumeric;
+            if (!isText) return;
+            const vals = rows.map((r:any) => r[col]).filter((v:any) => v && typeof v === 'string');
+            if (vals.length === 0) return;
+            const hasUpper = vals.some((v:string) => v !== v.toLowerCase());
+            if (EMAIL_COLS.test(col) && hasUpper) {
+              suggestions.push({
+                id: `lower_${col}`,
+                label: `Lowercase "${col}"`,
+                detail: `Email addresses should be lowercase for consistent matching`,
+                severity: 'warn',
+                operation: { type: 'clean_text', params: { column: col, operation: 'lower' } },
+              });
+            } else if (NAME_COLS.test(col) && hasUpper) {
+              const hasLower = vals.some((v:string) => v !== v.toUpperCase());
+              if (hasLower) {
+                suggestions.push({
+                  id: `title_${col}`,
+                  label: `Title-case "${col}"`,
+                  detail: `Name column has mixed casing — standardize to Title Case`,
+                  severity: 'info',
+                  operation: { type: 'clean_text', params: { column: col, operation: 'title' } },
+                });
+              }
+            }
+          });
+
+          // 3. Columns that look like dates but are stored as text
+          const DATE_COLS = /date|time|created|updated|at$|_on$/i;
+          colNames.forEach(col => {
+            const meta = summary.find(s=>s.column===col);
+            if (!meta || meta.isNumeric) return;
+            if (!DATE_COLS.test(col)) return;
+            if (/datetime|timestamp/i.test(meta.colType)) return;
+            const sample = rows.slice(0, 20).map((r:any) => r[col]).filter(Boolean);
+            const looksLikeDate = sample.some((v:any) => /^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(String(v)));
+            if (looksLikeDate) {
+              suggestions.push({
+                id: `datetime_${col}`,
+                label: `Parse "${col}" as datetime`,
+                detail: `Column contains date strings — convert for time-based operations`,
+                severity: 'info',
+                operation: { type: 'change_type', params: { column: col, new_type: 'datetime' } },
+              });
+            }
+          });
+
+          // 4. Numeric columns with high outlier potential (std > 3× mean)
+          colNames.forEach(col => {
+            const meta = summary.find(s=>s.column===col);
+            if (!meta?.isNumeric) return;
+            const vals: number[] = rows.map((r:any) => r[col]).filter((v:any) => v !== null && v !== undefined && !isNaN(Number(v))).map(Number);
+            if (vals.length < 10) return;
+            const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+            const std  = Math.sqrt(vals.map(v=>(v-mean)**2).reduce((a,b)=>a+b,0)/vals.length);
+            if (mean !== 0 && std / Math.abs(mean) > 3) {
+              suggestions.push({
+                id: `outliers_${col}`,
+                label: `Remove outliers in "${col}"`,
+                detail: `High spread detected (std/mean = ${(std/Math.abs(mean)).toFixed(1)})`,
+                severity: 'warn',
+                operation: { type: 'remove_outliers', params: { column: col, threshold: 3 } },
+              });
+            }
+          });
+
+          // 5. High-cardinality text columns that may benefit from encoding
+          colNames.forEach(col => {
+            const meta = summary.find(s=>s.column===col);
+            if (!meta || meta.isNumeric) return;
+            const vals = rows.map((r:any) => r[col]).filter((v:any) => v !== null && v !== undefined);
+            const unique = new Set(vals).size;
+            if (unique >= 2 && unique <= 20 && unique < vals.length * 0.5) {
+              suggestions.push({
+                id: `encode_${col}`,
+                label: `Encode "${col}"`,
+                detail: `${unique} unique values — good candidate for one-hot or label encoding`,
+                severity: 'info',
+                operation: { type: 'encode', params: { column: col, method: 'onehot' } },
+              });
+            }
+          });
+
+          // Keep at most 6 suggestions; warn-severity first
+          const sorted = [...suggestions].sort((a,b) => (a.severity==='warn'?0:1)-(b.severity==='warn'?0:1));
+          setAutoSuggestions(sorted.slice(0, 6));
         }
       } catch {}
     })();
@@ -369,26 +522,63 @@ export function DataTransformation({ }: { apiKey?: string }) {
     } finally { setIsProcessing(false); }
   };
 
-  // ── AI wizard ───────────────────────────────────────────────────────────────
-  const handleGenerateAI = async () => {
-    if (!aiPrompt.trim() || !selectedTable) return;
+  // ── AI wizard (supports multi-turn) ────────────────────────────────────────
+  const handleGenerateAI = async (promptOverride?: string) => {
+    const prompt = promptOverride ?? aiPrompt;
+    if (!prompt.trim() || !selectedTable) return;
     setIsGenerating(true); setError(null);
+
+    // Build conversation history from prior turns (user + assistant pairs)
+    const history = aiConversation.flatMap(turn => {
+      const msgs: { role: string; content: string }[] = [{ role: 'user', content: turn.content }];
+      if (turn.operations) msgs.push({ role: 'assistant', content: JSON.stringify(turn.operations.map(mapOpForBackend)) });
+      return msgs;
+    });
+
     try {
-      const response = await api.post<{ status: string; operations: any[] }>('/transform/suggest', {
-        table_name: selectedTable, prompt: aiPrompt,
+      const response = await api.post<{
+        status: string; operations: any[];
+        user_message?: string; assistant_message?: string;
+      }>('/transform/suggest', {
+        table_name: selectedTable,
+        prompt,
+        conversation: history,
       });
+
       if (response?.operations) {
-        const newOps = response.operations.map((op: any) => {
+        const newOps: Operation[] = response.operations.map((op: any) => {
           let type = op.type;
           if (type==='clean') type = op.method==='remove_outliers' ? 'remove_outliers' : op.method==='clean_text' ? 'clean_text' : 'drop_duplicates';
           if (type==='aggregate') type = op.method==='resample' ? 'resample' : 'groupby';
           return { id: Math.random().toString(36).substr(2,9), type, params: { ...op } };
         });
-        setOperations(prev => [...prev, ...newOps]);
+
+        // Append this turn to conversation history
+        setAiConversation(prev => [...prev, { role: 'user', content: prompt, operations: newOps }]);
+
+        // For follow-ups: replace ops from previous AI turns; for first turn: append
+        if (aiConversation.length === 0) {
+          setOperations(prev => [...prev, ...newOps]);
+        } else {
+          // Replace only the AI-generated ops (keep any manually added ones)
+          setOperations(prev => {
+            const manualOps = prev.filter(op => !aiConversation.some(t => t.operations?.some(o => o.id === op.id)));
+            return [...manualOps, ...newOps];
+          });
+        }
+
         setAiPrompt('');
+        setShowAiChat(true);
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       }
-    } catch (err: any) { setError(`AI generation failed: ${err.message ?? 'Unknown error'}`);
+    } catch (err: any) {
+      setError(`AI generation failed: ${err.message ?? 'Unknown error'}`);
     } finally { setIsGenerating(false); }
+  };
+
+  const handleResetAiConversation = () => {
+    setAiConversation([]);
+    setShowAiChat(false);
   };
 
   // ── Save pipeline ───────────────────────────────────────────────────────────
@@ -663,25 +853,107 @@ export function DataTransformation({ }: { apiKey?: string }) {
             </div>
           )}
 
-          {/* AI Wizard */}
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100 p-6">
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-blue-600 rounded-lg shrink-0"><Wrench className="size-6 text-white"/></div>
-              <div className="flex-1">
-                <h3 className="text-lg font-bold text-blue-900 mb-1">AI Data Prep Wizard</h3>
-                <p className="text-blue-800 text-sm mb-4">Describe what you want — the AI will configure the operations.</p>
-                <div className="flex gap-3">
-                  <input type="text" value={aiPrompt} onChange={e=>setAiPrompt(e.target.value)}
-                    placeholder="e.g. Remove empty rows, lowercase the email column, drop zip_code"
-                    className="flex-1 px-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500"
-                    onKeyDown={e=>{if(e.key==='Enter')handleGenerateAI();}}/>
-                  <button onClick={handleGenerateAI} disabled={isGenerating||!aiPrompt.trim()}
-                    className="whitespace-nowrap px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                    {isGenerating?'Generating…':'Generate with AI'}
-                  </button>
+          {/* ── Auto-suggestions (feature 5) ── */}
+          {autoSuggestions.filter(s => !dismissedSuggestions.has(s.id)).length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Lightbulb className="size-5 text-amber-600"/>
+                <h3 className="font-bold text-amber-900">Smart Suggestions</h3>
+                <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                  {autoSuggestions.filter(s => !dismissedSuggestions.has(s.id)).length} issues found
+                </span>
+              </div>
+              <div className="space-y-2">
+                {autoSuggestions.filter(s => !dismissedSuggestions.has(s.id)).map(s => (
+                  <div key={s.id} className={`flex items-center justify-between gap-3 px-4 py-3 rounded-lg border ${s.severity==='warn' ? 'bg-red-50 border-red-200' : 'bg-white border-amber-200'}`}>
+                    <div className="flex items-start gap-2 flex-1 min-w-0">
+                      <span className={`mt-0.5 size-2 rounded-full shrink-0 ${s.severity==='warn' ? 'bg-red-500' : 'bg-amber-400'}`}/>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900">{s.label}</p>
+                        <p className="text-xs text-gray-500">{s.detail}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button onClick={() => { setOperations(prev => [...prev, { id: Math.random().toString(36).substr(2,9), ...s.operation }]); setDismissedSuggestions(prev => new Set([...prev, s.id])); }}
+                        className="px-3 py-1 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        Add
+                      </button>
+                      <button onClick={() => setDismissedSuggestions(prev => new Set([...prev, s.id]))}
+                        className="px-2 py-1 text-xs text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                        <X className="size-3"/>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* AI Wizard (feature 6: multi-step conversation) */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100">
+            <div className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-blue-600 rounded-lg shrink-0"><Wrench className="size-6 text-white"/></div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-lg font-bold text-blue-900">AI Data Prep Wizard</h3>
+                    {aiConversation.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setShowAiChat(v=>!v)}
+                          className="flex items-center gap-1.5 text-xs px-3 py-1 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200">
+                          <MessageSquare className="size-3.5"/>
+                          {aiConversation.length} turn{aiConversation.length!==1?'s':''}
+                          {showAiChat ? <ChevronUp className="size-3"/> : <ChevronDown className="size-3"/>}
+                        </button>
+                        <button onClick={handleResetAiConversation} title="Reset conversation"
+                          className="p-1.5 rounded-lg text-blue-400 hover:text-blue-700 hover:bg-blue-100">
+                          <RotateCcw className="size-3.5"/>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-blue-800 text-sm mb-4">
+                    {aiConversation.length === 0
+                      ? 'Describe what you want — the AI will configure the operations.'
+                      : 'Follow up to refine: "make the filter < 100 instead", "also encode the category column"…'}
+                  </p>
+                  <div className="flex gap-3">
+                    <input type="text" value={aiPrompt} onChange={e=>setAiPrompt(e.target.value)}
+                      placeholder={aiConversation.length === 0
+                        ? 'e.g. Remove empty rows, lowercase the email column, drop zip_code'
+                        : 'Follow up: "change the threshold to 2", "add encoding for category"…'}
+                      className="flex-1 px-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                      onKeyDown={e=>{if(e.key==='Enter')handleGenerateAI();}}/>
+                    <button onClick={()=>handleGenerateAI()} disabled={isGenerating||!aiPrompt.trim()}
+                      className="shrink-0 flex items-center gap-2 px-5 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                      <Send className="size-4"/>
+                      {isGenerating ? 'Working…' : aiConversation.length === 0 ? 'Generate' : 'Follow up'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
+
+            {/* Conversation history */}
+            {showAiChat && aiConversation.length > 0 && (
+              <div className="border-t border-blue-100 px-6 pb-5 pt-4 space-y-3 max-h-72 overflow-y-auto">
+                {aiConversation.map((turn, i) => (
+                  <div key={i} className="flex gap-3">
+                    <div className={`size-7 rounded-full flex items-center justify-center shrink-0 text-xs font-bold ${turn.role==='user' ? 'bg-gray-200 text-gray-700' : 'bg-blue-600 text-white'}`}>
+                      {turn.role==='user' ? 'U' : 'AI'}
+                    </div>
+                    <div className="flex-1 bg-white rounded-lg px-3 py-2 border border-blue-100">
+                      <p className="text-xs font-semibold text-gray-500 mb-1">{turn.role==='user' ? 'You' : 'AI'}</p>
+                      <p className="text-sm text-gray-800">{turn.content}</p>
+                      {turn.operations && turn.operations.length > 0 && (
+                        <p className="text-xs text-blue-600 mt-1">→ Generated {turn.operations.length} operation{turn.operations.length!==1?'s':''}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef}/>
+              </div>
+            )}
           </div>
 
           {/* ── Pipeline ── */}
@@ -799,18 +1071,28 @@ export function DataTransformation({ }: { apiKey?: string }) {
           {/* Before/After preview */}
           {showPreview && (previewBefore.length>0||previewAfter.length>0) && (
             <div className="bg-white rounded-xl border border-gray-200">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <div className="flex items-center gap-2">
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 shrink-0">
                   <ArrowRightLeft className="size-5 text-blue-600"/>
                   <h2 className="text-lg font-bold text-gray-900">Pipeline Preview</h2>
                 </div>
-                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-                  <button onClick={()=>setPreviewTab('before')} className={`px-4 py-1.5 font-medium ${previewTab==='before'?'bg-gray-800 text-white':'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                    Before ({previewBefore.length})
-                  </button>
-                  <button onClick={()=>setPreviewTab('after')} className={`px-4 py-1.5 font-medium ${previewTab==='after'?'bg-blue-600 text-white':'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                    After ({previewAfter.length})
-                  </button>
+                <div className="flex items-center gap-2">
+                  {/* Feature 4: Download CSV */}
+                  {previewAfter.length > 0 && (
+                    <button
+                      onClick={() => downloadCSV(previewAfter, `${selectedTable}_preview.csv`)}
+                      className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-green-300 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 font-medium">
+                      <Download className="size-4"/> Download CSV
+                    </button>
+                  )}
+                  <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+                    <button onClick={()=>setPreviewTab('before')} className={`px-4 py-1.5 font-medium ${previewTab==='before'?'bg-gray-800 text-white':'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                      Before ({previewBefore.length})
+                    </button>
+                    <button onClick={()=>setPreviewTab('after')} className={`px-4 py-1.5 font-medium ${previewTab==='after'?'bg-blue-600 text-white':'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                      After ({previewAfter.length})
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="overflow-x-auto">

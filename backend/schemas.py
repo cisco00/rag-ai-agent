@@ -153,9 +153,14 @@ class TransformRequest(BaseModel):
     operations: List[Dict[str, Any]]
     target_table: Optional[str] = None
 
+class ConversationMessage(BaseModel):
+    role: str   # "user" | "assistant"
+    content: str
+
 class TransformSuggestRequest(BaseModel):
     table_name: str
     prompt: str
+    conversation: Optional[List[ConversationMessage]] = None   # prior turns for multi-step AI
 
 class UpdateCellRequest(BaseModel):
     row_id: Any
