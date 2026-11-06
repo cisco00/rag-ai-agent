@@ -296,6 +296,26 @@ class ChatMessage(Base):
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, role='{self.role}')>"
 
+
+class SavedPipeline(Base):
+    """
+    Named, reusable data transformation pipelines.
+    Each pipeline stores an ordered JSON list of operations for a given table.
+    """
+    __tablename__ = 'saved_pipelines'
+
+    id         = Column(Integer, primary_key=True)
+    org_id     = Column(Integer, nullable=False, index=True)
+    user_id    = Column(Integer, nullable=False, index=True)
+    name       = Column(String(255), nullable=False)
+    table_name = Column(String(255), nullable=False)
+    operations = Column(Text, nullable=False)   # JSON: [{type, params}, ...]
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<SavedPipeline(id={self.id}, name='{self.name}', table='{self.table_name}')>"
+
 # Setup admin database
 ADMIN_DB_URL = os.getenv("ADMIN_DB_URL", "sqlite:///./admin.db")
 
@@ -426,6 +446,28 @@ def init_admin_db():
                     logger.info("Migration: column_descriptions table ready")
                 except Exception as e:
                     logger.warning(f"Migration: column_descriptions error: {e}")
+
+                # saved_pipelines table
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS saved_pipelines (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            org_id INTEGER NOT NULL,
+                            user_id INTEGER NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            table_name VARCHAR(255) NOT NULL,
+                            operations TEXT NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                    """))
+                    conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_saved_pipelines_org_user "
+                        "ON saved_pipelines (org_id, user_id)"
+                    ))
+                    logger.info("Migration: saved_pipelines table ready")
+                except Exception as e:
+                    logger.warning(f"Migration: saved_pipelines error: {e}")
 
         logger.info("Admin database tables created and migrations applied")
     except Exception as e:

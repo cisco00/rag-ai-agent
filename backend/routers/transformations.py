@@ -1,16 +1,20 @@
 """
-routers/transformations.py — Data transformation and AI-suggested operations.
+routers/transformations.py — Data transformation, AI-suggested operations,
+                              pipeline save/load, and column profiling.
 """
 
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 
 from database import DatabaseManager
 from dependencies import (
     get_current_org, get_org_connection_string, get_cached_schema_summary,
     require_permission
 )
+from auth import get_current_user
 from utils import clean_llm_json_content
 from schemas import TransformRequest, TransformSuggestRequest
 
@@ -263,4 +267,197 @@ async def preview_transform_data(
         raise
     except Exception as e:
         logger.error(f"Preview failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Pipeline save / load ──────────────────────────────────────────────────────
+
+class SavePipelineRequest(BaseModel):
+    name: str
+    table_name: str
+    operations: list   # raw frontend operation objects (with id + type + params)
+
+
+@router.get("/transform/pipelines")
+async def list_pipelines(
+    table: Optional[str] = Query(None, description="Filter by table name"),
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """List saved pipelines for the current user/org, optionally filtered by table."""
+    from models import get_db, SavedPipeline
+    with get_db() as db:
+        q = db.query(SavedPipeline).filter(
+            SavedPipeline.org_id == org.id,
+            SavedPipeline.user_id == user["id"],
+        )
+        if table:
+            q = q.filter(SavedPipeline.table_name == table)
+        pipelines = q.order_by(SavedPipeline.updated_at.desc()).all()
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "table_name": p.table_name,
+                "operations": json.loads(p.operations),
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }
+            for p in pipelines
+        ]
+
+
+@router.post("/transform/pipelines")
+async def save_pipeline(
+    body: SavePipelineRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Save (or overwrite if same name+table) a named pipeline."""
+    from models import get_db, SavedPipeline
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    with get_db() as db:
+        existing = db.query(SavedPipeline).filter(
+            SavedPipeline.org_id == org.id,
+            SavedPipeline.user_id == user["id"],
+            SavedPipeline.name == body.name.strip(),
+            SavedPipeline.table_name == body.table_name,
+        ).first()
+        if existing:
+            existing.operations = json.dumps(body.operations)
+            existing.updated_at = now
+            db.flush()
+            return {"status": "updated", "id": existing.id}
+        else:
+            pipeline = SavedPipeline(
+                org_id=org.id,
+                user_id=user["id"],
+                name=body.name.strip()[:255],
+                table_name=body.table_name,
+                operations=json.dumps(body.operations),
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(pipeline)
+            db.flush()
+            db.refresh(pipeline)
+            return {"status": "created", "id": pipeline.id}
+
+
+@router.delete("/transform/pipelines/{pipeline_id}")
+async def delete_pipeline(
+    pipeline_id: int,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Delete a saved pipeline."""
+    from models import get_db, SavedPipeline
+    with get_db() as db:
+        pipeline = db.query(SavedPipeline).filter(
+            SavedPipeline.id == pipeline_id,
+            SavedPipeline.org_id == org.id,
+            SavedPipeline.user_id == user["id"],
+        ).first()
+        if not pipeline:
+            raise HTTPException(status_code=404, detail="Pipeline not found")
+        db.delete(pipeline)
+    return {"status": "deleted"}
+
+
+# ── Column profiling ──────────────────────────────────────────────────────────
+
+@router.get("/tables/{table}/profile")
+async def profile_table(
+    table: str,
+    org=Depends(get_current_org),
+    _user=Depends(get_current_user),
+):
+    """
+    Return per-column statistics for a table (sample of up to 2 000 rows).
+    For numeric columns: min, max, mean, std, 8-bucket histogram.
+    For text/categorical columns: top-5 value frequencies.
+    """
+    try:
+        import math
+        import numpy as np
+        import pandas as pd
+        from fastapi.concurrency import run_in_threadpool
+        from validators import TableNameValidator
+
+        try:
+            TableNameValidator.validate(table)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid table name: '{table}'")
+
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured for this organization.")
+
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        def _load():
+            return pd.read_sql(f'SELECT * FROM "{table}" LIMIT 2000', db_manager.get_engine())
+
+        df = await run_in_threadpool(_load)
+        db_manager.close()
+
+        total_rows = len(df)
+        profile: dict = {}
+
+        def _safe(v):
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                return None
+            if isinstance(v, (np.int64, np.int32, np.int16, np.int8)):
+                return int(v)
+            if isinstance(v, (np.float64, np.float32)):
+                return float(v)
+            return v
+
+        for col in df.columns:
+            series = df[col]
+            null_count = int(series.isna().sum())
+            null_pct   = round(null_count / total_rows * 100, 1) if total_rows else 0.0
+            unique_count = int(series.nunique(dropna=True))
+
+            stats: dict = {
+                "dtype":        str(series.dtype),
+                "count":        int(series.count()),
+                "null_count":   null_count,
+                "null_pct":     null_pct,
+                "unique_count": unique_count,
+            }
+
+            if pd.api.types.is_numeric_dtype(series):
+                non_null = series.dropna()
+                if len(non_null) > 0:
+                    stats["min"]  = _safe(non_null.min())
+                    stats["max"]  = _safe(non_null.max())
+                    stats["mean"] = round(_safe(non_null.mean()), 4)
+                    stats["std"]  = round(_safe(non_null.std()), 4) if len(non_null) > 1 else 0.0
+                    hist, edges   = np.histogram(non_null, bins=8)
+                    stats["histogram"] = {
+                        "counts": [int(c) for c in hist],
+                        "edges":  [round(float(e), 4) for e in edges],
+                    }
+            else:
+                top5 = series.value_counts(dropna=True).head(5)
+                stats["top_values"] = [
+                    {"value": str(k), "count": int(v)}
+                    for k, v in top5.items()
+                ]
+
+            profile[col] = stats
+
+        return {
+            "table":        table,
+            "row_count":    total_rows,
+            "column_count": len(df.columns),
+            "profile":      profile,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Profile failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
