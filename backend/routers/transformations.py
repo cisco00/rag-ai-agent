@@ -199,6 +199,64 @@ async def suggest_transformations(request: TransformSuggestRequest, org=Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── AI pipeline explanation ───────────────────────────────────────────────────
+
+class ExplainPipelineRequest(BaseModel):
+    table_name: str
+    operations: list   # already-mapped backend ops
+
+
+@router.post("/transform/explain")
+async def explain_pipeline(
+    request: ExplainPipelineRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """
+    Return a plain-English paragraph explaining what the pipeline does,
+    plus a one-line summary suitable for a commit message / notification.
+    """
+    try:
+        from config import get_agent_config
+        from llm_client import get_llm_client
+
+        config = get_agent_config()
+        try:
+            client = get_llm_client(config.model_provider, config)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to initialize AI")
+
+        ops_json = __import__('json').dumps(request.operations, indent=2)
+        prompt = (
+            f"You are a data engineer explaining a transformation pipeline to a business analyst.\n"
+            f"Source table: {request.table_name}\n"
+            f"Pipeline operations (JSON):\n{ops_json}\n\n"
+            f"Write TWO things, separated by a line that is exactly '---':\n"
+            f"1. A plain-English paragraph (3-5 sentences) explaining what the pipeline does "
+            f"and why each step matters. Use business language, not technical jargon.\n"
+            f"2. A single sentence (max 15 words) suitable as a pipeline title or notification.\n"
+            f"Do not include headers, bullets, or JSON. Just the paragraph, then ---, then the sentence."
+        )
+
+        response = client.chat_completion(
+            model=config.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+        )
+        content = response.choices[0].message.content.strip()
+
+        # Split on the separator
+        parts = content.split("---", 1)
+        paragraph = parts[0].strip()
+        summary   = parts[1].strip() if len(parts) > 1 else paragraph[:80]
+
+        return {"paragraph": paragraph, "summary": summary}
+
+    except Exception as e:
+        logger.error(f"Error explaining pipeline: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/transform/preview")
 async def preview_transform_data(
     request: TransformRequest,

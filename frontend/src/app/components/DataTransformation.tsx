@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Wrench, Plus, Play, Eye, AlertCircle, CheckCircle,
   Trash2, ArrowRightLeft, Save, FolderOpen, BarChart2,
   GripVertical, X, ChevronDown, ChevronUp, Download,
   Lightbulb, MessageSquare, Send, RotateCcw,
   Clock, Layers, CheckSquare, Square, RefreshCw,
+  AlertTriangle, BookOpen, Sparkles,
 } from 'lucide-react';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -125,8 +126,9 @@ function mapOpForBackend(op: Operation): Record<string, any> {
 
 // ── Sortable operation card wrapper ──────────────────────────────────────────
 
-function SortableCard({ op, index, onRemove, children }: {
-  op: Operation; index: number; onRemove: () => void; children: React.ReactNode;
+function SortableCard({ op, index, onRemove, conflicts, children }: {
+  op: Operation; index: number; onRemove: () => void;
+  conflicts?: string[]; children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: op.id });
@@ -145,11 +147,13 @@ function SortableCard({ op, index, onRemove, children }: {
     groupby: 'Summarize (Group By)', resample: 'Time Series Resample',
   };
 
+  const hasConflicts = conflicts && conflicts.length > 0;
+
   return (
     <div ref={setNodeRef} style={style}
-      className={`p-4 border-2 rounded-lg transition-colors ${isDragging ? 'border-blue-400 shadow-lg bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`}>
+      className={`p-4 border-2 rounded-lg transition-colors ${isDragging ? 'border-blue-400 shadow-lg bg-blue-50' : hasConflicts ? 'border-amber-400 bg-amber-50/40' : 'border-gray-200 hover:border-blue-300'}`}>
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button {...attributes} {...listeners}
             className="text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 rounded touch-none">
             <GripVertical className="size-5" />
@@ -158,9 +162,23 @@ function SortableCard({ op, index, onRemove, children }: {
           <h3 className="font-bold text-gray-900 text-sm">
             {op.params.friendly_description || operationLabels[op.type] || op.type}
           </h3>
+          {hasConflicts && (
+            <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold border border-amber-200">
+              <AlertTriangle className="size-3" /> {conflicts!.length} conflict{conflicts!.length > 1 ? 's' : ''}
+            </span>
+          )}
         </div>
         <button onClick={onRemove} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded text-lg leading-none">×</button>
       </div>
+      {hasConflicts && (
+        <div className="mb-3 space-y-1">
+          {conflicts!.map((msg, i) => (
+            <p key={i} className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              <AlertTriangle className="size-3 shrink-0 mt-0.5" />{msg}
+            </p>
+          ))}
+        </div>
+      )}
       {children}
     </div>
   );
@@ -275,6 +293,12 @@ export function DataTransformation({ }: { apiKey?: string }) {
   const [schedulingId, setSchedulingId]     = useState<number | null>(null); // which pipeline is open in schedule picker
   const [scheduleFreq, setScheduleFreq]     = useState('daily');
 
+  // AI explain (feature 10)
+  const [explanationText, setExplanationText] = useState<string | null>(null);
+  const [explanationSummary, setExplanationSummary] = useState<string | null>(null);
+  const [isExplaining, setIsExplaining]       = useState(false);
+  const [showExplanation, setShowExplanation] = useState(false);
+
   // Batch apply (feature 8)
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [batchPipelineId, setBatchPipelineId] = useState<number | null>(null);
@@ -284,6 +308,98 @@ export function DataTransformation({ }: { apiKey?: string }) {
 
   // DnD sensors
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  // ── Feature 9: Operation conflict detection ─────────────────────────────────
+  const pipelineConflicts = useMemo(() => {
+    const conflicts = new Map<string, string[]>();
+    const add = (id: string, msg: string) => {
+      const list = conflicts.get(id) ?? [];
+      list.push(msg);
+      conflicts.set(id, list);
+    };
+
+    const droppedCols   = new Set<string>();
+    const renamedCols   = new Map<string, string>(); // old → new
+    const nonNumericCols= new Set<string>();
+    const normalizedCols= new Set<string>();
+    let afterGroupBy    = false;
+
+    for (const op of operations) {
+      const p = op.params;
+      // Collect all column refs in this op
+      const colsUsed: string[] = [];
+      if (p.column)   colsUsed.push(p.column);
+      if (p.column1)  colsUsed.push(p.column1);
+      if (p.column2)  colsUsed.push(p.column2);
+      if (p.subset)   p.subset.split(',').map((c: string) => c.trim()).filter(Boolean).forEach((c: string) => colsUsed.push(c));
+      if (Array.isArray(p.columns)) colsUsed.push(...p.columns);
+      else if (p.columns && typeof p.columns === 'string')
+        p.columns.split(',').map((c: string) => c.trim()).filter(Boolean).forEach((c: string) => colsUsed.push(c));
+
+      // 1. Using a column that was dropped earlier
+      for (const col of colsUsed)
+        if (droppedCols.has(col)) add(op.id, `"${col}" was dropped in a previous step`);
+
+      // 2. Using the old name after a rename
+      for (const col of colsUsed)
+        if (renamedCols.has(col)) add(op.id, `"${col}" was renamed to "${renamedCols.get(col)}" earlier`);
+
+      // 3. fill_na after normalize on the same column
+      if (op.type === 'fill_na' && p.column && (normalizedCols.has(p.column) || normalizedCols.has('*')))
+        add(op.id, `Filling nulls after normalizing "${p.column}" produces incorrect results — move Fill before Normalize`);
+
+      // 4. Normalizing a non-numeric column
+      if (op.type === 'normalize') {
+        const cols: string[] = Array.isArray(p.columns) ? p.columns
+          : typeof p.columns === 'string' ? p.columns.split(',').map((c: string) => c.trim()).filter(Boolean) : [];
+        for (const col of cols)
+          if (nonNumericCols.has(col)) add(op.id, `"${col}" was changed to a non-numeric type — Normalize requires numbers`);
+      }
+
+      // 5. Filter after Group By (operates on aggregated rows)
+      if (op.type === 'filter' && afterGroupBy)
+        add(op.id, `Filtering after Group By operates on aggregated rows — consider moving the filter before Group By`);
+
+      // Update state for the ops that follow
+      if (op.type === 'drop_col'    && p.column)             droppedCols.add(p.column);
+      if (op.type === 'rename_col'  && p.column && p.new_name) renamedCols.set(p.column, p.new_name);
+      if (op.type === 'change_type' && p.column) {
+        if (['str','bool','datetime'].includes(p.new_type ?? '')) nonNumericCols.add(p.column);
+        else nonNumericCols.delete(p.column);
+      }
+      if (op.type === 'groupby') afterGroupBy = true;
+      if (op.type === 'normalize') {
+        const cols: string[] = Array.isArray(p.columns) ? p.columns
+          : typeof p.columns === 'string' ? p.columns.split(',').map((c: string) => c.trim()).filter(Boolean) : [];
+        if (cols.length === 0) normalizedCols.add('*');
+        else cols.forEach(c => normalizedCols.add(c));
+      }
+    }
+    return conflicts;
+  }, [operations]);
+
+  const totalConflicts = useMemo(
+    () => Array.from(pipelineConflicts.values()).reduce((n, msgs) => n + msgs.length, 0),
+    [pipelineConflicts]
+  );
+
+  // ── Feature 11: Post-transform quality score ────────────────────────────────
+  const qualityMetrics = useMemo(() => {
+    const compute = (rows: any[]) => {
+      if (!rows.length) return null;
+      const cols = Object.keys(rows[0]);
+      const totalCells = rows.length * cols.length;
+      const nulls = rows.reduce(
+        (n, row) => n + cols.filter(c => row[c] === null || row[c] === undefined || row[c] === '').length, 0
+      );
+      const completePct = Math.round(((totalCells - nulls) / totalCells) * 100);
+      const rowStrs = rows.map(r => JSON.stringify(r));
+      const dupRate = Math.round(((rows.length - new Set(rowStrs).size) / rows.length) * 100);
+      return { completePct, dupRate, rowCount: rows.length };
+    };
+    if (!showPreview || (!previewBefore.length && !previewAfter.length)) return null;
+    return { before: compute(previewBefore), after: compute(previewAfter) };
+  }, [previewBefore, previewAfter, showPreview]);
 
   // ── Fetch tables ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -725,6 +841,23 @@ export function DataTransformation({ }: { apiKey?: string }) {
     } finally { setProfileLoading(false); }
   };
 
+  // ── Feature 10: AI explain pipeline ────────────────────────────────────────
+  const handleExplain = async () => {
+    if (operations.length === 0) return;
+    setIsExplaining(true); setShowExplanation(true);
+    try {
+      const result = await api.post<{ paragraph: string; summary: string }>('/transform/explain', {
+        table_name: selectedTable,
+        operations: operations.map(mapOpForBackend),
+      });
+      setExplanationText(result.paragraph ?? null);
+      setExplanationSummary(result.summary ?? null);
+    } catch (err: any) {
+      setExplanationText(`Could not generate explanation: ${err.message ?? 'Unknown error'}`);
+      setExplanationSummary(null);
+    } finally { setIsExplaining(false); }
+  };
+
   // ── Per-operation forms ─────────────────────────────────────────────────────
   const renderForm = (op: Operation) => {
     const sel = (paramName: string, placeholder = 'Select column') => (
@@ -1063,10 +1196,24 @@ export function DataTransformation({ }: { apiKey?: string }) {
             <div className="p-6 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900">Pipeline</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-bold text-gray-900">Pipeline</h2>
+                    {totalConflicts > 0 && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold border border-amber-200">
+                        <AlertTriangle className="size-3.5" /> {totalConflicts} conflict{totalConflicts > 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500 mt-0.5">{operations.length} operation{operations.length!==1?'s':''} — drag to reorder</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Explain button */}
+                  {operations.length > 0 && (
+                    <button onClick={handleExplain} disabled={isExplaining}
+                      className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-purple-300 rounded-lg hover:bg-purple-50 text-purple-700 disabled:opacity-50">
+                      <BookOpen className="size-4"/> {isExplaining ? 'Explaining…' : 'Explain'}
+                    </button>
+                  )}
                   {/* Load button */}
                   <div className="relative">
                     <button onClick={()=>setShowLoadMenu(v=>!v)}
@@ -1202,8 +1349,48 @@ export function DataTransformation({ }: { apiKey?: string }) {
               )}
             </div>
 
+            {/* AI explanation panel */}
+            {showExplanation && (
+              <div className="mx-6 mt-4 p-4 bg-purple-50 border border-purple-200 rounded-xl">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <BookOpen className="size-4 text-purple-600 mt-0.5 shrink-0"/>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide">AI Pipeline Explanation</p>
+                        {explanationSummary && (
+                          <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-600 rounded-full border border-purple-200 italic truncate max-w-xs">
+                            {explanationSummary}
+                          </span>
+                        )}
+                      </div>
+                      {isExplaining ? (
+                        <p className="text-sm text-purple-500 animate-pulse">Analysing pipeline…</p>
+                      ) : (
+                        <p className="text-sm text-purple-900 leading-relaxed">{explanationText}</p>
+                      )}
+                    </div>
+                  </div>
+                  <button onClick={() => setShowExplanation(false)} className="text-purple-300 hover:text-purple-600 p-1 rounded shrink-0">
+                    <X className="size-4"/>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Operations list with DnD */}
             <div className="p-6 space-y-4">
+              {/* Conflict summary (if any) */}
+              {totalConflicts > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="size-4 text-amber-600 mt-0.5 shrink-0"/>
+                  <div className="text-xs text-amber-800">
+                    <span className="font-semibold">{totalConflicts} pipeline conflict{totalConflicts > 1 ? 's' : ''} detected.</span>{' '}
+                    Operations with ⚠ badges below may produce incorrect results. Review the highlighted steps.
+                  </div>
+                </div>
+              )}
+
               {operations.length === 0 ? (
                 <div className="text-center py-12 text-gray-500">
                   <Wrench className="size-12 mx-auto mb-3 text-gray-300"/>
@@ -1214,7 +1401,8 @@ export function DataTransformation({ }: { apiKey?: string }) {
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                   <SortableContext items={operations.map(op=>op.id)} strategy={verticalListSortingStrategy}>
                     {operations.map((op, index) => (
-                      <SortableCard key={op.id} op={op} index={index} onRemove={()=>removeOperation(op.id)}>
+                      <SortableCard key={op.id} op={op} index={index} onRemove={()=>removeOperation(op.id)}
+                        conflicts={pipelineConflicts.get(op.id)}>
                         {renderForm(op)}
                       </SortableCard>
                     ))}
@@ -1238,6 +1426,77 @@ export function DataTransformation({ }: { apiKey?: string }) {
               </div>
             )}
           </div>
+
+          {/* ── Quality Score (feature 11) ── */}
+          {qualityMetrics && qualityMetrics.before && qualityMetrics.after && (
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Sparkles className="size-5 text-indigo-500"/>
+                <h3 className="font-bold text-gray-900">Quality Score</h3>
+                <span className="text-xs text-gray-400">before → after transformation</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                {/* Completeness */}
+                {(() => {
+                  const delta = qualityMetrics.after.completePct - qualityMetrics.before.completePct;
+                  const up = delta >= 0;
+                  return (
+                    <div className="text-center p-4 rounded-xl border border-gray-100 bg-gray-50">
+                      <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Completeness</p>
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="text-lg font-bold text-gray-400">{qualityMetrics.before.completePct}%</span>
+                        <span className="text-gray-300">→</span>
+                        <span className={`text-2xl font-black ${up ? 'text-green-600' : 'text-red-500'}`}>{qualityMetrics.after.completePct}%</span>
+                      </div>
+                      <p className={`text-xs mt-1 font-semibold ${up ? 'text-green-600' : delta < 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                        {delta > 0 ? `+${delta}pp` : delta < 0 ? `${delta}pp` : 'no change'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">non-null cells</p>
+                    </div>
+                  );
+                })()}
+                {/* Duplicates */}
+                {(() => {
+                  const delta = qualityMetrics.after.dupRate - qualityMetrics.before.dupRate;
+                  const up = delta <= 0;
+                  return (
+                    <div className="text-center p-4 rounded-xl border border-gray-100 bg-gray-50">
+                      <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Duplicate Rate</p>
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="text-lg font-bold text-gray-400">{qualityMetrics.before.dupRate}%</span>
+                        <span className="text-gray-300">→</span>
+                        <span className={`text-2xl font-black ${up ? 'text-green-600' : 'text-red-500'}`}>{qualityMetrics.after.dupRate}%</span>
+                      </div>
+                      <p className={`text-xs mt-1 font-semibold ${up && delta < 0 ? 'text-green-600' : delta > 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                        {delta < 0 ? `${delta}pp` : delta > 0 ? `+${delta}pp` : 'no change'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">duplicate rows</p>
+                    </div>
+                  );
+                })()}
+                {/* Row count */}
+                {(() => {
+                  const delta = qualityMetrics.after.rowCount - qualityMetrics.before.rowCount;
+                  const pct   = qualityMetrics.before.rowCount > 0
+                    ? Math.round((delta / qualityMetrics.before.rowCount) * 100) : 0;
+                  return (
+                    <div className="text-center p-4 rounded-xl border border-gray-100 bg-gray-50">
+                      <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">Row Count</p>
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="text-lg font-bold text-gray-400">{qualityMetrics.before.rowCount}</span>
+                        <span className="text-gray-300">→</span>
+                        <span className="text-2xl font-black text-indigo-600">{qualityMetrics.after.rowCount}</span>
+                      </div>
+                      <p className={`text-xs mt-1 font-semibold ${delta < 0 ? 'text-amber-500' : delta > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
+                        {delta > 0 ? `+${delta} rows` : delta < 0 ? `${delta} rows (${pct}%)` : 'unchanged'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">sample of 50</p>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
 
           {/* Before/After preview */}
           {showPreview && (previewBefore.length>0||previewAfter.length>0) && (
@@ -1317,7 +1576,10 @@ export function DataTransformation({ }: { apiKey?: string }) {
                 <ul className="space-y-1 text-sm text-blue-800">
                   <li>• Drag <GripVertical className="size-3 inline"/> to reorder operations</li>
                   <li>• Preview runs on a 50-row sample before you commit</li>
-                  <li>• <Clock className="size-3 inline"/> schedules a pipeline to run hourly / daily / weekly / monthly</li>
+                  <li>• <AlertTriangle className="size-3 inline text-amber-500"/> badges warn of operation conflicts</li>
+                  <li>• <BookOpen className="size-3 inline text-purple-500"/> Explain generates a plain-English summary</li>
+                  <li>• Quality Score shows completeness / duplicates before → after</li>
+                  <li>• <Clock className="size-3 inline"/> schedules a pipeline hourly / daily / weekly / monthly</li>
                   <li>• <Layers className="size-3 inline"/> runs the same pipeline on multiple tables at once</li>
                   <li>• Original table is never modified</li>
                 </ul>
