@@ -1,10 +1,17 @@
 """
 routers/transformations.py — Data transformation, AI-suggested operations,
                               pipeline save/load, and column profiling.
+
+Phase 1 engine: ops are compiled to a SQL CTE chain (SQLTransformer).
+Ops that cannot be expressed in SQL fall back to Pandas.
+Both /transform (apply) and /transform/preview use the hybrid engine and
+return run_stats  {engine, sql_ops, pandas_ops, total_time_ms, rows_before,
+                   rows_after, cte_count}.
 """
 
 import json
 import logging
+import time
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
@@ -21,35 +28,124 @@ from schemas import TransformRequest, TransformSuggestRequest
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+# ── Hybrid execution helper ───────────────────────────────────────────────────
+
+def _run_hybrid(
+    db_manager: "DatabaseManager",
+    source_table: str,
+    operations: list,
+    limit: int | None = None,
+) -> tuple[object, dict]:
+    """
+    Execute *operations* against *source_table* using the SQL+Pandas engine.
+
+    Returns (df_result, run_stats).
+    run_stats keys:
+      engine        "sql" | "pandas" | "hybrid"
+      sql_ops       int
+      pandas_ops    int
+      cte_count     int
+      total_time_ms float
+      rows_before   int
+      rows_after    int
+    """
+    import pandas as pd
+    from transformations import DataTransformer
+    from sql_transformer import SQLTransformer
+
+    t0 = time.monotonic()
+
+    # -- 1. Get column list for the compiler --------------------------------
+    engine = db_manager.get_engine()
+    all_cols_df = pd.read_sql(f'SELECT * FROM "{source_table}" LIMIT 1', engine)
+    all_columns = list(all_cols_df.columns)
+    rows_before_query = f'SELECT COUNT(*) AS n FROM "{source_table}"'
+    rows_before_df = pd.read_sql(rows_before_query, engine)
+    rows_before = int(rows_before_df.iloc[0, 0])
+
+    # -- 2. Compile ops to SQL CTE chain ------------------------------------
+    dialect = SQLTransformer.dialect_from_connection_string(
+        db_manager.connection_string
+    )
+    result = SQLTransformer.compile(
+        table_name=source_table,
+        ops=operations,
+        dialect=dialect,
+        all_columns=all_columns,
+    )
+
+    sql_query   = result["sql"]
+    params      = result["params"]
+    compiled    = result["compiled_ops"]
+    skipped     = result["skipped_ops"]
+    cte_count   = result["cte_count"]
+
+    # -- 3. Run SQL portion --------------------------------------------------
+    if sql_query:
+        final_sql = sql_query
+        if limit is not None:
+            final_sql = f"{sql_query} LIMIT {int(limit)}"
+        from sqlalchemy import text as sa_text
+        with engine.connect() as conn:
+            df = pd.read_sql(sa_text(final_sql).bindparams(**params), conn)
+    else:
+        # Nothing compiled – load the raw table
+        base_q = f'SELECT * FROM "{source_table}"'
+        if limit is not None:
+            base_q += f" LIMIT {int(limit)}"
+        df = pd.read_sql(base_q, engine)
+
+    # -- 4. Pandas fallback for skipped ops ----------------------------------
+    if skipped:
+        df = DataTransformer.apply_transformations(df, skipped)
+
+    t1 = time.monotonic()
+
+    # Determine engine label
+    if compiled and skipped:
+        eng_label = "hybrid"
+    elif compiled:
+        eng_label = "sql"
+    else:
+        eng_label = "pandas"
+
+    run_stats = {
+        "engine":        eng_label,
+        "sql_ops":       len(compiled),
+        "pandas_ops":    len(skipped),
+        "cte_count":     cte_count,
+        "total_time_ms": round((t1 - t0) * 1000, 1),
+        "rows_before":   rows_before,
+        "rows_after":    len(df),
+    }
+
+    return df, run_stats
+
 # ── Routes ──
 
 @router.post("/transform")
 async def transform_data(request: TransformRequest, org=Depends(get_current_org),
                          user=Depends(require_permission("MUTATE_TABLES"))):
-    """Apply transformations to a table."""
+    """Apply transformations to a table (hybrid SQL+Pandas engine)."""
     try:
+        import math
+        import numpy as np
         from fastapi.concurrency import run_in_threadpool
+        from validators import TableNameValidator
+
         db_conn = get_org_connection_string(org)
         if not db_conn:
             raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
-            
-        import pandas as pd
-        from transformations import DataTransformer
-        
-        db_manager = DatabaseManager(connection_string=db_conn)
-        
-        # Determine target table
+
         source_table = request.table_name
         target_table = request.target_table
 
-        # Validate table names before any SQL use
-        from validators import TableNameValidator
         try:
             TableNameValidator.validate(source_table)
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid source table name: '{source_table}'")
 
-        # If no target specified, default to creating a new one as requested by user
         if not target_table:
             target_table = f"transformed_{source_table}"
             logger.info(f"Auto-assigning target table: {target_table}")
@@ -59,57 +155,53 @@ async def transform_data(request: TransformRequest, org=Depends(get_current_org)
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid target table name: '{target_table}'")
 
-        # Load table using threadpool (quoted identifier for mixed-case/reserved-word safety)
-        def _load_df():
-            query = f'SELECT * FROM "{source_table}"'
-            return pd.read_sql(query, db_manager.get_engine())
-            
-        df = await run_in_threadpool(_load_df)
-        
-        # Apply operations using DataTransformer (CPU intensive, also good for threadpool if large)
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        def _run():
+            return _run_hybrid(db_manager, source_table, request.operations)
+
         try:
-             df = await run_in_threadpool(DataTransformer.apply_transformations, df, request.operations)
+            df, run_stats = await run_in_threadpool(_run)
         except Exception as e:
-             logger.error(f"Error applying transformations: {e}")
-             db_manager.close()
-             raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
-                
-        # Save changes to the target table
-        def _save_df(dataframe, table):
+            logger.error(f"Hybrid transform error: {e}", exc_info=True)
+            db_manager.close()
+            raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
+
+        def _save(dataframe, table):
             return db_manager.load_dataframe(dataframe, table, if_exists="replace")
-            
-        success = await run_in_threadpool(_save_df, df, target_table)
+
+        success = await run_in_threadpool(_save, df, target_table)
         db_manager.close()
-        
+
         if success:
-            # Return preview and success info
             preview_data = df.head(10).to_dict(orient="records")
-            import math
-            import numpy as np
             cleaned_preview = []
             for row in preview_data:
                 cleaned_row = {}
                 for k, v in row.items():
                     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                         cleaned_row[k] = None
+                        cleaned_row[k] = None
                     elif isinstance(v, (np.int64, np.int32)):
-                         cleaned_row[k] = int(v)
+                        cleaned_row[k] = int(v)
                     elif isinstance(v, (np.bool_, bool)):
-                         cleaned_row[k] = bool(v)
+                        cleaned_row[k] = bool(v)
                     else:
-                         cleaned_row[k] = v
+                        cleaned_row[k] = v
                 cleaned_preview.append(cleaned_row)
-                
+
             return {
-                "status": "success", 
-                "message": f"Transformed data saved to '{target_table}'", 
+                "status":       "success",
+                "message":      f"Transformed data saved to '{target_table}'",
                 "rows_affected": len(df),
                 "target_table": target_table,
-                "preview": cleaned_preview
+                "preview":      cleaned_preview,
+                "run_stats":    run_stats,
             }
         else:
             raise Exception("Failed to save transformed data to database")
-            
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Transformation failed: {e}", exc_info=True)
         if 'db_manager' in locals() and db_manager:
@@ -265,14 +357,13 @@ async def preview_transform_data(
 ):
     """
     Dry-run the pipeline on a 50-row sample and return before/after rows.
-    Nothing is written to the database.
+    Uses the hybrid SQL+Pandas engine. Nothing is written to the database.
     """
     try:
-        from fastapi.concurrency import run_in_threadpool
         import math
         import numpy as np
         import pandas as pd
-        from transformations import DataTransformer
+        from fastapi.concurrency import run_in_threadpool
         from validators import TableNameValidator
 
         db_conn = get_org_connection_string(org)
@@ -287,20 +378,26 @@ async def preview_transform_data(
 
         db_manager = DatabaseManager(connection_string=db_conn)
 
-        def _load_sample():
-            query = f'SELECT * FROM "{source_table}" LIMIT 50'
-            return pd.read_sql(query, db_manager.get_engine())
+        # Load 50-row "before" sample in background
+        def _load_before():
+            return pd.read_sql(
+                f'SELECT * FROM "{source_table}" LIMIT 50',
+                db_manager.get_engine()
+            )
 
-        df_before = await run_in_threadpool(_load_sample)
-        db_manager.close()
+        df_before = await run_in_threadpool(_load_before)
 
-        def _apply():
-            return DataTransformer.apply_transformations(df_before.copy(), request.operations)
+        # Run hybrid engine — LIMIT 50 applied inside SQL CTE final SELECT
+        def _run_preview():
+            return _run_hybrid(db_manager, source_table, request.operations, limit=50)
 
         try:
-            df_after = await run_in_threadpool(_apply)
+            df_after, run_stats = await run_in_threadpool(_run_preview)
         except Exception as e:
+            db_manager.close()
             raise HTTPException(status_code=400, detail=f"Transformation error: {str(e)}")
+
+        db_manager.close()
 
         def _clean(rows):
             out = []
@@ -322,14 +419,15 @@ async def preview_transform_data(
         after_rows  = _clean(df_after.head(10).to_dict(orient="records"))
 
         return {
-            "status": "ok",
-            "before": before_rows,
-            "after": after_rows,
+            "status":         "ok",
+            "before":         before_rows,
+            "after":          after_rows,
             "before_columns": list(df_before.columns),
-            "after_columns": list(df_after.columns),
-            "sample_size": len(df_before),
-            "rows_before": len(df_before),
-            "rows_after": len(df_after),
+            "after_columns":  list(df_after.columns),
+            "sample_size":    len(df_before),
+            "rows_before":    len(df_before),
+            "rows_after":     len(df_after),
+            "run_stats":      run_stats,
         }
 
     except HTTPException:

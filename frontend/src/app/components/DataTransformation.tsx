@@ -363,6 +363,10 @@ export function DataTransformation({ }: { apiKey?: string }) {
   const [previewBefore, setPreviewBefore] = useState<any[]>([]);
   const [previewAfter, setPreviewAfter]   = useState<any[]>([]);
   const [previewTab, setPreviewTab]       = useState<'before'|'after'>('after');
+  const [runStats, setRunStats] = useState<{
+    engine: string; sql_ops: number; pandas_ops: number; cte_count: number;
+    total_time_ms: number; rows_before: number; rows_after: number;
+  } | null>(null);
 
   // Pipeline save/load
   const [savedPipelines, setSavedPipelines] = useState<SavedPipeline[]>([]);
@@ -743,6 +747,7 @@ export function DataTransformation({ }: { apiKey?: string }) {
         });
         setPreviewBefore(result.before ?? []); setPreviewAfter(result.after ?? []);
         setPreviewTab('after');
+        if (result.run_stats) setRunStats(result.run_stats);
       }
       setShowPreview(true);
     } catch (err: any) {
@@ -765,6 +770,7 @@ export function DataTransformation({ }: { apiKey?: string }) {
       if (response?.preview) {
         setPreviewAfter(response.preview); setPreviewBefore([]); setPreviewTab('after'); setShowPreview(true);
       }
+      if (response?.run_stats) setRunStats(response.run_stats);
     } catch (err: any) {
       setError(`Transformation failed: ${err.message ?? 'Unknown error'}`);
     } finally { setIsProcessing(false); }
@@ -1672,6 +1678,36 @@ export function DataTransformation({ }: { apiKey?: string }) {
                   </div>
                 </div>
               </div>
+              {/* ── Run Stats Bar ── */}
+              {runStats && (
+                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+                  {/* Engine badge */}
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold
+                    ${runStats.engine==='sql'     ? 'bg-blue-100 text-blue-700' :
+                      runStats.engine==='hybrid'  ? 'bg-purple-100 text-purple-700' :
+                                                    'bg-amber-100 text-amber-700'}`}>
+                    {runStats.engine==='sql' ? '⚡ SQL' : runStats.engine==='hybrid' ? '⚡ Hybrid' : '🐼 Pandas'}
+                  </span>
+                  <span className="text-gray-500">
+                    <span className="font-medium text-gray-700">{runStats.sql_ops}</span> SQL op{runStats.sql_ops!==1?'s':''}
+                  </span>
+                  {runStats.pandas_ops > 0 && (
+                    <span className="text-gray-500">
+                      <span className="font-medium text-gray-700">{runStats.pandas_ops}</span> Pandas op{runStats.pandas_ops!==1?'s':''}
+                    </span>
+                  )}
+                  {runStats.cte_count > 0 && (
+                    <span className="text-gray-500">
+                      <span className="font-medium text-gray-700">{runStats.cte_count}</span> CTE step{runStats.cte_count!==1?'s':''}
+                    </span>
+                  )}
+                  <span className="text-gray-500">
+                    <span className="font-medium text-gray-700">{runStats.rows_before.toLocaleString()}</span> → <span className="font-medium text-gray-700">{runStats.rows_after.toLocaleString()}</span> rows
+                  </span>
+                  <span className="ml-auto text-gray-400 font-mono">{runStats.total_time_ms}ms</span>
+                </div>
+              )}
+
               <div className="overflow-x-auto">
                 {previewData.length>0 ? (
                   <table className="w-full">
