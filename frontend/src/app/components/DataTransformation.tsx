@@ -5,8 +5,9 @@ import {
   GripVertical, X, ChevronDown, ChevronUp, Download,
   Lightbulb, MessageSquare, Send, RotateCcw,
   Clock, Layers, CheckSquare, Square, RefreshCw,
-  AlertTriangle, BookOpen, Sparkles,
+  AlertTriangle, BookOpen, Sparkles, GitBranch,
 } from 'lucide-react';
+import { PipelineCanvas } from './PipelineCanvas';
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -357,7 +358,34 @@ function ColumnCard({ name, stats }: { name: string; stats: ColProfile }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function DataTransformation({ }: { apiKey?: string }) {
+export function DataTransformation({ apiKey }: { apiKey?: string }) {
+  const [mode, setMode] = useState<'list' | 'canvas'>('list');
+
+  // ── Canvas mode: render entirely different UI ─────────────────────────────
+  if (mode === 'canvas') {
+    return (
+      <div className="flex flex-col h-full">
+        {/* Mode toggle header */}
+        <div className="flex items-center gap-2 px-6 pt-4 pb-0 shrink-0">
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            <button onClick={() => setMode('list')}
+              className="flex items-center gap-1.5 px-4 py-2 bg-white text-gray-600 hover:bg-gray-50 font-medium">
+              <Wrench className="size-4" /> List View
+            </button>
+            <button
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium">
+              <GitBranch className="size-4" /> Canvas
+            </button>
+          </div>
+          <span className="text-xs text-gray-400">Visual pipeline with branching · error ports · drag &amp; drop</span>
+        </div>
+        <div className="flex-1 overflow-hidden mt-4">
+          <PipelineCanvas apiKey={apiKey ?? ''} />
+        </div>
+      </div>
+    );
+  }
+
   const [selectedTable, setSelectedTable] = useState('');
   const [operations, setOperations] = useState<Operation[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1261,9 +1289,22 @@ export function DataTransformation({ }: { apiKey?: string }) {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <div className="flex items-center gap-3 mb-3">
-          <Wrench className="size-8 text-blue-600" />
-          <h1 className="text-3xl font-bold text-gray-900">Data Prep</h1>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3">
+            <Wrench className="size-8 text-blue-600" />
+            <h1 className="text-3xl font-bold text-gray-900">Data Prep</h1>
+          </div>
+          {/* Mode toggle */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            <button
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium">
+              <Wrench className="size-4" /> List View
+            </button>
+            <button onClick={() => setMode('canvas')}
+              className="flex items-center gap-1.5 px-4 py-2 bg-white text-gray-600 hover:bg-gray-50 font-medium border-l border-gray-200">
+              <GitBranch className="size-4" /> Canvas
+            </button>
+          </div>
         </div>
         <p className="text-gray-600">Prepare and refine your data with AI-powered suggestions, live preview, and saveable pipelines.</p>
       </div>

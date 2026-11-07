@@ -136,6 +136,55 @@ def _run_hybrid(
 
     return df, run_stats
 
+
+# ── DAG endpoint ─────────────────────────────────────────────────────────────
+
+class DAGPipelineRequest(BaseModel):
+    nodes: list   # React Flow node objects: {id, type, data: {...}}
+    edges: list   # React Flow edge objects: {id, source, target, sourceHandle, targetHandle}
+
+
+@router.post("/transform/dag")
+async def execute_dag_pipeline(
+    request: DAGPipelineRequest,
+    org=Depends(get_current_org),
+    user=Depends(require_permission("MUTATE_TABLES")),
+):
+    """
+    Execute a visual pipeline DAG produced by the React Flow canvas.
+
+    Nodes are executed in topological order.  Transform nodes produce a
+    success output and an error output (bad rows) that flow along separate
+    edges to downstream nodes or sink nodes.
+    """
+    try:
+        from fastapi.concurrency import run_in_threadpool
+        from dag_executor import DAGExecutor
+
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured for this organization.")
+
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        def _run():
+            executor = DAGExecutor(request.nodes, request.edges, db_manager)
+            return executor.execute()
+
+        try:
+            result = await run_in_threadpool(_run)
+        finally:
+            db_manager.close()
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"DAG execution failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Routes ──
 
 @router.post("/transform")
