@@ -184,6 +184,103 @@ function SortableCard({ op, index, onRemove, conflicts, children }: {
   );
 }
 
+// ── Searchable column combobox ───────────────────────────────────────────────
+
+function ColumnCombobox({
+  value, onChange, columns, placeholder = 'Select column',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  columns: string[];
+  placeholder?: string;
+}) {
+  const [query, setQuery]   = useState('');
+  const [open, setOpen]     = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const containerRef        = useRef<HTMLDivElement>(null);
+  const inputRef            = useRef<HTMLInputElement>(null);
+
+  const filtered = query.trim()
+    ? columns.filter(c => c.toLowerCase().includes(query.toLowerCase()))
+    : columns;
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false); setQuery('');
+      }
+    };
+    if (open) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const select = (col: string) => { onChange(col); setOpen(false); setQuery(''); setCursor(0); };
+
+  const openDropdown = () => {
+    setOpen(true);
+    setCursor(value ? Math.max(0, filtered.indexOf(value)) : 0);
+    setTimeout(() => inputRef.current?.focus(), 10);
+  };
+
+  const highlight = (col: string) => {
+    if (!query.trim()) return <>{col}</>;
+    const idx = col.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return <>{col}</>;
+    return (
+      <>
+        {col.slice(0, idx)}
+        <mark className="bg-yellow-100 text-yellow-900 not-italic rounded">{col.slice(idx, idx + query.length)}</mark>
+        {col.slice(idx + query.length)}
+      </>
+    );
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button type="button"
+        onClick={() => open ? setOpen(false) : openDropdown()}
+        className="w-full flex items-center justify-between px-3 py-2 border border-blue-200 bg-blue-50 rounded text-sm text-blue-900 hover:border-blue-400 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <span className={`truncate flex-1 text-left ${!value ? 'text-gray-400' : ''}`}>
+          {value || placeholder}
+        </span>
+        <ChevronDown className={`size-3.5 text-gray-400 shrink-0 ml-1 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}/>
+      </button>
+
+      {open && (
+        <div className="absolute z-50 top-full mt-1 left-0 w-full min-w-[160px] bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-gray-100">
+            <input ref={inputRef} type="text" value={query}
+              onChange={e => { setQuery(e.target.value); setCursor(0); }}
+              placeholder="Search…"
+              className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, filtered.length - 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); }
+                else if (e.key === 'Enter' && filtered.length > 0) { e.preventDefault(); select(filtered[cursor] ?? filtered[0]); }
+                else if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+              }}/>
+          </div>
+          <div className="max-h-44 overflow-y-auto py-1">
+            {filtered.length === 0
+              ? <p className="px-3 py-2 text-xs text-gray-400 text-center">No columns match</p>
+              : filtered.map((col, i) => (
+                <button key={col} type="button"
+                  onMouseEnter={() => setCursor(i)}
+                  onClick={() => select(col)}
+                  className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${
+                    i === cursor ? 'bg-blue-100 text-blue-800'
+                      : col === value ? 'bg-blue-50 text-blue-700 font-medium'
+                        : 'text-gray-700 hover:bg-gray-50'}`}>
+                  {highlight(col)}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Tiny histogram (numeric columns) ─────────────────────────────────────────
 
 function MiniHistogram({ counts, edges }: { counts: number[]; edges: number[] }) {
@@ -292,6 +389,9 @@ export function DataTransformation({ }: { apiKey?: string }) {
   const [schedules, setSchedules]           = useState<Record<number, PipelineScheduleInfo>>({});
   const [schedulingId, setSchedulingId]     = useState<number | null>(null); // which pipeline is open in schedule picker
   const [scheduleFreq, setScheduleFreq]     = useState('daily');
+
+  // Conflict confirmation gate (features 9+)
+  const [conflictConfirmMode, setConflictConfirmMode] = useState<'preview' | 'apply' | null>(null);
 
   // AI explain (feature 10)
   const [explanationText, setExplanationText] = useState<string | null>(null);
@@ -860,12 +960,14 @@ export function DataTransformation({ }: { apiKey?: string }) {
 
   // ── Per-operation forms ─────────────────────────────────────────────────────
   const renderForm = (op: Operation) => {
+    // Searchable column picker — replaces plain <select> for all column choices
     const sel = (paramName: string, placeholder = 'Select column') => (
-      <select value={op.params[paramName]||''} onChange={e => updateParam(op.id, paramName, e.target.value)}
-        className="px-3 py-2 border border-blue-200 bg-blue-50 rounded text-sm text-blue-900">
-        <option value="" disabled>{placeholder}</option>
-        {columns.map(c => <option key={c} value={c}>{c}</option>)}
-      </select>
+      <ColumnCombobox
+        value={op.params[paramName] || ''}
+        onChange={v => updateParam(op.id, paramName, v)}
+        columns={columns}
+        placeholder={placeholder}
+      />
     );
 
     switch (op.type) {
@@ -1412,18 +1514,63 @@ export function DataTransformation({ }: { apiKey?: string }) {
             </div>
 
             {operations.length > 0 && (
-              <div className="p-6 border-t border-gray-200 flex gap-3">
-                <button onClick={handlePreview} disabled={isProcessing}
-                  className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 disabled:opacity-50 font-medium">
-                  <Eye className="size-5"/>
-                  {isProcessing?'Loading…':'Preview pipeline (50 rows)'}
-                </button>
-                <button onClick={handleApply} disabled={isProcessing}
-                  className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
-                  <Play className="size-5"/>
-                  {isProcessing?'Running…':'Run & Save'}
-                </button>
-              </div>
+              conflictConfirmMode ? (
+                /* ── Conflict confirmation ── */
+                <div className="border-t border-amber-200 bg-amber-50 rounded-b-xl p-5">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="size-5 text-amber-600 mt-0.5 shrink-0"/>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-amber-900">
+                        {totalConflicts} conflict{totalConflicts > 1 ? 's' : ''} detected — results may be incorrect
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        Review the highlighted operations above, or proceed and check the preview output.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button
+                      onClick={() => {
+                        const mode = conflictConfirmMode;
+                        setConflictConfirmMode(null);
+                        if (mode === 'preview') handlePreview();
+                        else handleApply();
+                      }}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 font-medium">
+                      {conflictConfirmMode === 'preview'
+                        ? <><Eye className="size-4"/> Preview anyway</>
+                        : <><Play className="size-4"/> Run & Save anyway</>}
+                    </button>
+                    <button onClick={() => setConflictConfirmMode(null)}
+                      className="px-4 py-2 border border-amber-300 text-amber-800 text-sm rounded-lg hover:bg-amber-100 font-medium">
+                      Fix conflicts first
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* ── Normal action bar ── */
+                <div className="p-6 border-t border-gray-200 flex gap-3">
+                  <button
+                    onClick={() => totalConflicts > 0 ? setConflictConfirmMode('preview') : handlePreview()}
+                    disabled={isProcessing}
+                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 disabled:opacity-50 font-medium">
+                    <Eye className="size-5"/>
+                    {isProcessing ? 'Loading…' : 'Preview pipeline (50 rows)'}
+                    {totalConflicts > 0 && !isProcessing && (
+                      <span className="ml-1 px-1.5 py-0.5 bg-amber-200 text-amber-800 rounded-full text-xs font-bold">
+                        {totalConflicts}⚠
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => totalConflicts > 0 ? setConflictConfirmMode('apply') : handleApply()}
+                    disabled={isProcessing}
+                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium">
+                    <Play className="size-5"/>
+                    {isProcessing ? 'Running…' : 'Run & Save'}
+                  </button>
+                </div>
+              )
             )}
           </div>
 
