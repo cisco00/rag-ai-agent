@@ -342,6 +342,51 @@ class SQLTransformer:
         all_sel = ", ".join(self._d.qi(c) for c in cols)
         return f"SELECT {all_sel}, {self._d.length(self._d.qi(col))} AS {self._d.qi(alias)} FROM __PREV__", cols + [alias]
 
+    # ── Phase 2 SQL compilers ─────────────────────────────────────────────────
+
+    def _sample(self, op: Op, cols: list[str]) -> tuple[SQL | None, list[str]]:
+        """TABLESAMPLE / ORDER BY RANDOM() LIMIT — deterministic per dialect."""
+        method = op.get("method", "n")
+        if method == "pct":
+            pct = max(1, min(100, int(float(op.get("pct", 10)))))
+            # PostgreSQL TABLESAMPLE BERNOULLI; fall back to Pandas for others
+            if self._d.name == "postgresql":
+                return f"SELECT * FROM __PREV__ TABLESAMPLE BERNOULLI({pct})", cols
+            return None, cols   # → Pandas
+        else:
+            n = max(1, int(op.get("n", 100)))
+            if self._d.name in ("sqlite", "postgresql"):
+                return f"SELECT * FROM __PREV__ ORDER BY RANDOM() LIMIT {n}", cols
+            elif self._d.name == "mysql":
+                return f"SELECT * FROM __PREV__ ORDER BY RAND() LIMIT {n}", cols
+            elif self._d.name == "mssql":
+                return f"SELECT TOP {n} * FROM __PREV__ ORDER BY NEWID()", cols
+            return None, cols
+
+    def _union_sql(self, op: Op, cols: list[str]) -> tuple[SQL | None, list[str]]:
+        """UNION ALL / UNION DISTINCT with a second table."""
+        right_table = op.get("right_table", "")
+        if not right_table:
+            return None, cols
+        mode = op.get("mode", "all")
+        keyword = "UNION ALL" if mode == "all" else "UNION"
+        select = ", ".join(self._d.qi(c) for c in cols)
+        return f"SELECT {select} FROM __PREV__ {keyword} SELECT {select} FROM {self._d.qi(right_table)}", cols
+
+    def _join_sql(self, op: Op, cols: list[str]) -> tuple[SQL | None, list[str]]:
+        """JOIN two tables via SQL."""
+        right_table = op.get("right_table", "")
+        left_key    = op.get("left_key", "")
+        right_key   = op.get("right_key", left_key)
+        how         = op.get("how", "inner").upper()
+        if not right_table or not left_key:
+            return None, cols
+        how_map = {"INNER": "INNER", "LEFT": "LEFT", "RIGHT": "RIGHT", "OUTER": "FULL OUTER"}
+        sql_how = how_map.get(how, "INNER")
+        # We don't know right table's columns here; return None so Pandas handles it
+        # (column list merging is non-trivial in SQL without schema info)
+        return None, cols   # always Pandas for join — avoids column name collisions
+
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
     def _dispatch(self, op: Op, cols: list[str]) -> tuple[SQL | None, list[str]]:
@@ -373,6 +418,16 @@ class SQLTransformer:
             "groupby":            self._groupby,
             "feature_engineering":self._feature_engineering,
             "text_feature":       self._text_feature,
+            # Phase 2
+            "sample":             self._sample,
+            "union":              self._union_sql,
+            # join → always Pandas (column collision safety)
+            "join":               self._join_sql,
+            # Pandas-only Phase 2 ops — return None immediately
+            "regex_extract":      lambda op, cols: (None, cols),
+            "formula_col":        lambda op, cols: (None, cols),
+            "pivot":              lambda op, cols: (None, cols),
+            "unpivot":            lambda op, cols: (None, cols),
         }
         fn = dispatch.get(t)
         if fn:

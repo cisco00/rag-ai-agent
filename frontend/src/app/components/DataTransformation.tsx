@@ -120,6 +120,14 @@ function mapOpForBackend(op: Operation): Record<string, any> {
     case 'text_feature':       return { type: 'text_feature', column: p.column, method: p.feature || 'len' };
     case 'groupby':            return { type: 'aggregate', method: 'groupby', group_cols: (p.group_cols || '').split(',').map((c:string)=>c.trim()).filter(Boolean), aggregations: (() => { try { return JSON.parse(p.aggregations||'{}'); } catch { return {}; } })() };
     case 'resample':           return { type: 'aggregate', method: 'resample', date_col: p.time_column, freq: p.frequency || 'D', aggregations: (() => { try { return JSON.parse(p.agg_json||'{}'); } catch { return {}; } })() };
+    // Phase 2
+    case 'sample':             return { type: 'sample', method: p.method || 'n', n: Number(p.n) || 100, pct: Number(p.pct) || 10, seed: p.seed !== '' ? Number(p.seed) : undefined };
+    case 'join':               return { type: 'join', right_table: p.right_table, left_key: p.left_key, right_key: p.right_key || p.left_key, how: p.how || 'inner' };
+    case 'union':              return { type: 'union', right_table: p.right_table, mode: p.mode || 'all', column_strategy: p.column_strategy || 'intersect' };
+    case 'pivot':              return { type: 'pivot', index_col: p.index_col, columns_col: p.columns_col, values_col: p.values_col, agg_func: p.agg_func || 'mean' };
+    case 'unpivot':            return { type: 'unpivot', id_vars: p.id_vars, value_vars: p.value_vars, var_name: p.var_name || 'variable', value_name: p.value_name || 'value' };
+    case 'formula_col':        return { type: 'formula_col', col_name: p.col_name || 'new_col', formula: p.formula };
+    case 'regex_extract':      return { type: 'regex_extract', column: p.column, pattern: p.pattern, new_col: p.new_col || undefined, group: Number(p.group) || 0 };
     default:                   return { type: op.type, ...p };
   }
 }
@@ -145,6 +153,9 @@ function SortableCard({ op, index, onRemove, conflicts, children }: {
     change_type: 'Change Type', fill_na: 'Fill Missing Values', normalize: 'Normalize',
     encode: 'Encode', feature_engineering: 'Feature Engineering', text_feature: 'Text Features',
     groupby: 'Summarize (Group By)', resample: 'Time Series Resample',
+    sample: 'Sample Rows', join: 'Join / Merge', union: 'Union / Append',
+    pivot: 'Pivot', unpivot: 'Unpivot (Melt)',
+    formula_col: 'Formula Column', regex_extract: 'Regex Extract',
   };
 
   const hasConflicts = conflicts && conflicts.length > 0;
@@ -692,6 +703,14 @@ export function DataTransformation({ }: { apiKey?: string }) {
     { value: 'text_feature',       label: 'Text Features',         category: 'Smart Prep' },
     { value: 'groupby',            label: 'Summarize (Group By)',  category: 'Summarize' },
     { value: 'resample',           label: 'Time Series Resample',  category: 'Summarize' },
+    // Phase 2
+    { value: 'sample',             label: 'Sample Rows',           category: 'Select' },
+    { value: 'join',               label: 'Join / Merge Tables',   category: 'Combine' },
+    { value: 'union',              label: 'Union / Append',        category: 'Combine' },
+    { value: 'pivot',              label: 'Pivot',                 category: 'Reshape' },
+    { value: 'unpivot',            label: 'Unpivot (Melt)',        category: 'Reshape' },
+    { value: 'formula_col',        label: 'Formula Column',        category: 'Smart Prep' },
+    { value: 'regex_extract',      label: 'Regex Extract',         category: 'Smart Prep' },
   ];
 
   const getDefaultParams = (type: string): Record<string, any> => ({
@@ -709,6 +728,14 @@ export function DataTransformation({ }: { apiKey?: string }) {
     text_feature:        { column: '', feature: 'len' },
     groupby:             { group_cols: '', aggregations: '{}' },
     resample:            { time_column: '', frequency: 'D', agg_json: '{}' },
+    // Phase 2
+    sample:              { method: 'n', n: 100, pct: 10, seed: '' },
+    join:                { right_table: '', left_key: '', right_key: '', how: 'inner' },
+    union:               { right_table: '', mode: 'all', column_strategy: 'intersect' },
+    pivot:               { index_col: '', columns_col: '', values_col: '', agg_func: 'mean' },
+    unpivot:             { id_vars: '', value_vars: '', var_name: 'variable', value_name: 'value' },
+    formula_col:         { col_name: 'new_col', formula: '' },
+    regex_extract:       { column: '', pattern: '', new_col: '', group: 0 },
   }[type] ?? {});
 
   const addOperation = (type: string) =>
@@ -1114,6 +1141,109 @@ export function DataTransformation({ }: { apiKey?: string }) {
             </select>
           </div>
           <input type="text" placeholder={'{"revenue": "sum"}'} value={op.params.agg_json||'{}'} onChange={e=>updateParam(op.id,'agg_json',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono"/>
+        </div>
+      );
+      // ── Phase 2 forms ────────────────────────────────────────────────────
+      case 'sample': return (
+        <div className="space-y-3">
+          <div className="flex gap-3">
+            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name={`sample-method-${op.id}`} value="n" checked={(op.params.method||'n')==='n'} onChange={()=>updateParam(op.id,'method','n')} className="accent-blue-600"/>
+              <span>Fixed N rows</span>
+            </label>
+            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name={`sample-method-${op.id}`} value="pct" checked={op.params.method==='pct'} onChange={()=>updateParam(op.id,'method','pct')} className="accent-blue-600"/>
+              <span>Percentage</span>
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {(op.params.method||'n')==='n'
+              ? <input type="number" min="1" placeholder="Rows (e.g. 1000)" value={op.params.n||100} onChange={e=>updateParam(op.id,'n',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+              : <input type="number" min="1" max="100" placeholder="% (1–100)" value={op.params.pct||10} onChange={e=>updateParam(op.id,'pct',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+            }
+            <input type="number" placeholder="Random seed (optional)" value={op.params.seed||''} onChange={e=>updateParam(op.id,'seed',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+          </div>
+        </div>
+      );
+      case 'join': return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <select value={op.params.right_table||''} onChange={e=>updateParam(op.id,'right_table',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="">— Right table —</option>
+              {tables.filter(t=>t!==selectedTable).map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+            <select value={op.params.how||'inner'} onChange={e=>updateParam(op.id,'how',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="inner">Inner join</option><option value="left">Left join</option>
+              <option value="right">Right join</option><option value="outer">Full outer join</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {sel('left_key','Left key column')}
+            <input type="text" placeholder="Right key column (blank = same)" value={op.params.right_key||''} onChange={e=>updateParam(op.id,'right_key',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+          </div>
+        </div>
+      );
+      case 'union': return (
+        <div className="space-y-3">
+          <select value={op.params.right_table||''} onChange={e=>updateParam(op.id,'right_table',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+            <option value="">— Second table to append —</option>
+            {tables.filter(t=>t!==selectedTable).map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+          <div className="grid grid-cols-2 gap-3">
+            <select value={op.params.mode||'all'} onChange={e=>updateParam(op.id,'mode',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="all">Union ALL (keep duplicates)</option>
+              <option value="distinct">Union DISTINCT (deduplicate)</option>
+            </select>
+            <select value={op.params.column_strategy||'intersect'} onChange={e=>updateParam(op.id,'column_strategy',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="intersect">Shared columns only</option>
+              <option value="union">All columns (nulls for missing)</option>
+            </select>
+          </div>
+        </div>
+      );
+      case 'pivot': return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            {sel('index_col','Index column (rows)')}
+            {sel('columns_col','Spread column (categories)')}
+            {sel('values_col','Values column (numbers)')}
+          </div>
+          <select value={op.params.agg_func||'mean'} onChange={e=>updateParam(op.id,'agg_func',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+            <option value="mean">Mean</option><option value="sum">Sum</option><option value="count">Count</option>
+            <option value="min">Min</option><option value="max">Max</option><option value="first">First</option>
+          </select>
+        </div>
+      );
+      case 'unpivot': return (
+        <div className="space-y-3">
+          <input type="text" placeholder="ID columns to keep (comma-separated, e.g. id, name)" value={op.params.id_vars||''} onChange={e=>updateParam(op.id,'id_vars',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm"/>
+          <input type="text" placeholder="Value columns to unpivot (comma-separated, blank = all others)" value={op.params.value_vars||''} onChange={e=>updateParam(op.id,'value_vars',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm"/>
+          <div className="grid grid-cols-2 gap-3">
+            <input type="text" placeholder="Variable column name (default: variable)" value={op.params.var_name||'variable'} onChange={e=>updateParam(op.id,'var_name',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+            <input type="text" placeholder="Value column name (default: value)" value={op.params.value_name||'value'} onChange={e=>updateParam(op.id,'value_name',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+          </div>
+        </div>
+      );
+      case 'formula_col': return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <input type="text" placeholder="New column name" value={op.params.col_name||'new_col'} onChange={e=>updateParam(op.id,'col_name',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm font-mono"/>
+            <div className="flex items-center text-xs text-gray-400 italic px-2">Use column names directly in the formula</div>
+          </div>
+          <input type="text" placeholder='Formula, e.g.  price * 1.2  or  revenue - cost' value={op.params.formula||''} onChange={e=>updateParam(op.id,'formula',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono"/>
+          <p className="text-xs text-gray-400">Supports: + − × ÷ ** abs() round() sqrt() — reference any column by name</p>
+        </div>
+      );
+      case 'regex_extract': return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            {sel('column','Source column')}
+            <input type="text" placeholder='New column name (e.g. price_number)' value={op.params.new_col||''} onChange={e=>updateParam(op.id,'new_col',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm font-mono"/>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <input type="text" placeholder='Regex pattern, e.g. (\d+\.?\d*)' value={op.params.pattern||''} onChange={e=>updateParam(op.id,'pattern',e.target.value)} className="col-span-2 px-3 py-2 border border-gray-300 rounded text-sm font-mono"/>
+            <input type="number" min="0" placeholder="Group (0)" value={op.params.group??0} onChange={e=>updateParam(op.id,'group',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+          </div>
         </div>
       );
       default: return (

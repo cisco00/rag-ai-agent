@@ -96,9 +96,23 @@ def _run_hybrid(
             base_q += f" LIMIT {int(limit)}"
         df = pd.read_sql(base_q, engine)
 
-    # -- 4. Pandas fallback for skipped ops ----------------------------------
-    if skipped:
-        df = DataTransformer.apply_transformations(df, skipped)
+    # -- 4. Pre-load right-side tables for join / union ops in skipped list ----
+    enriched_skipped = []
+    for op in skipped:
+        op_type = op.get("type", "")
+        if op_type in ("join", "union"):
+            right_table = op.get("right_table", "")
+            if right_table:
+                try:
+                    right_df = pd.read_sql(f'SELECT * FROM "{right_table}"', engine)
+                    op = {**op, "_right_df": right_df}
+                except Exception as e:
+                    logger.warning(f"Could not load right table '{right_table}': {e}")
+        enriched_skipped.append(op)
+
+    # -- 5. Pandas fallback for skipped ops ----------------------------------
+    if enriched_skipped:
+        df = DataTransformer.apply_transformations(df, enriched_skipped)
 
     t1 = time.monotonic()
 

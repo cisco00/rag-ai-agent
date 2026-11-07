@@ -48,6 +48,28 @@ class DataTransformer:
                      df = DataTransformer._aggregate_data(df, op)
                 elif op_type == "clean":
                      df = DataTransformer._clean_data(df, op)
+                # ── Phase 2 ops ──────────────────────────────────────────
+                elif op_type == "sample":
+                     df = DataTransformer._sample_rows(df, op)
+                elif op_type == "regex_extract":
+                     df = DataTransformer._regex_extract(df, op)
+                elif op_type == "formula_col":
+                     df = DataTransformer._formula_col(df, op)
+                elif op_type == "pivot":
+                     df = DataTransformer._pivot(df, op)
+                elif op_type == "unpivot":
+                     df = DataTransformer._unpivot(df, op)
+                elif op_type in ("join", "union"):
+                     # join/union require the second table already embedded in
+                     # op["_right_df"] by the router; skip if not present here
+                     right_df = op.get("_right_df")
+                     if right_df is not None:
+                         if op_type == "join":
+                             df = DataTransformer._join(df, op, right_df)
+                         else:
+                             df = DataTransformer._union(df, op, right_df)
+                     else:
+                         logger.warning(f"Op '{op_type}' skipped: _right_df not embedded")
                 else:
                     logger.warning(f"Unknown operation type: {op_type}")
             except Exception as e:
@@ -438,3 +460,163 @@ class DataTransformer:
                  df.loc[df[col].isna(), col] = random_samples
                  
         return df
+
+    # ── Phase 2 operations ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sample_rows(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """Random sample — n rows or a fraction."""
+        method = op.get("method", "n")
+        seed   = op.get("seed")
+        rng    = int(seed) if seed is not None else None
+        if method == "pct":
+            frac = max(0.0, min(1.0, float(op.get("pct", 10)) / 100.0))
+            return df.sample(frac=frac, random_state=rng).reset_index(drop=True)
+        else:
+            n = max(1, int(op.get("n", 100)))
+            return df.sample(n=min(n, len(df)), random_state=rng).reset_index(drop=True)
+
+    @staticmethod
+    def _regex_extract(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """Extract first regex group from a text column into a new column."""
+        col     = op.get("column", "")
+        pattern = op.get("pattern", "")
+        new_col = op.get("new_col") or f"{col}_extracted"
+        group   = int(op.get("group", 0))   # 0 = whole match via expand=False + no group spec
+
+        if col not in df.columns or not pattern:
+            raise ValueError(f"regex_extract: column '{col}' or pattern missing")
+
+        try:
+            extracted = df[col].astype(str).str.extract(pattern, expand=True)
+        except Exception as e:
+            raise ValueError(f"regex_extract: bad pattern — {e}")
+
+        if extracted.shape[1] == 0:
+            df[new_col] = None
+        elif group < extracted.shape[1]:
+            df[new_col] = extracted.iloc[:, group]
+        else:
+            df[new_col] = extracted.iloc[:, 0]
+        return df
+
+    @staticmethod
+    def _formula_col(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Create a new column from a pandas-eval expression.
+
+        Formula may reference any existing column by name.
+        Example: "revenue - cost"  →  new column = revenue minus cost
+        """
+        col_name = (op.get("col_name") or "formula_col").strip()
+        formula  = (op.get("formula") or "").strip()
+
+        if not formula:
+            raise ValueError("formula_col: formula is empty")
+
+        # Safety: block dunder/import patterns
+        forbidden = ["__", "import", "exec", "eval", "open", "os.", "sys."]
+        for tok in forbidden:
+            if tok in formula:
+                raise ValueError(f"formula_col: forbidden token '{tok}' in formula")
+
+        try:
+            result = df.eval(formula, engine="python")
+        except Exception as e:
+            raise ValueError(f"formula_col: eval error — {e}")
+
+        df = df.copy()
+        df[col_name] = result
+        return df
+
+    @staticmethod
+    def _pivot(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """Pivot: spread a categorical column's unique values into new columns."""
+        index_col   = op.get("index_col", "")
+        columns_col = op.get("columns_col", "")
+        values_col  = op.get("values_col", "")
+        agg_func    = op.get("agg_func", "mean")
+
+        if not index_col or not columns_col or not values_col:
+            raise ValueError("pivot: index_col, columns_col, and values_col are required")
+
+        agg_map = {
+            "mean": np.mean, "sum": np.sum, "count": len,
+            "min": np.min,   "max": np.max, "first": "first",
+        }
+        fn = agg_map.get(agg_func, np.mean)
+
+        pivoted = df.pivot_table(
+            index=index_col,
+            columns=columns_col,
+            values=values_col,
+            aggfunc=fn,
+            observed=True,
+        ).reset_index()
+
+        # Flatten MultiIndex columns if present
+        pivoted.columns = [
+            str(c).strip() if isinstance(c, str) else "_".join(str(x) for x in c if x)
+            for c in pivoted.columns
+        ]
+        return pivoted
+
+    @staticmethod
+    def _unpivot(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """Unpivot (melt): turn wide columns into long rows."""
+        id_vars_raw    = op.get("id_vars", [])
+        value_vars_raw = op.get("value_vars", [])
+        var_name       = op.get("var_name", "variable")
+        value_name     = op.get("value_name", "value")
+
+        # Accept comma-separated strings or lists
+        def _as_list(x):
+            if isinstance(x, str):
+                return [c.strip() for c in x.split(",") if c.strip()]
+            return list(x) if x else []
+
+        id_vars    = _as_list(id_vars_raw)
+        value_vars = _as_list(value_vars_raw)
+
+        if not id_vars and not value_vars:
+            raise ValueError("unpivot: at least id_vars or value_vars must be set")
+
+        return df.melt(
+            id_vars=id_vars if id_vars else None,
+            value_vars=value_vars if value_vars else None,
+            var_name=var_name,
+            value_name=value_name,
+        )
+
+    @staticmethod
+    def _join(df: pd.DataFrame, op: Dict[str, Any], right_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge two DataFrames."""
+        left_key  = op.get("left_key", "")
+        right_key = op.get("right_key", left_key)
+        how       = op.get("how", "inner")
+
+        if how not in ("inner", "left", "right", "outer"):
+            how = "inner"
+
+        if not left_key or not right_key:
+            raise ValueError("join: left_key and right_key are required")
+
+        # Avoid duplicate non-key columns by suffixing
+        return df.merge(right_df, left_on=left_key, right_on=right_key, how=how, suffixes=("", "_right"))
+
+    @staticmethod
+    def _union(df: pd.DataFrame, op: Dict[str, Any], right_df: pd.DataFrame) -> pd.DataFrame:
+        """Stack two DataFrames vertically (UNION ALL or UNION DISTINCT)."""
+        mode = op.get("mode", "all")  # "all" | "distinct"
+
+        # Align columns: use intersection or union depending on mode
+        strategy = op.get("column_strategy", "intersect")  # "intersect" | "union"
+        if strategy == "intersect":
+            common = [c for c in df.columns if c in right_df.columns]
+            result = pd.concat([df[common], right_df[common]], ignore_index=True)
+        else:
+            result = pd.concat([df, right_df], ignore_index=True)
+
+        if mode == "distinct":
+            result = result.drop_duplicates()
+        return result
