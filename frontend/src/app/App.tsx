@@ -90,6 +90,9 @@ const DEFAULT_BRANDING: Branding = {
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [initialQuery, setInitialQuery] = useState<string | null>(null);
+  const [joinToTransform, setJoinToTransform] = useState<{
+    leftTable: string; rightTable: string; leftKey: string; rightKey: string; joinType: string;
+  } | undefined>(undefined);
   const [publicScreen, setPublicScreen] = useState<PublicScreen>('landing');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -485,7 +488,9 @@ export default function App() {
           )}
           {currentView === 'reports' && <Reports apiKey={apiKey!} />}
           {currentView === 'scheduled' && (!desktop || !license || license.hasFeature('scheduled_reports') ? <ScheduledReports apiKey={apiKey!} /> : <FeatureLockedMessage feature="Scheduled Reports" />)}
-          {currentView === 'transform' && (!desktop || !license || license.hasFeature('data_transformations') ? <DataTransformation apiKey={apiKey!} /> : <FeatureLockedMessage feature="Data Transformations" />)}
+          {currentView === 'transform' && (!desktop || !license || license.hasFeature('data_transformations')
+            ? <DataTransformation apiKey={apiKey!} initialJoin={joinToTransform} />
+            : <FeatureLockedMessage feature="Data Transformations" />)}
           {currentView === 'analytics' && (!desktop || !license || license.hasFeature('advanced_analytics') ? <AdvancedAnalytics apiKey={apiKey!} /> : <FeatureLockedMessage feature="Advanced Analytics" />)}
           {currentView === 'streaming' && <RealTimeStreaming apiKey={apiKey!} />}
           {currentView === 'insights' && (!desktop || !license || license.hasFeature('insights') ? <Insights /> : <FeatureLockedMessage feature="Insights" />)}
@@ -519,6 +524,10 @@ export default function App() {
               onRunQuery={(query) => {
                 setInitialQuery(query);
                 setCurrentView('query');
+              }}
+              onSendToTransform={(joinConfig) => {
+                setJoinToTransform(joinConfig);
+                setCurrentView('transform');
               }}
             />
           )}

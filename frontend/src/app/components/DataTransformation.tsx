@@ -361,8 +361,19 @@ function ColumnCard({ name, stats }: { name: string; stats: ColProfile }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function DataTransformation({ apiKey }: { apiKey?: string }) {
-  const [mode, setMode] = useState<'list' | 'canvas'>('list');
+interface DataTransformationProps {
+  apiKey?: string;
+  initialJoin?: {
+    leftTable:  string;
+    rightTable: string;
+    leftKey:    string;
+    rightKey:   string;
+    joinType:   string;
+  };
+}
+
+export function DataTransformation({ apiKey, initialJoin }: DataTransformationProps) {
+  const [mode, setMode] = useState<'list' | 'canvas'>(initialJoin ? 'canvas' : 'list');
 
   // ── Canvas mode: render entirely different UI ─────────────────────────────
   if (mode === 'canvas') {
@@ -381,9 +392,15 @@ export function DataTransformation({ apiKey }: { apiKey?: string }) {
             </button>
           </div>
           <span className="text-xs text-gray-400">Visual pipeline with branching · error ports · drag &amp; drop</span>
+          {initialJoin && (
+            <span className="ml-2 flex items-center gap-1.5 text-xs font-medium text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full">
+              <span>🔗</span>
+              Join from Schema: <strong>{initialJoin.leftTable}</strong> ↔ <strong>{initialJoin.rightTable}</strong>
+            </span>
+          )}
         </div>
         <div className="flex-1 overflow-hidden mt-4">
-          <PipelineCanvas apiKey={apiKey ?? ''} />
+          <PipelineCanvas apiKey={apiKey ?? ''} initialJoin={initialJoin} />
         </div>
       </div>
     );

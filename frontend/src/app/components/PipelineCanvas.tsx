@@ -46,6 +46,13 @@ import { api } from '../../lib/api';
 
 interface PipelineCanvasProps {
   apiKey: string;
+  initialJoin?: {
+    leftTable:  string;
+    rightTable: string;
+    leftKey:    string;
+    rightKey:   string;
+    joinType:   string;
+  };
 }
 
 type OpType =
@@ -814,9 +821,28 @@ const INITIAL_EDGES: Edge[] = [
     animated: true, style: { stroke: '#ef4444', strokeDasharray: '5 5' } },
 ];
 
-export function PipelineCanvas({ apiKey }: PipelineCanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
+export function PipelineCanvas({ apiKey, initialJoin }: PipelineCanvasProps) {
+  // If initialJoin is supplied (from Schema Diagram), pre-wire a source → join node
+  const startNodes: Node[] = initialJoin ? [
+    { id: 'n1', type: 'source-node',    position: { x: 180, y: 60 },
+      data: { table: initialJoin.leftTable } },
+    { id: 'n2', type: 'transform-node', position: { x: 160, y: 220 },
+      data: { opType: 'join', params: {
+        right_table: initialJoin.rightTable,
+        left_key:    initialJoin.leftKey,
+        right_key:   initialJoin.rightKey,
+        how:         initialJoin.joinType,
+      } } },
+    { id: 'n3', type: 'sink-node',      position: { x: 180, y: 400 },
+      data: { table: `${initialJoin.leftTable}_${initialJoin.rightTable}_joined` } },
+  ] : INITIAL_NODES;
+  const startEdges: Edge[] = initialJoin ? [
+    { id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'success', targetHandle: 'input', animated: true, style: { stroke: '#22c55e' } },
+    { id: 'e2', source: 'n2', target: 'n3', sourceHandle: 'success', targetHandle: 'input', animated: true, style: { stroke: '#22c55e' } },
+  ] : INITIAL_EDGES;
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(startNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(startEdges);
   const [running,    setRunning]    = useState(false);
   const [result,     setResult]     = useState<any>(null);
   const [showResult, setShowResult] = useState(false);
