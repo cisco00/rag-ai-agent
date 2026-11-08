@@ -21,8 +21,10 @@ import smtplib
 import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email.mime.application import MIMEApplication
 from email.utils import formataddr
-from typing import Optional
+from typing import Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -289,3 +291,174 @@ def send_scheduled_report_email(
         f"Dashboard: {APP_URL}"
     )
     return send_email(to_email, f"📊 {freq_label} Report — Vantage AI", html, text)
+
+
+# ── Attachment support ────────────────────────────────────────────────────────
+
+def send_email_with_attachments(
+    to_email:    str,
+    subject:     str,
+    html_body:   str,
+    attachments: List[dict],  # [{filename, data: bytes, mimetype}]
+    text_body:   Optional[str] = None,
+) -> bool:
+    """
+    Send an email with binary attachments.
+
+    attachments: list of dicts with keys:
+        filename (str)   — displayed filename in email client
+        data     (bytes) — raw file bytes
+        mimetype (str)   — e.g. "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    Falls back to console logging if SMTP not configured.
+    """
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        logger.warning(
+            f"[Email] SMTP not configured — skipping attachment email.\n"
+            f"  To: {to_email}\n  Subject: {subject}\n"
+            f"  Attachments: {[a.get('filename') for a in attachments]}"
+        )
+        print(f"\n{'='*60}\nEMAIL WITH ATTACHMENTS (not sent — SMTP not configured)\n"
+              f"To: {to_email}\nSubject: {subject}\n"
+              f"Attachments: {[a.get('filename') for a in attachments]}\n{'='*60}\n")
+        return False
+
+    try:
+        # mixed = can hold both html alternatives + attachments
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"]    = formataddr((EMAIL_FROM_NAME, EMAIL_FROM))
+        msg["To"]      = to_email
+
+        # Body part (alternative = text + html)
+        body_part = MIMEMultipart("alternative")
+        if text_body:
+            body_part.attach(MIMEText(text_body, "plain", "utf-8"))
+        body_part.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(body_part)
+
+        # Attachments
+        for att in attachments:
+            filename = att.get("filename", "attachment")
+            data     = att.get("data", b"")
+            mimetype = att.get("mimetype", "application/octet-stream")
+
+            main_type, sub_type = (mimetype.split("/", 1) + ["octet-stream"])[:2]
+
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(data)
+            from email import encoders
+            encoders.encode_base64(part)
+            part.add_header(
+                "Content-Disposition",
+                "attachment",
+                filename=filename,
+            )
+            msg.attach(part)
+
+        if SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+
+        logger.info(
+            f"[Email] Sent '{subject}' → {to_email} "
+            f"with {len(attachments)} attachment(s)"
+        )
+        return True
+
+    except Exception as exc:
+        logger.error(
+            f"[Email] Failed to send '{subject}' → {to_email}: {exc}",
+            exc_info=True,
+        )
+        return False
+
+
+def send_pipeline_completion_email(
+    to_email:         str,
+    pipeline_name:    str,
+    stats:            dict,
+    output_tables:    List[str],
+    error_count:      int,
+    attachments:      Optional[List[dict]] = None,
+    app_url:          Optional[str]        = None,
+) -> bool:
+    """
+    Notify a user that a pipeline DAG has finished executing.
+
+    stats keys: total_time_ms, nodes_executed, error_rows_total
+    attachments: list of {filename, data, mimetype} — optional export files
+    """
+    dash_url     = app_url or APP_URL
+    ms           = stats.get("total_time_ms", 0)
+    nodes        = stats.get("nodes_executed", 0)
+    error_rows   = stats.get("error_rows_total", 0)
+    duration_str = f"{ms/1000:.2f}s" if ms >= 1000 else f"{ms:.0f}ms"
+
+    status_color = "#16a34a" if error_count == 0 else "#d97706"
+    status_label = "✅ Completed" if error_count == 0 else "⚠️ Completed with warnings"
+
+    tables_html = "".join(
+        f'<li style="margin:4px 0;color:#0f172a;">{t}</li>'
+        for t in output_tables
+    ) or '<li style="color:#94a3b8;">No output tables written</li>'
+
+    att_note = ""
+    if attachments:
+        names = ", ".join(a["filename"] for a in attachments)
+        att_note = _p(f'<strong>Attached exports:</strong> {names}')
+
+    html = _base_html(f"Pipeline complete — {pipeline_name}", f"""
+        {_h2(f'Pipeline complete: {pipeline_name}')}
+        <p style="margin:0 0 20px;font-size:22px;font-weight:700;color:{status_color};">{status_label}</p>
+
+        <table style="width:100%;border-collapse:collapse;margin:0 0 20px;">
+          <tr>
+            <td style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px 0 0 8px;color:#64748b;font-size:13px;">Duration</td>
+            <td style="padding:10px 16px;border:1px solid #e2e8f0;font-weight:600;color:#0f172a;">{duration_str}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;font-size:13px;">Nodes executed</td>
+            <td style="padding:10px 16px;border:1px solid #e2e8f0;font-weight:600;color:#0f172a;">{nodes}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 16px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;font-size:13px;">Error rows</td>
+            <td style="padding:10px 16px;border:1px solid #e2e8f0;font-weight:600;color:{'#dc2626' if error_rows > 0 else '#16a34a'};">{error_rows}</td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 8px;font-weight:600;color:#0f172a;">Output tables written:</p>
+        <ul style="margin:0 0 20px;padding-left:20px;">{tables_html}</ul>
+
+        {att_note}
+        {_btn("Open Dashboard", dash_url)}
+    """)
+
+    text = (
+        f"Pipeline '{pipeline_name}' completed.\n\n"
+        f"Status:        {status_label}\n"
+        f"Duration:      {duration_str}\n"
+        f"Nodes run:     {nodes}\n"
+        f"Error rows:    {error_rows}\n\n"
+        f"Output tables: {', '.join(output_tables) or 'none'}\n\n"
+        f"Dashboard: {dash_url}"
+    )
+
+    fn = send_email_with_attachments if attachments else send_email  # type: ignore
+    kwargs = dict(
+        to_email=to_email,
+        subject=f"Pipeline complete — {pipeline_name}",
+        html_body=html,
+        text_body=text,
+    )
+    if attachments:
+        kwargs["attachments"] = attachments  # type: ignore
+        return send_email_with_attachments(**kwargs)  # type: ignore
+    return send_email(**kwargs)  # type: ignore

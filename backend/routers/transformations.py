@@ -9,11 +9,13 @@ return run_stats  {engine, sql_ops, pandas_ops, total_time_ms, rows_before,
                    rows_after, cte_count}.
 """
 
+import base64
 import json
 import logging
 import time
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from database import DatabaseManager
@@ -182,6 +184,82 @@ async def execute_dag_pipeline(
         raise
     except Exception as e:
         logger.error(f"DAG execution failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/transform/dag/download")
+async def download_dag_export(
+    request: dict,
+    org=Depends(get_current_org),
+    user=Depends(require_permission("MUTATE_TABLES")),
+):
+    """
+    Re-execute a DAG and stream the first export node's file as a download.
+
+    Accepts the same body as POST /transform/dag  plus:
+        format   : "csv" | "xlsx" | "json"  (default: "csv")
+        filename : override download filename
+
+    Returns the binary file with appropriate Content-Disposition header.
+    """
+    try:
+        from fastapi.concurrency import run_in_threadpool
+        from dag_executor import DAGExecutor, _df_to_bytes, _extension
+
+        nodes    = request.get("nodes", [])
+        edges    = request.get("edges", [])
+        fmt      = request.get("format", "csv").lower()
+        filename = request.get("filename") or f"pipeline_export.{_extension(fmt)}"
+
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured.")
+
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        def _run():
+            executor = DAGExecutor(nodes, edges, db_manager)
+            return executor.execute()
+
+        try:
+            result = await run_in_threadpool(_run)
+        finally:
+            db_manager.close()
+
+        # Pick first export from result
+        exports = result.get("exports", [])
+        if exports:
+            first = exports[0]
+            raw   = base64.b64decode(first["data_b64"])
+            mime  = {
+                "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "json": "application/json",
+                "csv":  "text/csv",
+            }.get(first["format"], "application/octet-stream")
+            fname = filename or first["filename"]
+        else:
+            # No export node — take first DB output table and serialize it
+            if not result.get("outputs"):
+                raise HTTPException(status_code=404, detail="No output data to export.")
+            # Fallback: re-serialize preview data
+            first_key = next(iter(result["outputs"]))
+            import pandas as pd
+            import io
+            preview_rows = result["outputs"][first_key].get("preview", [])
+            df  = pd.DataFrame(preview_rows)
+            raw, mime = _df_to_bytes(df, fmt)
+            fname = filename
+
+        return Response(
+            content=raw,
+            media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"DAG download failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

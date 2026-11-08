@@ -24,7 +24,10 @@ Execution model
 """
 from __future__ import annotations
 
+import io
 import logging
+import os
+import tempfile
 import time
 from collections import defaultdict, deque
 from typing import Any
@@ -35,6 +38,39 @@ logger = logging.getLogger(__name__)
 
 Op  = dict[str, Any]
 Nid = str          # node id
+
+
+# ── Export helpers ────────────────────────────────────────────────────────────
+
+def _df_to_bytes(df: pd.DataFrame, fmt: str) -> tuple[bytes, str]:
+    """
+    Serialize *df* to bytes in the requested format.
+    Returns (data_bytes, mimetype).
+    """
+    fmt = (fmt or "csv").lower()
+
+    if fmt == "xlsx":
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            df.to_excel(w, index=False, sheet_name="Data")
+        return (
+            buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    elif fmt == "json":
+        return (
+            df.to_json(orient="records", default_handler=str).encode("utf-8"),
+            "application/json",
+        )
+    else:  # csv (default)
+        return (
+            df.to_csv(index=False).encode("utf-8"),
+            "text/csv",
+        )
+
+
+def _extension(fmt: str) -> str:
+    return {"xlsx": "xlsx", "json": "json", "csv": "csv"}.get((fmt or "csv").lower(), "csv")
 
 
 # ── Per-op error capture ──────────────────────────────────────────────────────
@@ -207,16 +243,26 @@ class DAGExecutor:
           status          "ok" | "partial"
           outputs         {table_name: {rows, columns, preview[]}}
           error_outputs   {table_name: {rows, columns, preview[]}}
+          exports         [{filename, format, size_bytes, data_b64}]
           stats           {total_time_ms, nodes_executed, error_rows_total}
           node_stats      {node_id: {time_ms, rows_in, rows_out, error_rows}}
           errors          [str]   — node-level warnings / soft errors
         """
+        import base64
+
         t0 = time.monotonic()
         engine     = self._db.get_engine()
         node_stats = {}
         outputs:       dict[str, dict] = {}
         error_outputs: dict[str, dict] = {}
+        exports:       list[dict]      = []
         exec_errors:   list[str]       = []
+
+        # Collect export files for email attachment at end
+        _export_files: list[dict] = []   # {filename, data, mimetype}
+
+        # Track pipeline name from any email-node data
+        _pipeline_name = "Pipeline"
 
         for nid in self._sort_order:
             node = self._nodes_by_id[nid]
@@ -227,6 +273,7 @@ class DAGExecutor:
             incoming = self._slots[nid].get("input", pd.DataFrame())
 
             try:
+                # ── Source ────────────────────────────────────────────────────
                 if ntype == "source":
                     table = data.get("table", "")
                     if not table:
@@ -236,6 +283,7 @@ class DAGExecutor:
                         success_df = pd.read_sql(f'SELECT * FROM "{table}"', engine)
                         error_df   = pd.DataFrame(columns=success_df.columns)
 
+                # ── Transform ─────────────────────────────────────────────────
                 elif ntype == "transform":
                     op = data.get("operation", {})
                     if not op or not incoming.shape[0]:
@@ -244,6 +292,7 @@ class DAGExecutor:
                     else:
                         success_df, error_df = apply_op_with_error_capture(incoming, op)
 
+                # ── Sink / Error Sink ─────────────────────────────────────────
                 elif ntype in ("sink", "error_sink"):
                     table_name = data.get("table") or (
                         f"pipeline_errors_{int(time.time())}" if ntype == "error_sink"
@@ -261,6 +310,122 @@ class DAGExecutor:
                     }
                     success_df = error_df = pd.DataFrame()
 
+                # ── Export Node (XLSX / CSV / JSON) ───────────────────────────
+                elif ntype == "export":
+                    fmt      = data.get("format", "csv").lower()
+                    filename = data.get("filename") or f"export_{nid}.{_extension(fmt)}"
+
+                    if not incoming.empty:
+                        raw_bytes, mimetype = _df_to_bytes(incoming, fmt)
+                        exports.append({
+                            "filename":   filename,
+                            "format":     fmt,
+                            "size_bytes": len(raw_bytes),
+                            "data_b64":   base64.b64encode(raw_bytes).decode("ascii"),
+                        })
+                        _export_files.append({
+                            "filename": filename,
+                            "data":     raw_bytes,
+                            "mimetype": mimetype,
+                        })
+                        logger.info(f"DAG export node {nid}: {filename} ({len(raw_bytes)} bytes)")
+
+                    success_df = incoming     # pass-through so downstream nodes still get data
+                    error_df   = pd.DataFrame(columns=incoming.columns if not incoming.empty else [])
+
+                # ── Conditional Node (gate on row count / error rate / column) ─
+                elif ntype == "conditional":
+                    condition   = data.get("condition", "row_count")
+                    operator    = data.get("operator", ">")
+                    threshold   = float(data.get("threshold", 0))
+                    column      = data.get("column", "")
+
+                    op_map = {
+                        ">":  lambda a, b: a > b,
+                        "<":  lambda a, b: a < b,
+                        ">=": lambda a, b: a >= b,
+                        "<=": lambda a, b: a <= b,
+                        "==": lambda a, b: a == b,
+                        "!=": lambda a, b: a != b,
+                    }
+                    cmp = op_map.get(operator, op_map[">"])
+
+                    if condition == "row_count":
+                        actual = float(len(incoming))
+                    elif condition == "error_rate":
+                        # error_rows / total_rows so far
+                        total = max(len(incoming), 1)
+                        err   = sum(
+                            s.get("error_rows", 0)
+                            for s in node_stats.values()
+                        )
+                        actual = err / total
+                    elif condition == "column_sum" and column and column in incoming.columns:
+                        actual = float(incoming[column].sum())
+                    elif condition == "column_mean" and column and column in incoming.columns:
+                        actual = float(incoming[column].mean())
+                    else:
+                        actual = float(len(incoming))
+
+                    gate_open = cmp(actual, threshold)
+                    logger.info(
+                        f"DAG conditional {nid}: {condition} {operator} {threshold} "
+                        f"→ actual={actual} → {'PASS' if gate_open else 'BLOCK'}"
+                    )
+
+                    if gate_open:
+                        success_df = incoming
+                        error_df   = pd.DataFrame(columns=incoming.columns if not incoming.empty else [])
+                    else:
+                        # Block: route everything to error port with reason column
+                        error_df           = incoming.copy()
+                        error_df["_condition_failed"] = (
+                            f"{condition} {operator} {threshold} (actual={actual:.2f})"
+                        )
+                        success_df = pd.DataFrame(columns=incoming.columns if not incoming.empty else [])
+
+                # ── Email Node ────────────────────────────────────────────────
+                elif ntype == "email":
+                    to_email      = data.get("to_email", "")
+                    pipeline_name = data.get("pipeline_name", "Pipeline")
+                    attach_export = data.get("attach_export", False)
+                    _pipeline_name = pipeline_name
+
+                    if to_email:
+                        from email_service import send_pipeline_completion_email
+
+                        t_now = time.monotonic()
+                        elapsed_ms = round((t_now - t0) * 1000, 1)
+
+                        current_stats = {
+                            "total_time_ms":    elapsed_ms,
+                            "nodes_executed":   len(node_stats),
+                            "error_rows_total": sum(
+                                s.get("error_rows", 0) for s in node_stats.values()
+                            ),
+                        }
+                        out_tables = list(outputs.keys())
+
+                        ok = send_pipeline_completion_email(
+                            to_email=to_email,
+                            pipeline_name=pipeline_name,
+                            stats=current_stats,
+                            output_tables=out_tables,
+                            error_count=len(exec_errors),
+                            attachments=_export_files if attach_export else None,
+                        )
+                        if not ok:
+                            exec_errors.append(
+                                f"Email node {nid}: delivery failed (check SMTP config)"
+                            )
+                        logger.info(f"DAG email node {nid}: sent={ok} → {to_email}")
+                    else:
+                        exec_errors.append(f"Email node {nid}: no to_email configured")
+
+                    success_df = incoming
+                    error_df   = pd.DataFrame(columns=incoming.columns if not incoming.empty else [])
+
+                # ── Unknown ───────────────────────────────────────────────────
                 else:
                     success_df = incoming
                     error_df   = pd.DataFrame()
@@ -294,9 +459,10 @@ class DAGExecutor:
             "status":        "partial" if exec_errors else "ok",
             "outputs":        outputs,
             "error_outputs":  error_outputs,
+            "exports":        exports,
             "stats": {
-                "total_time_ms":   round((t1 - t0) * 1000, 1),
-                "nodes_executed":  len(self._sort_order),
+                "total_time_ms":    round((t1 - t0) * 1000, 1),
+                "nodes_executed":   len(self._sort_order),
                 "error_rows_total": total_errors,
             },
             "node_stats": node_stats,

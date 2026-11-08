@@ -37,7 +37,8 @@ import '@xyflow/react/dist/style.css';
 import {
   Database, Table2, AlertTriangle, CheckCircle2, Play,
   Plus, Trash2, ChevronDown, ChevronUp, Loader2,
-  ArrowDownToLine, Zap, GitBranch, Download,
+  ArrowDownToLine, Zap, GitBranch, Download, FileDown,
+  Mail, Filter, Shield,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -61,8 +62,23 @@ interface TransformNodeData {
   params: Record<string, any>;
   label?: string;
 }
+interface ExportNodeData {
+  format: 'csv' | 'xlsx' | 'json';
+  filename: string;
+}
+interface ConditionalNodeData {
+  condition: 'row_count' | 'error_rate' | 'column_sum' | 'column_mean';
+  operator: '>' | '<' | '>=' | '<=' | '==' | '!=';
+  threshold: number;
+  column: string;
+}
+interface EmailNodeData {
+  to_email: string;
+  pipeline_name: string;
+  attach_export: boolean;
+}
 
-type NodeData = SourceNodeData | SinkNodeData | TransformNodeData;
+type NodeData = SourceNodeData | SinkNodeData | TransformNodeData | ExportNodeData | ConditionalNodeData | EmailNodeData;
 
 // ── Shared input style ────────────────────────────────────────────────────────
 const inp = "px-2 py-1.5 border border-gray-300 rounded text-xs w-full focus:outline-none focus:ring-1 focus:ring-blue-400";
@@ -138,6 +154,115 @@ function ErrorSinkNode({ data }: NodeProps) {
           placeholder="Error table name" className={inp} />
         <p className="text-xs text-red-500 mt-1">Receives bad rows from error ports</p>
       </div>
+    </div>
+  );
+}
+
+// ── Export Node ───────────────────────────────────────────────────────────────
+function ExportNode({ data }: NodeProps) {
+  const d = data as ExportNodeData;
+  const fmtColors: Record<string, string> = {
+    xlsx: 'bg-green-500 border-green-600',
+    csv:  'bg-teal-500 border-teal-600',
+    json: 'bg-orange-500 border-orange-600',
+  };
+  const fmtClass = fmtColors[d.format ?? 'csv'] ?? fmtColors.csv;
+  return (
+    <div className={`bg-white border-2 ${d.format === 'xlsx' ? 'border-green-500' : d.format === 'json' ? 'border-orange-500' : 'border-teal-500'} rounded-xl shadow-lg min-w-[180px]`}>
+      <Handle type="target" position={Position.Top} id="input"
+        style={{ background: '#6b7280', width: 10, height: 10, top: -5 }} />
+      <div className={`${d.format === 'xlsx' ? 'bg-green-500' : d.format === 'json' ? 'bg-orange-500' : 'bg-teal-500'} text-white px-3 py-2 rounded-t-xl flex items-center gap-2`}>
+        <FileDown className="size-4 shrink-0" />
+        <span className="text-xs font-bold tracking-wide uppercase">Export File</span>
+      </div>
+      <div className="p-3 space-y-2 nodrag">
+        <select value={d.format ?? 'csv'} className={sel_cls}
+          onChange={e => { (d as any).format = e.target.value; }}>
+          <option value="csv">CSV</option>
+          <option value="xlsx">Excel (.xlsx)</option>
+          <option value="json">JSON</option>
+        </select>
+        <input value={d.filename ?? ''} className={inp} placeholder="filename.csv"
+          onChange={e => { (d as any).filename = e.target.value; }} />
+        <p className="text-xs text-gray-400">Pass-through: data continues downstream</p>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="success"
+        style={{ background: '#22c55e', width: 10, height: 10, bottom: -5 }} />
+    </div>
+  );
+}
+
+// ── Conditional Node ──────────────────────────────────────────────────────────
+function ConditionalNode({ data }: NodeProps) {
+  const d = data as ConditionalNodeData;
+  return (
+    <div className="bg-white border-2 border-yellow-500 rounded-xl shadow-lg min-w-[220px]">
+      <Handle type="target" position={Position.Top} id="input"
+        style={{ background: '#6b7280', width: 10, height: 10, top: -5 }} />
+      <div className="bg-yellow-500 text-white px-3 py-2 rounded-t-xl flex items-center gap-2">
+        <Shield className="size-4 shrink-0" />
+        <span className="text-xs font-bold tracking-wide uppercase">Conditional Gate</span>
+      </div>
+      <div className="p-3 space-y-2 nodrag">
+        <select value={d.condition ?? 'row_count'} className={sel_cls}
+          onChange={e => { (d as any).condition = e.target.value; }}>
+          <option value="row_count">Row count</option>
+          <option value="error_rate">Error rate (%)</option>
+          <option value="column_sum">Column sum</option>
+          <option value="column_mean">Column mean</option>
+        </select>
+        <div className="flex gap-1">
+          <select value={d.operator ?? '>'} className={`${sel_cls} w-24 shrink-0`}
+            onChange={e => { (d as any).operator = e.target.value; }}>
+            {['>', '<', '>=', '<=', '==', '!='].map(op =>
+              <option key={op} value={op}>{op}</option>
+            )}
+          </select>
+          <input type="number" value={d.threshold ?? 0} className={inp} placeholder="threshold"
+            onChange={e => { (d as any).threshold = Number(e.target.value); }} />
+        </div>
+        {(d.condition === 'column_sum' || d.condition === 'column_mean') && (
+          <input value={d.column ?? ''} className={inp} placeholder="Column name"
+            onChange={e => { (d as any).column = e.target.value; }} />
+        )}
+        <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> pass</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> block</span>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="success"
+        style={{ background: '#22c55e', width: 10, height: 10, bottom: -5, left: '30%' }} />
+      <Handle type="source" position={Position.Bottom} id="error"
+        style={{ background: '#ef4444', width: 10, height: 10, bottom: -5, left: '70%' }} />
+    </div>
+  );
+}
+
+// ── Email Node ────────────────────────────────────────────────────────────────
+function EmailNode({ data }: NodeProps) {
+  const d = data as EmailNodeData;
+  return (
+    <div className="bg-white border-2 border-indigo-500 rounded-xl shadow-lg min-w-[220px]">
+      <Handle type="target" position={Position.Top} id="input"
+        style={{ background: '#6b7280', width: 10, height: 10, top: -5 }} />
+      <div className="bg-indigo-500 text-white px-3 py-2 rounded-t-xl flex items-center gap-2">
+        <Mail className="size-4 shrink-0" />
+        <span className="text-xs font-bold tracking-wide uppercase">Email on Complete</span>
+      </div>
+      <div className="p-3 space-y-2 nodrag">
+        <input type="email" value={d.to_email ?? ''} className={inp} placeholder="recipient@example.com"
+          onChange={e => { (d as any).to_email = e.target.value; }} />
+        <input value={d.pipeline_name ?? ''} className={inp} placeholder="Pipeline name"
+          onChange={e => { (d as any).pipeline_name = e.target.value; }} />
+        <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+          <input type="checkbox" checked={d.attach_export ?? false} className="rounded"
+            onChange={e => { (d as any).attach_export = e.target.checked; }} />
+          Attach export files
+        </label>
+        <p className="text-xs text-gray-400">Sends stats + output table names</p>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="success"
+        style={{ background: '#22c55e', width: 10, height: 10, bottom: -5 }} />
     </div>
   );
 }
@@ -376,18 +501,24 @@ function TransformForm({
 
 // ── Node type registry ────────────────────────────────────────────────────────
 const NODE_TYPES = {
-  'source-node':     SourceNode,
-  'sink-node':       SinkNode,
-  'error-sink-node': ErrorSinkNode,
-  'transform-node':  TransformNode,
+  'source-node':      SourceNode,
+  'sink-node':        SinkNode,
+  'error-sink-node':  ErrorSinkNode,
+  'transform-node':   TransformNode,
+  'export-node':      ExportNode,
+  'conditional-node': ConditionalNode,
+  'email-node':       EmailNode,
 };
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const PALETTE_SECTIONS = [
   { label: 'I/O', items: [
-    { label: 'Source Table', type: 'source-node',     icon: '🗄️', defaultData: { table: '' } },
-    { label: 'Output Sink',  type: 'sink-node',       icon: '📥', defaultData: { table: 'output' } },
-    { label: 'Error Sink',   type: 'error-sink-node', icon: '🚨', defaultData: { table: 'pipeline_errors' } },
+    { label: 'Source Table',    type: 'source-node',      icon: '🗄️', defaultData: { table: '' } },
+    { label: 'Output Sink',     type: 'sink-node',        icon: '📥', defaultData: { table: 'output' } },
+    { label: 'Error Sink',      type: 'error-sink-node',  icon: '🚨', defaultData: { table: 'pipeline_errors' } },
+    { label: 'Export File',     type: 'export-node',      icon: '📄', defaultData: { format: 'csv', filename: 'export.csv' } },
+    { label: 'Email on Done',   type: 'email-node',       icon: '📧', defaultData: { to_email: '', pipeline_name: 'My Pipeline', attach_export: false } },
+    { label: 'Conditional Gate',type: 'conditional-node', icon: '🛡️', defaultData: { condition: 'row_count', operator: '>', threshold: 0, column: '' } },
   ]},
   { label: 'Clean', items: [
     { label: 'Filter Rows',    type: 'transform-node', icon: '🔍', defaultData: { opType: 'filter',          params: { column: '', operator: '>', value: '' } } },
@@ -448,12 +579,30 @@ function ResultsPanel({ result, onClose }: {
   result: any;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<'outputs' | 'errors' | 'stats'>('outputs');
+  const [tab, setTab] = useState<'outputs' | 'exports' | 'errors' | 'stats'>('outputs');
   const outputs      = result?.outputs      ?? {};
   const errorOutputs = result?.error_outputs ?? {};
+  const exports_     = result?.exports       ?? [];
   const stats        = result?.stats        ?? {};
   const nodeStats    = result?.node_stats   ?? {};
   const errors       = result?.errors       ?? [];
+
+  // Download a base64 export file
+  const downloadExport = (exp: { filename: string; data_b64: string; format: string }) => {
+    const binary = atob(exp.data_b64);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const mimeMap: Record<string, string> = {
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      json: 'application/json',
+      csv:  'text/csv',
+    };
+    const blob = new Blob([bytes], { type: mimeMap[exp.format] ?? 'application/octet-stream' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = exp.filename; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const renderTable = (preview: any[]) => {
     if (!preview?.length) return <p className="text-xs text-gray-400 p-3">No rows.</p>;
@@ -490,12 +639,15 @@ function ResultsPanel({ result, onClose }: {
         </div>
         <div className="flex items-center gap-2">
           {/* Tab switcher */}
-          {(['outputs', 'errors', 'stats'] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)}
+          {[
+            ['outputs',  `📥 Outputs (${Object.keys(outputs).length})`],
+            ['exports',  `📄 Exports (${exports_.length})`],
+            ['errors',   `🚨 Errors (${Object.keys(errorOutputs).length})`],
+            ['stats',    '📈 Stats'],
+          ].map(([t, label]) => (
+            <button key={t} onClick={() => setTab(t as any)}
               className={`px-3 py-1 text-xs rounded font-medium ${tab === t ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-              {t === 'outputs' ? `📥 Outputs (${Object.keys(outputs).length})` :
-               t === 'errors'  ? `🚨 Errors (${Object.keys(errorOutputs).length})` :
-                                 '📈 Stats'}
+              {label}
             </button>
           ))}
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
@@ -516,6 +668,39 @@ function ResultsPanel({ result, onClose }: {
                   {renderTable(info.preview)}
                 </div>
               ))
+        )}
+        {tab === 'exports' && (
+          exports_.length === 0
+            ? (
+              <div className="p-6 text-center">
+                <FileDown className="size-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-400">No export nodes ran yet.</p>
+                <p className="text-xs text-gray-300 mt-1">Add an Export File node to the canvas to generate XLSX / CSV / JSON files.</p>
+              </div>
+            ) : (
+              <div className="p-4 space-y-3">
+                {exports_.map((exp: any, i: number) => {
+                  const fmtIcon = exp.format === 'xlsx' ? '🟢' : exp.format === 'json' ? '🟠' : '🔵';
+                  const sizeKb  = Math.ceil(exp.size_bytes / 1024);
+                  return (
+                    <div key={i} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{fmtIcon}</span>
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{exp.filename}</p>
+                          <p className="text-xs text-gray-400">{exp.format.toUpperCase()} · {sizeKb} KB</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => downloadExport(exp)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
+                        <Download className="size-3.5" /> Download
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
         )}
         {tab === 'errors' && (
           <>
@@ -646,13 +831,24 @@ export function PipelineCanvas({ apiKey }: PipelineCanvasProps) {
     setRunning(true);
     setResult(null);
     try {
-      // Build serializable node list with backend op in data
+      // Build serializable node list; map canvas node types → backend type strings
       const serialNodes = nodes.map(n => {
         const d: any = { ...n.data };
+        // Map canvas node type to backend node type
+        const typeMap: Record<string, string> = {
+          'source-node':      'source',
+          'sink-node':        'sink',
+          'error-sink-node':  'error_sink',
+          'transform-node':   'transform',
+          'export-node':      'export',
+          'conditional-node': 'conditional',
+          'email-node':       'email',
+        };
+        const backendType = typeMap[n.type ?? ''] ?? n.type ?? '';
         if (n.type === 'transform-node') {
           d.operation = nodeDataToOp(d as TransformNodeData);
         }
-        return { id: n.id, type: n.type, data: d };
+        return { id: n.id, type: backendType, data: d };
       });
       const serialEdges = edges.map(e => ({
         id: e.id, source: e.source, target: e.target,
@@ -664,7 +860,7 @@ export function PipelineCanvas({ apiKey }: PipelineCanvasProps) {
       setResult(res);
       setShowResult(true);
     } catch (err: any) {
-      setResult({ status: 'error', errors: [err.message ?? 'Unknown error'], outputs: {}, error_outputs: {}, stats: {}, node_stats: {} });
+      setResult({ status: 'error', errors: [err.message ?? 'Unknown error'], outputs: {}, error_outputs: {}, exports: [], stats: {}, node_stats: {} });
       setShowResult(true);
     } finally {
       setRunning(false);
@@ -746,9 +942,12 @@ export function PipelineCanvas({ apiKey }: PipelineCanvasProps) {
               <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#e5e7eb" />
               <Controls />
               <MiniMap nodeColor={n => {
-                if (n.type === 'source-node') return '#3b82f6';
-                if (n.type === 'sink-node')   return '#22c55e';
-                if (n.type === 'error-sink-node') return '#ef4444';
+                if (n.type === 'source-node')      return '#3b82f6';
+                if (n.type === 'sink-node')        return '#22c55e';
+                if (n.type === 'error-sink-node')  return '#ef4444';
+                if (n.type === 'export-node')      return '#14b8a6';
+                if (n.type === 'conditional-node') return '#f59e0b';
+                if (n.type === 'email-node')       return '#6366f1';
                 return '#8b5cf6';
               }} style={{ bottom: 60, right: 10 }} />
               <Panel position="top-right" className="bg-white border border-gray-200 rounded-lg p-2 shadow-sm">
