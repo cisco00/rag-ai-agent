@@ -129,6 +129,8 @@ function mapOpForBackend(op: Operation): Record<string, any> {
     case 'unpivot':            return { type: 'unpivot', id_vars: p.id_vars, value_vars: p.value_vars, var_name: p.var_name || 'variable', value_name: p.value_name || 'value' };
     case 'formula_col':        return { type: 'formula_col', col_name: p.col_name || 'new_col', formula: p.formula };
     case 'regex_extract':      return { type: 'regex_extract', column: p.column, pattern: p.pattern, new_col: p.new_col || undefined, group: Number(p.group) || 0 };
+    // Phase 4
+    case 'drop_row':           return { type: 'drop_row', mode: p.mode || 'null', column: p.column || '', op: p.operator || '==', value: p.value || '', sigma: Number(p.sigma) || 3 };
     default:                   return { type: op.type, ...p };
   }
 }
@@ -157,6 +159,7 @@ function SortableCard({ op, index, onRemove, conflicts, children }: {
     sample: 'Sample Rows', join: 'Join / Merge', union: 'Union / Append',
     pivot: 'Pivot', unpivot: 'Unpivot (Melt)',
     formula_col: 'Formula Column', regex_extract: 'Regex Extract',
+    drop_row: 'Drop Rows',
   };
 
   const hasConflicts = conflicts && conflicts.length > 0;
@@ -721,6 +724,7 @@ export function DataTransformation({ apiKey }: { apiKey?: string }) {
     { value: 'clean_text',         label: 'Clean Text',            category: 'Cleaning' },
     { value: 'remove_outliers',    label: 'Remove Outliers',       category: 'Cleaning' },
     { value: 'filter',             label: 'Filter Rows',           category: 'Select' },
+    { value: 'drop_row',           label: 'Drop Rows',             category: 'Select' },
     { value: 'rename_col',         label: 'Rename Column',         category: 'Select' },
     { value: 'drop_col',           label: 'Drop Column',           category: 'Select' },
     { value: 'change_type',        label: 'Change Type',           category: 'Select' },
@@ -764,6 +768,8 @@ export function DataTransformation({ apiKey }: { apiKey?: string }) {
     unpivot:             { id_vars: '', value_vars: '', var_name: 'variable', value_name: 'value' },
     formula_col:         { col_name: 'new_col', formula: '' },
     regex_extract:       { column: '', pattern: '', new_col: '', group: 0 },
+    // Phase 4
+    drop_row:            { mode: 'null', column: '', operator: '==', value: '', sigma: 3 },
   }[type] ?? {});
 
   const addOperation = (type: string) =>
@@ -1051,6 +1057,42 @@ export function DataTransformation({ apiKey }: { apiKey?: string }) {
             <option value=">=">{'>='} ≥</option><option value="<=">{'<='} ≤</option>
           </select>
           <input type="text" placeholder="Value" value={op.params.value||''} onChange={e=>updateParam(op.id,'value',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
+        </div>
+      );
+      case 'drop_row': return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <select value={op.params.mode||'null'} onChange={e=>updateParam(op.id,'mode',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="null">Drop where column is NULL</option>
+              <option value="condition">Drop where condition matches</option>
+              <option value="empty_str">Drop where column is empty / blank</option>
+              <option value="outlier">Drop statistical outliers</option>
+            </select>
+            {sel('column', op.params.mode === 'null' ? 'Column (blank = any null)' : 'Column')}
+          </div>
+          {op.params.mode === 'condition' && (
+            <div className="grid grid-cols-3 gap-3">
+              <select value={op.params.operator||'=='} onChange={e=>updateParam(op.id,'operator',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
+                <option value="==">== equals</option><option value="!=">!= not equal</option>
+                <option value=">">{'>'} greater than</option><option value="<">{'<'} less than</option>
+                <option value=">=">{'>='} ≥</option><option value="<=">{'<='} ≤</option>
+              </select>
+              <input type="text" placeholder="Value to match (rows with this value are dropped)" value={op.params.value||''} onChange={e=>updateParam(op.id,'value',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm col-span-2"/>
+            </div>
+          )}
+          {op.params.mode === 'outlier' && (
+            <div className="flex items-center gap-3">
+              <label className="text-sm text-gray-600 whitespace-nowrap">Std-deviation threshold</label>
+              <input type="number" step="0.1" min="1" value={op.params.sigma??3} onChange={e=>updateParam(op.id,'sigma',parseFloat(e.target.value))} className="px-3 py-2 border border-gray-300 rounded text-sm w-28"/>
+              <span className="text-xs text-gray-400">rows beyond ±{op.params.sigma??3}σ are dropped</span>
+            </div>
+          )}
+          <p className="text-xs text-gray-400">
+            {op.params.mode === 'null'      && (op.params.column ? `Drops rows where "${op.params.column}" is null` : 'Drops rows with any null value')}
+            {op.params.mode === 'condition' && `Drops rows where ${op.params.column||'?'} ${op.params.operator||'=='} "${op.params.value||'?'}"`}
+            {op.params.mode === 'empty_str' && `Drops rows where "${op.params.column||'?'}" is empty or whitespace`}
+            {op.params.mode === 'outlier'   && `Drops rows where "${op.params.column||'?'}" falls outside ±${op.params.sigma??3} std-deviations`}
+          </p>
         </div>
       );
       case 'rename_col': return (

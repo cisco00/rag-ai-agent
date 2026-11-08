@@ -70,6 +70,9 @@ class DataTransformer:
                              df = DataTransformer._union(df, op, right_df)
                      else:
                          logger.warning(f"Op '{op_type}' skipped: _right_df not embedded")
+                # ── Phase 4 ops ──────────────────────────────────────────
+                elif op_type == "drop_row":
+                     df = DataTransformer._drop_row(df, op)
                 else:
                     logger.warning(f"Unknown operation type: {op_type}")
             except Exception as e:
@@ -620,3 +623,64 @@ class DataTransformer:
         if mode == "distinct":
             result = result.drop_duplicates()
         return result
+
+    @staticmethod
+    def _drop_row(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
+        """
+        Drop rows according to mode:
+
+        mode = "null"      — drop rows where `column` is null/NaN
+                             if column is blank → drop rows with ANY null
+        mode = "condition" — drop rows that MATCH the condition
+                             (inverse of filter; uses same op/operator + value)
+        mode = "empty_str" — drop rows where `column` is an empty string or whitespace
+        mode = "outlier"   — drop rows where `column` value is beyond N std-deviations
+        """
+        mode   = op.get("mode", "null")
+        column = op.get("column", "")
+
+        if mode == "null":
+            if column and column in df.columns:
+                return df.dropna(subset=[column]).reset_index(drop=True)
+            return df.dropna().reset_index(drop=True)
+
+        elif mode == "condition":
+            # Build the inverse-filter mask: drop rows WHERE condition IS TRUE
+            operator = op.get("op") or op.get("operator", "==")
+            value    = op.get("value", "")
+            if not column or column not in df.columns:
+                return df
+
+            op_map = {
+                ">":  "__gt__", "<":  "__lt__",
+                "==": "__eq__", "!=": "__ne__",
+                ">=": "__ge__", "<=": "__le__",
+            }
+            method = op_map.get(str(operator), "__eq__")
+            try:
+                val = float(value)
+            except (TypeError, ValueError):
+                val = str(value)
+
+            # mask = rows that MATCH (these get DROPPED)
+            match_mask = getattr(df[column], method)(val)
+            return df[~match_mask].reset_index(drop=True)
+
+        elif mode == "empty_str":
+            if column and column in df.columns:
+                mask = df[column].astype(str).str.strip() == ""
+                return df[~mask].reset_index(drop=True)
+            return df
+
+        elif mode == "outlier":
+            if column and column in df.columns:
+                sigma = float(op.get("sigma", 3.0))
+                col   = pd.to_numeric(df[column], errors="coerce")
+                mean, std = col.mean(), col.std()
+                if std == 0:
+                    return df
+                keep = (col - mean).abs() <= sigma * std
+                return df[keep].reset_index(drop=True)
+            return df
+
+        return df

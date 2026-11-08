@@ -42,6 +42,7 @@ _ALWAYS_SQL = {
     "drop_col", "rename_col", "filter", "change_type",
     "feature_engineering", "text_feature", "drop_duplicates",
     "clean",   # forwarded from backend canonical clean_text
+    "drop_row",
 }
 
 _SUBQUERY_SQL = {
@@ -53,7 +54,7 @@ ALL_SQL_OPS: set[str] = _ALWAYS_SQL | _SUBQUERY_SQL
 # Ops that work row-by-row (safe to apply in chunks)
 ROW_INDEPENDENT_OPS: set[str] = {
     "drop_col", "rename_col", "filter", "change_type",
-    "clean_text", "clean",
+    "clean_text", "clean", "drop_row",
 }
 
 
@@ -157,6 +158,54 @@ class SQLTransformer:
             bound = self._p(str(value))
 
         return f"SELECT * FROM __PREV__ WHERE {col} {sql_op} {bound}", cols
+
+    def _drop_row(self, op: Op, cols: list[str]) -> tuple[SQL | None, list[str]]:
+        """
+        Compile drop_row to SQL WHERE clause (inverse of _filter).
+
+        mode = "null"      → WHERE col IS NOT NULL  (or drop any-null row)
+        mode = "condition" → WHERE NOT (col op value)  (inverse filter)
+        mode = "empty_str" → WHERE TRIM(CAST(col AS TEXT)) <> ''
+        mode = "outlier"   → Pandas only (needs stddev subquery; too dialect-sensitive)
+        """
+        mode   = op.get("mode", "null")
+        col_id = op.get("column", "")
+
+        if mode == "null":
+            if col_id:
+                q = self._d.qi(col_id)
+                return f"SELECT * FROM __PREV__ WHERE {q} IS NOT NULL", cols
+            else:
+                # Drop rows with ANY null: use NOT EXISTS trick across cols
+                # Fallback to Pandas for >4 columns (verbose SQL)
+                if len(cols) > 4:
+                    return None, cols
+                conditions = " AND ".join(f"{self._d.qi(c)} IS NOT NULL" for c in cols)
+                return f"SELECT * FROM __PREV__ WHERE {conditions}", cols
+
+        elif mode == "condition":
+            operator = op.get("op") or op.get("operator", "==")
+            value    = op.get("value", 0)
+            if not col_id:
+                return None, cols
+            q      = self._d.qi(col_id)
+            op_map = {">": ">", "<": "<", "==": "=", "!=": "<>", ">=": ">=", "<=": "<="}
+            sql_op = op_map.get(str(operator), "=")
+            try:
+                bound = self._p(float(value))
+            except (TypeError, ValueError):
+                bound = self._p(str(value))
+            # Drop rows WHERE condition matches → keep WHERE NOT (match)
+            return f"SELECT * FROM __PREV__ WHERE NOT ({q} {sql_op} {bound})", cols
+
+        elif mode == "empty_str":
+            if not col_id:
+                return None, cols
+            q = self._d.qi(col_id)
+            return f"SELECT * FROM __PREV__ WHERE TRIM(CAST({q} AS TEXT)) <> ''", cols
+
+        # outlier → Pandas
+        return None, cols
 
     def _change_type(self, op: Op, cols: list[str]) -> tuple[SQL, list[str]]:
         col      = op.get("column", "")
@@ -423,6 +472,8 @@ class SQLTransformer:
             "union":              self._union_sql,
             # join → always Pandas (column collision safety)
             "join":               self._join_sql,
+            # Phase 4
+            "drop_row":           self._drop_row,
             # Pandas-only Phase 2 ops — return None immediately
             "regex_extract":      lambda op, cols: (None, cols),
             "formula_col":        lambda op, cols: (None, cols),

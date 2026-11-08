@@ -53,7 +53,7 @@ type OpType =
   | 'clean_text' | 'drop_duplicates' | 'normalize' | 'encode'
   | 'feature_engineering' | 'text_feature' | 'groupby'
   | 'sample' | 'join' | 'union' | 'pivot' | 'unpivot'
-  | 'formula_col' | 'regex_extract';
+  | 'formula_col' | 'regex_extract' | 'drop_row';
 
 interface SourceNodeData  { table: string; label?: string }
 interface SinkNodeData    { table: string; label?: string }
@@ -276,6 +276,7 @@ const OP_LABELS: Record<string, string> = {
   groupby: 'Group By', sample: 'Sample Rows', join: 'Join Tables',
   union: 'Union / Append', pivot: 'Pivot', unpivot: 'Unpivot',
   formula_col: 'Formula Column', regex_extract: 'Regex Extract',
+  drop_row: 'Drop Rows',
 };
 
 const OP_COLORS: Record<string, string> = {
@@ -285,6 +286,7 @@ const OP_COLORS: Record<string, string> = {
   text_feature: 'violet', groupby: 'orange', sample: 'cyan',
   join: 'rose', union: 'rose', pivot: 'pink', unpivot: 'pink',
   formula_col: 'lime', regex_extract: 'lime',
+  drop_row: 'red',
 };
 
 const COLOR_MAP: Record<string, { border: string; header: string; dot: string }> = {
@@ -300,6 +302,7 @@ const COLOR_MAP: Record<string, { border: string; header: string; dot: string }>
   rose:    { border: 'border-rose-500',    header: 'bg-rose-500',    dot: '#f43f5e' },
   pink:    { border: 'border-pink-500',    header: 'bg-pink-500',    dot: '#ec4899' },
   lime:    { border: 'border-lime-500',    header: 'bg-lime-500',    dot: '#84cc16' },
+  red:     { border: 'border-red-600',     header: 'bg-red-600',     dot: '#dc2626' },
 };
 
 function TransformNode({ id, data }: NodeProps) {
@@ -369,6 +372,10 @@ function _paramSummary(opType: string, params: Record<string, any>): string {
     case 'join':      return `${p.how || 'inner'} on ${p.left_key || '?'}`;
     case 'formula_col': return p.formula || 'formula not set';
     case 'regex_extract': return `${p.column || '?'} → ${p.pattern || '?'}`;
+    case 'drop_row': {
+      const modeLabel: Record<string, string> = { null: 'null', condition: 'match', empty_str: 'blank', outlier: 'outlier' };
+      return `drop where ${p.column || '*'} is ${modeLabel[p.mode] ?? p.mode}`;
+    }
     default: return '';
   }
 }
@@ -482,6 +489,20 @@ function TransformForm({
       {field('pattern', 'Regex pattern')}
       {field('new_col', 'New column name')}
     </>;
+    case 'drop_row': return <>
+      {optSel('mode', [
+        ['null',      'Drop NULL rows'],
+        ['condition', 'Drop matching rows'],
+        ['empty_str', 'Drop blank/empty'],
+        ['outlier',   'Drop outliers (σ)'],
+      ], 'null')}
+      {colSel('column', params.mode === 'null' ? 'Column (blank = any)' : 'Column')}
+      {params.mode === 'condition' && <>
+        {optSel('operator', [['==','== equals'],['!=','!= not equal'],['>', '> greater'],['<','< less'],['>=','>= ≥'],['<=','<= ≤']], '==')}
+        {field('value', 'Value (rows with this are dropped)')}
+      </>}
+      {params.mode === 'outlier' && field('sigma', 'Std-dev threshold (default 3)', 'number')}
+    </>;
     case 'groupby': return <>
       {field('group_cols', 'Group columns (comma-sep)')}
       {field('aggregations', '{"col":["sum","mean"]}')}
@@ -522,6 +543,7 @@ const PALETTE_SECTIONS = [
   ]},
   { label: 'Clean', items: [
     { label: 'Filter Rows',    type: 'transform-node', icon: '🔍', defaultData: { opType: 'filter',          params: { column: '', operator: '>', value: '' } } },
+    { label: 'Drop Rows',      type: 'transform-node', icon: '🗑️', defaultData: { opType: 'drop_row',        params: { mode: 'null', column: '' } } },
     { label: 'Drop Column',    type: 'transform-node', icon: '🗑️', defaultData: { opType: 'drop_col',        params: { column: '' } } },
     { label: 'Rename Column',  type: 'transform-node', icon: '✏️', defaultData: { opType: 'rename_col',      params: { column: '', new_name: '' } } },
     { label: 'Fill Missing',   type: 'transform-node', icon: '🔧', defaultData: { opType: 'fill_na',         params: { column: '', method: 'mean' } } },
@@ -567,6 +589,7 @@ function nodeDataToOp(d: TransformNodeData): Record<string, any> {
     case 'unpivot':         return { type: 'unpivot', id_vars: p.id_vars, value_vars: p.value_vars, var_name: p.var_name || 'variable', value_name: p.value_name || 'value' };
     case 'formula_col':     return { type: 'formula_col', col_name: p.col_name || 'new_col', formula: p.formula };
     case 'regex_extract':   return { type: 'regex_extract', column: p.column, pattern: p.pattern, new_col: p.new_col };
+    case 'drop_row':        return { type: 'drop_row', mode: p.mode || 'null', column: p.column || '', op: p.operator || '==', value: p.value || '', sigma: Number(p.sigma) || 3 };
     case 'groupby':         return { type: 'aggregate', method: 'groupby', group_cols: (p.group_cols || '').split(',').map((c:string)=>c.trim()).filter(Boolean), aggregations: (() => { try { return JSON.parse(p.aggregations || '{}'); } catch { return {}; } })() };
     case 'text_feature':    return { type: 'text_feature', column: p.column, method: p.feature || 'len' };
     case 'feature_engineering': return { type: 'feature_engineering', feature_type: 'interaction', column1: p.column1, column2: p.column2, operation: p.operation || '*' };
