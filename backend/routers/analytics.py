@@ -28,7 +28,8 @@ from auth import get_current_user
 from models import get_org_history, get_db, QueryHistory
 from typing import Optional
 from schemas import (
-    ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse
+    ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse,
+    ClusterRequest, InsightRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,9 +70,13 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org),
         
         if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
-             
+
+        # New response shape: {"chart": [...], "stats": {...}}
+        # Old shape was a plain list — keep backward compat
+        if isinstance(result, list):
+            return {"chart": result, "stats": {}}
         return result
-        
+
     except Exception as e:
          logger.error(f"Forecast failed: {e}", exc_info=True)
          raise HTTPException(status_code=500, detail="Forecasting engine failed. Please verify that your date and value columns are correctly formatted.")
@@ -159,6 +164,104 @@ async def get_correlation_matrix(request: CorrelationRequest, org=Depends(get_cu
     except Exception as e:
         logger.error(f"Correlation API failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Correlation calculation failed. Please ensure you have selected columns with numeric data.")
+
+
+@router.post("/analytics/cluster")
+async def get_cluster(request: ClusterRequest, org=Depends(get_current_org),
+                      user=Depends(require_permission("VIEW_ADVANCED"))):
+    """K-Means cluster analysis on two numeric columns."""
+    try:
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
+
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+
+        cols = [request.x_column, request.y_column]
+        if request.color_column:
+            cols.append(request.color_column)
+        col_list = ", ".join(_safe_identifier(c) for c in cols)
+        tbl = _safe_identifier(request.table_name)
+        query = f"SELECT {col_list} FROM {tbl} LIMIT 10000"
+        df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
+        db_manager.close()
+
+        from analytics import perform_cluster
+        result = await run_in_threadpool(
+            perform_cluster, df, request.x_column, request.y_column,
+            request.n_clusters, request.color_column
+        )
+
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cluster failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Clustering failed. Ensure the selected columns contain numeric data.")
+
+
+@router.post("/analytics/insights")
+async def get_insights(request: InsightRequest, org=Depends(get_current_org),
+                       user=Depends(require_permission("VIEW_ADVANCED"))):
+    """
+    Generate LLM-powered plain-English insight sentences from analytics stats.
+    Returns { insights: ["...", "...", "..."] }
+    """
+    try:
+        from config import get_agent_config
+        from llm_client import get_llm_client
+
+        config = get_agent_config()
+        try:
+            client = get_llm_client(config.model_provider, config)
+        except Exception as e:
+            logger.warning(f"LLM unavailable for insights: {e}")
+            return {"insights": []}
+
+        type_desc = {
+            "forecast":    "time-series forecast",
+            "anomaly":     "anomaly detection run",
+            "correlation": "correlation matrix analysis",
+            "cluster":     "K-Means cluster analysis",
+        }.get(request.analysis_type, "data analysis")
+
+        stats_text = json.dumps(request.stats, default=str)
+
+        prompt = (
+            f"You are a Senior Data Analyst reviewing the results of a {type_desc}. "
+            f"Here are the key statistics:\n\n{stats_text}\n\n"
+            "Write exactly 3 short, plain-English insight sentences a business user would find valuable. "
+            "Each sentence should highlight something meaningful: a trend, risk, anomaly, or action to take. "
+            "Be specific — use the numbers. No bullet points, no headers. "
+            'Respond ONLY with valid JSON: {"insights": ["sentence1", "sentence2", "sentence3"]}'
+        )
+
+        response = await run_in_threadpool(
+            client.chat_completion,
+            model=config.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=250,
+        )
+
+        content = response.choices[0].message.content
+        try:
+            from utils import clean_llm_json_content
+            data = json.loads(clean_llm_json_content(content))
+            insights = [str(i) for i in data.get("insights", [])][:3]
+        except Exception:
+            # Fallback: treat content as plain text, split into sentences
+            insights = [s.strip() for s in content.replace("\n", " ").split(". ") if s.strip()][:3]
+
+        return {"insights": insights}
+
+    except Exception as e:
+        logger.error(f"Insights generation failed: {e}", exc_info=True)
+        return {"insights": []}
 
 
 @router.get("/analytics/suggested-queries", response_model=SuggestQueriesResponse)

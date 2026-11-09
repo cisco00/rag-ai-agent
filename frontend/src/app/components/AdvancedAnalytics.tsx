@@ -1,14 +1,18 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
-import { TrendingUp, Activity, Grid3x3, Play, Loader2 } from 'lucide-react';
+import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '../../lib/api';
-import { LineChart, Line, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import {
+  ComposedChart, Area, Line, ScatterChart, Scatter,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ReferenceDot,
+} from 'recharts';
 
 interface AdvancedAnalyticsProps {
   apiKey: string;
 }
 
-type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation';
+type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation' | 'cluster';
 
 export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
@@ -40,6 +44,23 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     columns: ['revenue', 'quantity', 'profit', 'discount'],
     method: 'pearson',
   });
+
+  // Cluster configuration
+  const [clusterConfig, setClusterConfig] = useSessionStorage('advanced_analytics_clusterConfig', {
+    table: 'sales',
+    xColumn: '',
+    yColumn: '',
+    nClusters: 3,
+  });
+  const [clusterData, setClusterData] = useSessionStorage<any>('advanced_analytics_clusterData', null);
+  const [clusterColumns, setClusterColumns] = useState<string[]>([]);
+
+  // AI insights
+  const [insights, setInsights] = useState<Record<AnalyticsTab, string[]>>({
+    forecast: [], anomaly: [], correlation: [], cluster: [],
+  });
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(true);
 
   const [tables, setTables] = useState<string[]>([]);
   const [forecastColumns, setForecastColumns] = useState<string[]>([]);
@@ -104,6 +125,44 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     fetchCorrCols();
   }, [correlationConfig.table]);
 
+  // Cluster columns
+  useEffect(() => {
+    const fetchClusterCols = async () => {
+      if (!clusterConfig.table) return;
+      try {
+        const data = await api.get<any>(`/tables/${clusterConfig.table}/preview?limit=1`);
+        if (data && data.columns) {
+          const cols = data.columns.map((c: any) => c.name);
+          setClusterColumns(cols);
+          if (cols.length >= 2) {
+            setClusterConfig((prev: any) => ({
+              ...prev,
+              xColumn: prev.xColumn || cols[0],
+              yColumn: prev.yColumn || cols[1],
+            }));
+          }
+        }
+      } catch { /* ignore */ }
+    };
+    fetchClusterCols();
+  }, [clusterConfig.table]);
+
+  const fetchInsights = useCallback(async (tab: AnalyticsTab, stats: Record<string, any>) => {
+    if (!stats || Object.keys(stats).length === 0) return;
+    setInsightLoading(true);
+    try {
+      const resp = await api.post<{ insights: string[] }>('/analytics/insights', {
+        analysis_type: tab,
+        stats,
+      });
+      if (resp?.insights?.length) {
+        setInsights(prev => ({ ...prev, [tab]: resp.insights }));
+        setInsightsOpen(true);
+      }
+    } catch { /* non-fatal */ }
+    finally { setInsightLoading(false); }
+  }, []);
+
   const fetchTables = useCallback(async () => {
     try {
       const resp = await api.get<{ tables: string[] }>('/tables');
@@ -134,9 +193,15 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         freq: forecastConfig.freq
       });
 
-      // Handle multiple server response formats
+      // New shape: { chart: [...], stats: {...} }
+      // Legacy shape: plain array or { historical, forecast }
       let chartData: any[] = [];
-      if (Array.isArray(resp)) {
+      let statsData: Record<string, any> = {};
+
+      if (resp && resp.chart) {
+        chartData = resp.chart;
+        statsData = resp.stats ?? {};
+      } else if (Array.isArray(resp)) {
         chartData = resp;
       } else if (resp && resp.historical && resp.forecast) {
         const hist = resp.historical;
@@ -146,27 +211,23 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         const fcastDates: string[] = fcast.dates || [];
         const fcastVals: number[] = fcast.values || [];
         const merged: Record<string, any> = {};
-        histDates.forEach((d, i) => {
-          merged[d] = { date: d, actual: histVals[i] };
-        });
+        histDates.forEach((d, i) => { merged[d] = { date: d, actual: histVals[i] }; });
         fcastDates.forEach((d, i) => {
-          if (merged[d]) {
-            merged[d].forecast = fcastVals[i];
-          } else {
-            merged[d] = { date: d, forecast: fcastVals[i] };
-          }
+          if (merged[d]) merged[d].forecast = fcastVals[i];
+          else merged[d] = { date: d, forecast: fcastVals[i] };
         });
         chartData = Object.values(merged).sort((a: any, b: any) => a.date.localeCompare(b.date));
       }
 
       setForecastData(chartData);
+      fetchInsights('forecast', statsData);
     } catch (err: any) {
       console.error(err);
       alert(`Forecast failed: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
-  }, [forecastConfig, setForecastData]);
+  }, [forecastConfig, setForecastData, fetchInsights]);
 
   const handleRunAnomalyDetection = async () => {
     if (!anomalyConfig.table || !anomalyConfig.valueColumn) return;
@@ -201,6 +262,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       }
 
       setAnomalyData(plotData);
+      if (resp?.stats) fetchInsights('anomaly', resp.stats);
     } catch (err: any) {
       console.error(err);
       alert(`Anomaly detection failed: ${err.message}`);
@@ -222,14 +284,35 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         columns: correlationConfig.columns,
         method: correlationConfig.method
       });
-      // Handle both 'correlation_matrix' and 'matrix' key names
       const cols: string[] = resp.columns || correlationConfig.columns;
       const matrix: number[][] = resp.correlation_matrix ?? resp.matrix ?? [];
       setCorrelationColumns(cols);
       setCorrelationData(matrix);
+      if (resp?.stats) fetchInsights('correlation', resp.stats);
     } catch (err: any) {
       console.error(err);
       alert(`Correlation analysis failed: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRunCluster = async () => {
+    if (!clusterConfig.table || !clusterConfig.xColumn || !clusterConfig.yColumn) return;
+    setIsProcessing(true);
+    try {
+      const resp = await api.post<any>('/analytics/cluster', {
+        table_name: clusterConfig.table,
+        x_column:   clusterConfig.xColumn,
+        y_column:   clusterConfig.yColumn,
+        n_clusters: clusterConfig.nClusters,
+      });
+      if (resp?.error) { alert(`Clustering failed: ${resp.error}`); return; }
+      setClusterData(resp);
+      if (resp?.stats) fetchInsights('cluster', resp.stats);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Clustering failed: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -243,10 +326,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     return 'bg-gray-100';
   };
 
+  // Cluster colour palette (up to 8 clusters)
+  const CLUSTER_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899','#8b5cf6','#14b8a6'];
+
   const tabs = useMemo(() => [
-    { id: 'forecast', label: 'Time Series Forecast', icon: TrendingUp },
-    { id: 'anomaly', label: 'Anomaly Detection', icon: Activity },
-    { id: 'correlation', label: 'Correlation Analysis', icon: Grid3x3 },
+    { id: 'forecast',     label: 'Time Series Forecast', icon: TrendingUp },
+    { id: 'anomaly',      label: 'Anomaly Detection',    icon: Activity   },
+    { id: 'correlation',  label: 'Correlation Analysis', icon: Grid3x3    },
+    { id: 'cluster',      label: 'Cluster Analysis',     icon: Layers     },
   ], []);
 
   return (
@@ -397,47 +484,40 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
             <h3 className="font-bold text-gray-900 mb-4">Forecast Results</h3>
 
             {forecastData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={forecastData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="actual"
-                    stroke="#8b5cf6"
-                    strokeWidth={2}
-                    name="Historical Data"
-                    connectNulls
+              <ResponsiveContainer width="100%" height={380}>
+                <ComposedChart data={forecastData}>
+                  <defs>
+                    <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#10b981" stopOpacity={0.15} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.03} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={v => v?.slice(0,10) ?? v} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                    formatter={(v: any, name: string) => [
+                      v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—',
+                      name
+                    ]}
                   />
-                  <Line
-                    type="monotone"
-                    dataKey="forecast"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    name="Forecast"
-                    connectNulls
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="upper"
-                    stroke="#d1d5db"
-                    strokeWidth={1}
-                    name="Upper Bound"
-                    connectNulls
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="lower"
-                    stroke="#d1d5db"
-                    strokeWidth={1}
-                    name="Lower Bound"
-                    connectNulls
-                  />
-                </LineChart>
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {/* 95 % confidence band — shaded area between lower and upper */}
+                  <Area type="monotone" dataKey="upper" stroke="none" fill="url(#ciGrad)"
+                        name="95% CI Upper" legendType="none" connectNulls />
+                  <Area type="monotone" dataKey="lower" stroke="none" fill="white"
+                        name="95% CI Lower" legendType="none" connectNulls />
+                  <Line type="monotone" dataKey="actual"   stroke="#8b5cf6" strokeWidth={2}
+                        name="Historical" dot={false} connectNulls />
+                  <Line type="monotone" dataKey="forecast" stroke="#10b981" strokeWidth={2}
+                        strokeDasharray="6 3" name="Forecast" dot={false} connectNulls />
+                  {/* Thin boundary lines */}
+                  <Line type="monotone" dataKey="upper" stroke="#10b981" strokeWidth={1}
+                        strokeDasharray="2 4" name="Upper bound" dot={false} connectNulls legendType="none" />
+                  <Line type="monotone" dataKey="lower" stroke="#10b981" strokeWidth={1}
+                        strokeDasharray="2 4" name="Lower bound" dot={false} connectNulls legendType="none" />
+                </ComposedChart>
               </ResponsiveContainer>
             ) : (
               <div className="flex items-center justify-center h-96 text-gray-400">
@@ -730,6 +810,204 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Cluster Analysis ──────────────────────────────────────────────── */}
+      {activeTab === 'cluster' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Config panel */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-4">Cluster Configuration</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Table</label>
+                <select value={clusterConfig.table}
+                  onChange={e => setClusterConfig((p: any) => ({ ...p, table: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  {tables.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">X Axis (numeric)</label>
+                <select value={clusterConfig.xColumn}
+                  onChange={e => setClusterConfig((p: any) => ({ ...p, xColumn: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  <option value="">Select column…</option>
+                  {clusterColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Y Axis (numeric)</label>
+                <select value={clusterConfig.yColumn}
+                  onChange={e => setClusterConfig((p: any) => ({ ...p, yColumn: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  <option value="">Select column…</option>
+                  {clusterColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Number of clusters: <span className="font-bold text-purple-700">{clusterConfig.nClusters}</span>
+                </label>
+                <input type="range" min={2} max={8} step={1}
+                  value={clusterConfig.nClusters}
+                  onChange={e => setClusterConfig((p: any) => ({ ...p, nClusters: Number(e.target.value) }))}
+                  className="w-full accent-purple-600" />
+                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  {[2,3,4,5,6,7,8].map(n => <span key={n}>{n}</span>)}
+                </div>
+              </div>
+
+              <button onClick={handleRunCluster} disabled={isProcessing || !clusterConfig.xColumn || !clusterConfig.yColumn}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors font-medium">
+                {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Run Clustering</>}
+              </button>
+            </div>
+
+            <div className="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+              <p className="text-sm text-purple-800"><strong>Algorithm:</strong> K-Means (scikit-learn)</p>
+              <p className="text-sm text-purple-800 mt-1">Points are normalised before clustering. Centroids shown as ✕ markers.</p>
+            </div>
+
+            {/* Cluster size legend */}
+            {clusterData?.cluster_sizes && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Cluster sizes</p>
+                {Object.entries(clusterData.cluster_sizes as Record<string, number>).map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 rounded-full flex-shrink-0"
+                      style={{ background: CLUSTER_COLORS[Number(k) % CLUSTER_COLORS.length] }} />
+                    <span className="text-xs text-gray-600">Cluster {Number(k)+1}</span>
+                    <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full rounded-full" style={{
+                        width: `${Math.round(v / clusterData.stats.n_points * 100)}%`,
+                        background: CLUSTER_COLORS[Number(k) % CLUSTER_COLORS.length]
+                      }} />
+                    </div>
+                    <span className="text-xs text-gray-500 w-8 text-right">{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Chart panel */}
+          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-1">Cluster Scatter Plot</h3>
+            {clusterData?.points?.length > 0 ? (
+              <>
+                <p className="text-xs text-gray-400 mb-4">
+                  {clusterData.stats.n_points.toLocaleString()} points · {clusterData.n_clusters} clusters ·
+                  inertia {clusterData.stats.inertia?.toLocaleString()}
+                </p>
+                <ResponsiveContainer width="100%" height={380}>
+                  <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis type="number" dataKey="x" name={clusterConfig.xColumn}
+                      tick={{ fontSize: 11 }} label={{ value: clusterConfig.xColumn, position: 'insideBottom', offset: -10, fontSize: 11 }} />
+                    <YAxis type="number" dataKey="y" name={clusterConfig.yColumn}
+                      tick={{ fontSize: 11 }} label={{ value: clusterConfig.yColumn, angle: -90, position: 'insideLeft', fontSize: 11 }} />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                      content={({ payload }) => {
+                        if (!payload?.length) return null;
+                        const d = payload[0].payload;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+                            <p className="font-semibold mb-1" style={{ color: CLUSTER_COLORS[d.cluster % CLUSTER_COLORS.length] }}>
+                              Cluster {d.cluster + 1}
+                            </p>
+                            <p>{clusterConfig.xColumn}: <strong>{Number(d.x).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong></p>
+                            <p>{clusterConfig.yColumn}: <strong>{Number(d.y).toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong></p>
+                          </div>
+                        );
+                      }}
+                    />
+                    {/* One Scatter series per cluster */}
+                    {Array.from({ length: clusterData.n_clusters }, (_, k) => (
+                      <Scatter
+                        key={k}
+                        name={`Cluster ${k + 1}`}
+                        data={clusterData.points.filter((p: any) => p.cluster === k)}
+                        fill={CLUSTER_COLORS[k % CLUSTER_COLORS.length]}
+                        fillOpacity={0.65}
+                        r={3}
+                      />
+                    ))}
+                    {/* Centroids as larger markers */}
+                    <Scatter
+                      name="Centroids"
+                      data={clusterData.centroids.map((c: any) => ({ ...c, isCentroid: true }))}
+                      shape={(props: any) => {
+                        const { cx, cy, payload } = props;
+                        const color = CLUSTER_COLORS[payload.cluster % CLUSTER_COLORS.length];
+                        return (
+                          <g>
+                            <line x1={cx-7} y1={cy} x2={cx+7} y2={cy} stroke={color} strokeWidth={2.5} />
+                            <line x1={cx} y1={cy-7} x2={cx} y2={cy+7} stroke={color} strokeWidth={2.5} />
+                            <circle cx={cx} cy={cy} r={5} fill="white" stroke={color} strokeWidth={2} />
+                          </g>
+                        );
+                      }}
+                      fill="#fff"
+                    />
+                    <Legend />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-96 text-gray-400">
+                <div className="text-center">
+                  <Layers className="size-16 mx-auto mb-3 text-gray-300" />
+                  <p>Select columns and run clustering to see results</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── AI Insights panel (shown when insights exist for active tab) ──── */}
+      {insights[activeTab]?.length > 0 && (
+        <div className="mt-6 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setInsightsOpen(v => !v)}
+            className="w-full flex items-center gap-3 px-5 py-3 hover:bg-violet-100/50 transition-colors"
+          >
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <Sparkles className="size-4 text-violet-600 flex-shrink-0" />
+              <span className="font-semibold text-sm text-violet-800">AI Insights</span>
+              <span className="text-xs text-violet-500 bg-violet-200/70 px-2 py-0.5 rounded-full ml-1">
+                {insights[activeTab].length} observations
+              </span>
+            </div>
+            {insightLoading
+              ? <Loader2 className="size-4 text-violet-500 animate-spin flex-shrink-0" />
+              : insightsOpen
+                ? <ChevronUp className="size-4 text-violet-500 flex-shrink-0" />
+                : <ChevronDown className="size-4 text-violet-500 flex-shrink-0" />
+            }
+          </button>
+          {insightsOpen && (
+            <div className="px-5 pb-5 grid gap-3 sm:grid-cols-3">
+              {insights[activeTab].map((insight, i) => (
+                <div key={i} className="bg-white rounded-lg border border-violet-100 px-4 py-3 shadow-sm">
+                  <div className="flex gap-2">
+                    <span className="text-violet-500 font-bold text-sm flex-shrink-0 mt-0.5">{i + 1}.</span>
+                    <p className="text-sm text-gray-700 leading-relaxed">{insight}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Loading shimmer while insights are being fetched */}
+      {insightLoading && !insights[activeTab]?.length && (
+        <div className="mt-6 bg-violet-50 border border-violet-200 rounded-xl px-5 py-4 flex items-center gap-3">
+          <Loader2 className="size-4 text-violet-500 animate-spin flex-shrink-0" />
+          <span className="text-sm text-violet-600">Generating AI insights…</span>
         </div>
       )}
     </div>

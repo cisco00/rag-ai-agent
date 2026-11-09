@@ -76,17 +76,47 @@ def perform_forecast(
                 "actual": float(v) if not pd.isna(v) else None
             }
             
-        for d, v in zip(forecast.index, forecast.values):
+        # ── Confidence band (±1.96σ · √h approximation) ──────────────────────
+        try:
+            resid_std = float(np.sqrt(np.nanmean(model.resid.values ** 2)))
+        except Exception:
+            resid_std = 0.0
+
+        for h, (d, v) in enumerate(zip(forecast.index, forecast.values), start=1):
             d_str = d.strftime('%Y-%m-%d %H:%M:%S') if not freq.startswith('D') else d.strftime('%Y-%m-%d')
+            ci_half = 1.96 * resid_std * float(np.sqrt(h)) if resid_std > 0 else 0.0
+            fv = float(v) if not pd.isna(v) else None
+            entry = {
+                "date": d_str,
+                "forecast": fv,
+                "lower": round(fv - ci_half, 4) if fv is not None else None,
+                "upper": round(fv + ci_half, 4) if fv is not None else None,
+            }
             if d_str in merged_data:
-                merged_data[d_str]["forecast"] = float(v) if not pd.isna(v) else None
+                merged_data[d_str].update(entry)
             else:
-                merged_data[d_str] = {
-                    "date": d_str,
-                    "forecast": float(v) if not pd.isna(v) else None
-                }
-            
-        return sorted(merged_data.values(), key=lambda x: x['date'])
+                merged_data[d_str] = entry
+
+        result_rows = sorted(merged_data.values(), key=lambda x: x['date'])
+
+        # ── Summary stats for AI insights ─────────────────────────────────
+        actual_vals  = [r["actual"]   for r in result_rows if r.get("actual")   is not None]
+        fcast_vals   = [r["forecast"] for r in result_rows if r.get("forecast") is not None]
+        trend_pct = round((fcast_vals[-1] - fcast_vals[0]) / abs(fcast_vals[0]) * 100, 1) if len(fcast_vals) > 1 and fcast_vals[0] else 0
+
+        return {
+            "chart": result_rows,
+            "stats": {
+                "actual_mean":    round(float(np.mean(actual_vals)), 2) if actual_vals else None,
+                "actual_std":     round(float(np.std(actual_vals)),  2) if actual_vals else None,
+                "forecast_end":   round(fcast_vals[-1], 2)              if fcast_vals  else None,
+                "forecast_start": round(fcast_vals[0],  2)              if fcast_vals  else None,
+                "trend_pct":      trend_pct,
+                "periods":        periods,
+                "freq":           freq,
+                "value_column":   value_col,
+            }
+        }
         
     except Exception as e:
         logger.error(f"Forecasting failed: {e}", exc_info=True)
@@ -137,10 +167,23 @@ def detect_anomalies(
                 "isAnomaly": bool(row['is_anomaly'])
             })
             
+        anomaly_count = int(data['is_anomaly'].sum())
+        all_vals = data[value_col].dropna()
         return {
             "data": plot_data,
             "total_points": total_len,
-            "anomaly_count": int(data['is_anomaly'].sum())
+            "anomaly_count": anomaly_count,
+            "stats": {
+                "total_points":    total_len,
+                "anomaly_count":   anomaly_count,
+                "anomaly_pct":     round(anomaly_count / total_len * 100, 1) if total_len else 0,
+                "value_mean":      round(float(all_vals.mean()), 2) if len(all_vals) else None,
+                "value_std":       round(float(all_vals.std()),  2) if len(all_vals) else None,
+                "value_min":       round(float(all_vals.min()),  2) if len(all_vals) else None,
+                "value_max":       round(float(all_vals.max()),  2) if len(all_vals) else None,
+                "value_column":    value_col,
+                "contamination":   contamination,
+            }
         }
         
     except Exception as e:
@@ -175,12 +218,111 @@ def calculate_correlation(
         # Replace NaNs (if constant columns etc) with 0 or None for JSON
         corr_matrix = corr_matrix.astype(object).where(pd.notnull(corr_matrix), None)
         
+        # Find strongest pair
+        flat = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        strongest_val = flat.abs().max().max()
+        strongest_pair = None
+        if not pd.isna(strongest_val):
+            idx = flat.abs().stack().idxmax()
+            strongest_pair = {"cols": list(idx), "r": round(float(flat.loc[idx]), 3)}
+
         return {
             "columns": corr_matrix.columns.tolist(),
-            "correlation_matrix": corr_matrix.values.tolist(), # List of lists
-            "method": method
+            "correlation_matrix": corr_matrix.values.tolist(),
+            "method": method,
+            "stats": {
+                "n_cols":          len(corr_matrix.columns),
+                "method":          method,
+                "strongest_pair":  strongest_pair,
+                "avg_abs_corr":    round(float(flat.abs().stack().mean()), 3) if not flat.abs().stack().empty else None,
+            }
         }
         
     except Exception as e:
         logger.error(f"Correlation failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def perform_cluster(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    n_clusters: int = 3,
+    color_col: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    K-Means clustering on two numeric columns.
+    Returns labelled points + centroids + per-cluster stats.
+    """
+    try:
+        from sklearn.cluster import KMeans
+        from sklearn.preprocessing import StandardScaler
+    except ImportError:
+        return {"error": "scikit-learn is not installed"}
+
+    try:
+        needed = [x_col, y_col] + ([color_col] if color_col and color_col in df.columns else [])
+        sub = df[needed].dropna()
+
+        if len(sub) < n_clusters * 2:
+            return {"error": f"Not enough data points (need at least {n_clusters * 2}, got {len(sub)})"}
+
+        X = sub[[x_col, y_col]].values
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init="auto")
+        labels = km.fit_predict(X_scaled)
+
+        # Centroids back in original space
+        centroids_scaled = km.cluster_centers_
+        centroids_orig   = scaler.inverse_transform(centroids_scaled)
+
+        # Downsample for large datasets
+        max_pts = 2000
+        if len(sub) > max_pts:
+            step = len(sub) // max_pts
+            sub   = sub.iloc[::step]
+            labels = labels[::step]
+
+        points = []
+        for i, (_, row) in enumerate(sub.iterrows()):
+            pt = {
+                "x":       float(row[x_col]),
+                "y":       float(row[y_col]),
+                "cluster": int(labels[i]),
+            }
+            if color_col and color_col in row.index:
+                pt["label"] = str(row[color_col])
+            points.append(pt)
+
+        centroids = [
+            {"x": round(float(c[0]), 4), "y": round(float(c[1]), 4), "cluster": i}
+            for i, c in enumerate(centroids_orig)
+        ]
+
+        # Per-cluster size
+        unique, counts = np.unique(labels, return_counts=True)
+        cluster_sizes = {int(k): int(v) for k, v in zip(unique, counts)}
+
+        inertia = round(float(km.inertia_), 2)
+
+        return {
+            "points":        points,
+            "centroids":     centroids,
+            "n_clusters":    n_clusters,
+            "cluster_sizes": cluster_sizes,
+            "stats": {
+                "n_points":    len(points),
+                "n_clusters":  n_clusters,
+                "inertia":     inertia,
+                "x_column":    x_col,
+                "y_column":    y_col,
+                "largest_cluster":  int(max(cluster_sizes.values())),
+                "smallest_cluster": int(min(cluster_sizes.values())),
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Clustering failed: {e}", exc_info=True)
         return {"error": str(e)}

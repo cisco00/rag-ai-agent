@@ -213,6 +213,17 @@ class CorrelationRequest(BaseModel):
     columns: Optional[List[str]] = None
     method: str = 'pearson'
 
+class ClusterRequest(BaseModel):
+    table_name: str
+    x_column:   str
+    y_column:   str
+    n_clusters: int = 3
+    color_column: Optional[str] = None   # optional third dimension for size/tooltip
+
+class InsightRequest(BaseModel):
+    analysis_type: str                   # forecast | anomaly | correlation | cluster
+    stats: dict                          # summary numbers from the analysis result
+
 # ── Dashboards ──
 
 class DashboardRequest(BaseModel):
