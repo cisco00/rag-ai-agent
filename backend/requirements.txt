@@ -20,6 +20,7 @@ apscheduler
 google-generativeai
 scikit-learn
 statsmodels
+prophet
 alembic
 bcrypt
 python-jose[cryptography]

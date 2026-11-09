@@ -7,120 +7,175 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 def perform_forecast(
-    df: pd.DataFrame, 
-    date_col: str, 
-    value_col: str, 
+    df: pd.DataFrame,
+    date_col: str,
+    value_col: str,
     periods: int = 30,
-    freq: str = 'D'
+    freq: str = 'D',
 ) -> Dict[str, Any]:
     """
-    Perform time series forecasting using Exponential Smoothing (Holt-Winters).
+    Time-series forecast with Prophet (primary) → Holt-Winters (fallback).
+
+    Prophet returns native yhat_lower / yhat_upper (80 % CI by default,
+    widened to 95 % via interval_width=0.95).  Holt-Winters falls back to a
+    ±1.96σ·√h approximation so the chart always gets lower/upper bands.
     """
+    # ── 1. Clean & validate ──────────────────────────────────────────────────
     try:
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
-    except ImportError:
-        logger.error("statsmodels is not installed")
-        return {"error": "Analytics dependencies not installed"}
-        
-    try:
-        # Prepare data
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         df = df.dropna(subset=[date_col, value_col])
-        
-        if df.empty:
-            return {"error": "No valid data points after cleaning (check date/value formats)"}
-
-        ts_raw = df.set_index(date_col)[value_col].sort_index()
-        ts_raw = ts_raw.groupby(level=0).mean()
-        
-        # 1. Resample to the requested frequency 'freq'
-        ts_data = ts_raw.resample(freq).mean().ffill().bfill()
-        
-        # 2. Check if we have enough data at this frequency
-        if len(ts_data) < 5:
-             # Fallback: Try to use inferred frequency if requested was too sparse
-             inferred = pd.infer_freq(ts_raw.index)
-             if inferred and inferred != freq:
-                 ts_data = ts_raw.asfreq(inferred).ffill().bfill()
-                 logger.info(f"Falling back to inferred frequency: {inferred}")
-             
-             if len(ts_data) < 5:
-                  return {"error": f"Not enough data points (found {len(ts_data)}, need min 5)"}
-
-        # 3. Model fitting
-        try:
-            # Full Holt-Winters (Trend + Seasonal)
-            seasonal_periods = 7 if freq.startswith('D') else (24 if freq.startswith('h') else None)
-            model = ExponentialSmoothing(
-                ts_data, 
-                seasonal_periods=seasonal_periods,
-                trend='add', 
-                seasonal='add' if (seasonal_periods and len(ts_data) > 2 * seasonal_periods) else None
-            ).fit()
-        except Exception as e:
-            logger.warning(f"Full HW failed, trying trend only: {e}")
-            try:
-                model = ExponentialSmoothing(ts_data, trend='add', seasonal=None).fit()
-            except:
-                model = ExponentialSmoothing(ts_data, trend=None, seasonal=None).fit()
-        
-        # 4. Forecast the requested number of periods (at current ts_data frequency)
-        forecast = model.forecast(periods)
-        
-        # 5. Merge for output
-        merged_data = {}
-        for d, v in zip(ts_data.index, ts_data.values):
-            d_str = d.strftime('%Y-%m-%d %H:%M:%S') if not freq.startswith('D') else d.strftime('%Y-%m-%d')
-            merged_data[d_str] = {
-                "date": d_str,
-                "actual": float(v) if not pd.isna(v) else None
-            }
-            
-        # ── Confidence band (±1.96σ · √h approximation) ──────────────────────
-        try:
-            resid_std = float(np.sqrt(np.nanmean(model.resid.values ** 2)))
-        except Exception:
-            resid_std = 0.0
-
-        for h, (d, v) in enumerate(zip(forecast.index, forecast.values), start=1):
-            d_str = d.strftime('%Y-%m-%d %H:%M:%S') if not freq.startswith('D') else d.strftime('%Y-%m-%d')
-            ci_half = 1.96 * resid_std * float(np.sqrt(h)) if resid_std > 0 else 0.0
-            fv = float(v) if not pd.isna(v) else None
-            entry = {
-                "date": d_str,
-                "forecast": fv,
-                "lower": round(fv - ci_half, 4) if fv is not None else None,
-                "upper": round(fv + ci_half, 4) if fv is not None else None,
-            }
-            if d_str in merged_data:
-                merged_data[d_str].update(entry)
-            else:
-                merged_data[d_str] = entry
-
-        result_rows = sorted(merged_data.values(), key=lambda x: x['date'])
-
-        # ── Summary stats for AI insights ─────────────────────────────────
-        actual_vals  = [r["actual"]   for r in result_rows if r.get("actual")   is not None]
-        fcast_vals   = [r["forecast"] for r in result_rows if r.get("forecast") is not None]
-        trend_pct = round((fcast_vals[-1] - fcast_vals[0]) / abs(fcast_vals[0]) * 100, 1) if len(fcast_vals) > 1 and fcast_vals[0] else 0
-
-        return {
-            "chart": result_rows,
-            "stats": {
-                "actual_mean":    round(float(np.mean(actual_vals)), 2) if actual_vals else None,
-                "actual_std":     round(float(np.std(actual_vals)),  2) if actual_vals else None,
-                "forecast_end":   round(fcast_vals[-1], 2)              if fcast_vals  else None,
-                "forecast_start": round(fcast_vals[0],  2)              if fcast_vals  else None,
-                "trend_pct":      trend_pct,
-                "periods":        periods,
-                "freq":           freq,
-                "value_column":   value_col,
-            }
-        }
-        
+        df[value_col] = pd.to_numeric(df[value_col], errors='coerce')
+        df = df.dropna(subset=[value_col])
     except Exception as e:
-        logger.error(f"Forecasting failed: {e}", exc_info=True)
-        return {"error": f"Forecasting engine error: {str(e)}"}
+        return {"error": f"Data preparation failed: {e}"}
+
+    if df.empty:
+        return {"error": "No valid data points after cleaning (check date/value formats)"}
+
+    # ── 2. Try Prophet ───────────────────────────────────────────────────────
+    _prophet_ok = False
+    try:
+        from prophet import Prophet
+        import logging as _lg
+        # Silence Prophet / Stan verbose output
+        _lg.getLogger("prophet").setLevel(_lg.WARNING)
+        _lg.getLogger("cmdstanpy").setLevel(_lg.WARNING)
+
+        prophet_df = (
+            df[[date_col, value_col]]
+            .rename(columns={date_col: "ds", value_col: "y"})
+            .groupby("ds", as_index=False)["y"].mean()
+            .sort_values("ds")
+        )
+
+        # Map our freq aliases → Prophet freq strings
+        freq_map = {"D": "D", "h": "h", "H": "h", "W": "W", "MS": "MS", "B": "B"}
+        p_freq = freq_map.get(freq, "D")
+
+        m = Prophet(
+            interval_width=0.95,
+            daily_seasonality=(p_freq in ("h", "H")),
+            weekly_seasonality=(p_freq in ("D", "B")),
+            yearly_seasonality=True,
+        )
+        m.fit(prophet_df)
+
+        future = m.make_future_dataframe(periods=periods, freq=p_freq)
+        fc = m.predict(future)
+
+        # Build chart rows
+        actual_map = dict(zip(prophet_df["ds"].dt.strftime("%Y-%m-%d"), prophet_df["y"]))
+        result_rows = []
+        for _, row in fc.iterrows():
+            d_str = row["ds"].strftime("%Y-%m-%d")
+            yhat  = round(float(row["yhat"]),       4)
+            lower = round(float(row["yhat_lower"]), 4)
+            upper = round(float(row["yhat_upper"]), 4)
+            is_hist = d_str in actual_map
+            entry: Dict[str, Any] = {"date": d_str}
+            if is_hist:
+                entry["actual"] = round(float(actual_map[d_str]), 4)
+            else:
+                entry["forecast"] = yhat
+                entry["lower"]    = lower
+                entry["upper"]    = upper
+            result_rows.append(entry)
+
+        result_rows.sort(key=lambda x: x["date"])
+        _prophet_ok = True
+        engine = "prophet"
+
+    except Exception as e:
+        logger.warning(f"Prophet unavailable, falling back to Holt-Winters: {e}")
+
+    # ── 3. Fallback: Holt-Winters + ±1.96σ·√h CI ───────────────────────────
+    if not _prophet_ok:
+        try:
+            from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        except ImportError:
+            return {"error": "No forecasting library available (prophet / statsmodels)"}
+
+        try:
+            ts_raw  = df.set_index(date_col)[value_col].sort_index()
+            ts_raw  = ts_raw.groupby(level=0).mean()
+            ts_data = ts_raw.resample(freq).mean().ffill().bfill()
+
+            if len(ts_data) < 5:
+                inferred = pd.infer_freq(ts_raw.index)
+                if inferred:
+                    ts_data = ts_raw.asfreq(inferred).ffill().bfill()
+                if len(ts_data) < 5:
+                    return {"error": f"Not enough data points (found {len(ts_data)}, need min 5)"}
+
+            seasonal_periods = 7 if freq.startswith("D") else (24 if freq.startswith("h") else None)
+            try:
+                model = ExponentialSmoothing(
+                    ts_data,
+                    seasonal_periods=seasonal_periods,
+                    trend="add",
+                    seasonal="add" if (seasonal_periods and len(ts_data) > 2 * seasonal_periods) else None,
+                ).fit()
+            except Exception:
+                try:
+                    model = ExponentialSmoothing(ts_data, trend="add", seasonal=None).fit()
+                except Exception:
+                    model = ExponentialSmoothing(ts_data, trend=None, seasonal=None).fit()
+
+            forecast   = model.forecast(periods)
+            resid_std  = float(np.sqrt(np.nanmean(model.resid.values ** 2)))
+
+            fmt = "%Y-%m-%d %H:%M:%S" if not freq.startswith("D") else "%Y-%m-%d"
+            merged: Dict[str, Any] = {}
+            for d, v in zip(ts_data.index, ts_data.values):
+                d_str = d.strftime(fmt)
+                merged[d_str] = {"date": d_str, "actual": float(v) if not pd.isna(v) else None}
+
+            for h, (d, v) in enumerate(zip(forecast.index, forecast.values), start=1):
+                d_str   = d.strftime(fmt)
+                fv      = float(v) if not pd.isna(v) else None
+                ci_half = 1.96 * resid_std * float(np.sqrt(h)) if resid_std > 0 else 0.0
+                entry   = {
+                    "date":     d_str,
+                    "forecast": fv,
+                    "lower":    round(fv - ci_half, 4) if fv is not None else None,
+                    "upper":    round(fv + ci_half, 4) if fv is not None else None,
+                }
+                if d_str in merged:
+                    merged[d_str].update(entry)
+                else:
+                    merged[d_str] = entry
+
+            result_rows = sorted(merged.values(), key=lambda x: x["date"])
+            engine = "holt-winters"
+
+        except Exception as e:
+            logger.error(f"Forecasting failed: {e}", exc_info=True)
+            return {"error": f"Forecasting engine error: {str(e)}"}
+
+    # ── 4. Summary stats ─────────────────────────────────────────────────────
+    actual_vals = [r["actual"]   for r in result_rows if r.get("actual")   is not None]
+    fcast_vals  = [r["forecast"] for r in result_rows if r.get("forecast") is not None]
+    trend_pct   = (
+        round((fcast_vals[-1] - fcast_vals[0]) / abs(fcast_vals[0]) * 100, 1)
+        if len(fcast_vals) > 1 and fcast_vals[0]
+        else 0
+    )
+
+    return {
+        "chart": result_rows,
+        "engine": engine,
+        "stats": {
+            "actual_mean":    round(float(np.mean(actual_vals)), 2) if actual_vals else None,
+            "actual_std":     round(float(np.std(actual_vals)),  2) if actual_vals else None,
+            "forecast_end":   round(fcast_vals[-1], 2)              if fcast_vals  else None,
+            "forecast_start": round(fcast_vals[0],  2)              if fcast_vals  else None,
+            "trend_pct":      trend_pct,
+            "periods":        periods,
+            "freq":           freq,
+            "value_column":   value_col,
+            "engine":         engine,
+        },
+    }
 
 def detect_anomalies(
     df: pd.DataFrame, 

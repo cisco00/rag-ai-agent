@@ -18,6 +18,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
   const [isProcessing, setIsProcessing] = useState(false);
   const [forecastData, setForecastData] = useSessionStorage<any[]>('advanced_analytics_forecastData', []);
+  const [forecastEngine, setForecastEngine] = useSessionStorage<string>('advanced_analytics_forecastEngine', '');
   const [anomalyData, setAnomalyData] = useSessionStorage<any[]>('advanced_analytics_anomalyData', []);
   const [correlationData, setCorrelationData] = useSessionStorage<any[][]>('advanced_analytics_correlationData', []);
   const [correlationColumns, setCorrelationColumns] = useSessionStorage<string[]>('advanced_analytics_correlationColumns', []);
@@ -220,6 +221,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       }
 
       setForecastData(chartData);
+      setForecastEngine(resp?.engine ?? '');
       fetchInsights('forecast', statsData);
     } catch (err: any) {
       console.error(err);
@@ -470,18 +472,30 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
               </button>
             </div>
 
-            <div className="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+            <div className="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg space-y-1.5">
               <p className="text-sm text-purple-800">
-                <strong>Algorithm:</strong> Holt-Winters Exponential Smoothing
+                <strong>Primary:</strong> Prophet (Facebook) — native 95% CI via <code className="text-xs bg-purple-100 px-1 rounded">yhat_lower</code> / <code className="text-xs bg-purple-100 px-1 rounded">yhat_upper</code>
               </p>
-              <p className="text-sm text-purple-800 mt-2">
-                Minimum 10 data points required for accurate forecasting.
+              <p className="text-sm text-purple-800">
+                <strong>Fallback:</strong> Holt-Winters ± 1.96σ·√h approximation
               </p>
+              <p className="text-sm text-purple-500 mt-1">Minimum 5 data points required.</p>
             </div>
           </div>
 
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-bold text-gray-900 mb-4">Forecast Results</h3>
+            <div className="flex items-center gap-3 mb-4">
+              <h3 className="font-bold text-gray-900">Forecast Results</h3>
+              {forecastEngine && (
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                  forecastEngine === 'prophet'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {forecastEngine === 'prophet' ? '⚡ Prophet · 95% CI' : '📈 Holt-Winters · approx CI'}
+                </span>
+              )}
+            </div>
 
             {forecastData.length > 0 ? (
               <ResponsiveContainer width="100%" height={380}>
