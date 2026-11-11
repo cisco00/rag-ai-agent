@@ -317,6 +317,31 @@ class SavedPipeline(Base):
         return f"<SavedPipeline(id={self.id}, name='{self.name}', table='{self.table_name}')>"
 
 
+class AnalyticsSnapshot(Base):
+    """
+    Saved result of an analytics run (forecast / anomaly / correlation / cluster).
+
+    config  — the form inputs used to produce the result (JSON)
+    result  — the full chart + stats payload returned by the analytics endpoint (JSON)
+    engine  — 'prophet' | 'holt-winters' | 'isolation-forest' | 'kmeans' etc.
+    """
+    __tablename__ = 'analytics_snapshots'
+
+    id            = Column(Integer, primary_key=True)
+    org_id        = Column(Integer, nullable=False, index=True)
+    user_id       = Column(Integer, nullable=False, index=True)
+    name          = Column(String(255), nullable=False)
+    analysis_type = Column(String(50),  nullable=False)   # forecast|anomaly|correlation|cluster
+    config        = Column(Text, nullable=False)           # JSON — form config
+    result        = Column(Text, nullable=False)           # JSON — full API response
+    engine        = Column(String(50),  nullable=True)     # model/algorithm used
+    created_at    = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at    = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<AnalyticsSnapshot(id={self.id}, type='{self.analysis_type}', name='{self.name}')>"
+
+
 class PipelineSchedule(Base):
     """
     Recurring schedule that re-runs a SavedPipeline automatically.
@@ -435,6 +460,26 @@ def init_admin_db():
                     conn.execute(text("ALTER TABLE data_sources ADD COLUMN is_active INTEGER DEFAULT 1"))
                 except Exception: pass
                 
+                # analytics_snapshots table
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS analytics_snapshots (
+                            id INTEGER PRIMARY KEY,
+                            org_id INTEGER NOT NULL,
+                            user_id INTEGER NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            analysis_type VARCHAR(50) NOT NULL,
+                            config TEXT NOT NULL,
+                            result TEXT NOT NULL,
+                            engine VARCHAR(50),
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                    """))
+                    logger.info("Migration: analytics_snapshots table ready")
+                except Exception as e:
+                    logger.warning(f"Migration: analytics_snapshots: {e}")
+
                 # New migration for integration_credentials table (if create_all skipped it)
                 try:
                     conn.execute(text("""

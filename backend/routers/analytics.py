@@ -25,12 +25,20 @@ from dependencies import (
     require_permission
 )
 from auth import get_current_user
-from models import get_org_history, get_db, QueryHistory
+from models import get_org_history, get_db, QueryHistory, AnalyticsSnapshot
 from typing import Optional
 from schemas import (
     ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse,
     ClusterRequest, InsightRequest,
 )
+from pydantic import BaseModel as _BM
+
+class SnapshotSaveRequest(_BM):
+    name:          str
+    analysis_type: str           # forecast | anomaly | correlation | cluster
+    config:        dict          # form inputs
+    result:        dict          # full API response payload
+    engine:        Optional[str] = None
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -322,6 +330,123 @@ async def get_suggested_queries(org=Depends(get_current_org)):
     except Exception as e:
         logger.error(f"Error generating suggested queries: {e}", exc_info=True)
         return SuggestQueriesResponse(queries=[])
+
+
+# ── Analytics Snapshots ──────────────────────────────────────────────────────
+
+def _snapshot_row(s: AnalyticsSnapshot) -> dict:
+    return {
+        "id":            s.id,
+        "name":          s.name,
+        "analysis_type": s.analysis_type,
+        "engine":        s.engine,
+        "config":        json.loads(s.config),
+        "result":        json.loads(s.result),
+        "created_at":    s.created_at.isoformat(),
+        "updated_at":    s.updated_at.isoformat(),
+    }
+
+
+@router.post("/analytics/snapshots", status_code=201)
+async def save_snapshot(
+    request: SnapshotSaveRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Save (or update if same name+type) an analytics result for the current user."""
+    user_id = user.get("id", 0) if user else 0
+    with get_db() as db:
+        # Upsert by (org_id, user_id, name, analysis_type)
+        existing = (
+            db.query(AnalyticsSnapshot)
+            .filter(
+                AnalyticsSnapshot.org_id        == org.id,
+                AnalyticsSnapshot.user_id       == user_id,
+                AnalyticsSnapshot.name          == request.name,
+                AnalyticsSnapshot.analysis_type == request.analysis_type,
+            )
+            .first()
+        )
+        if existing:
+            existing.config = json.dumps(request.config, default=str)
+            existing.result = json.dumps(request.result, default=str)
+            existing.engine = request.engine
+            db.commit()
+            db.refresh(existing)
+            return _snapshot_row(existing)
+        else:
+            snap = AnalyticsSnapshot(
+                org_id        = org.id,
+                user_id       = user_id,
+                name          = request.name,
+                analysis_type = request.analysis_type,
+                config        = json.dumps(request.config,  default=str),
+                result        = json.dumps(request.result,  default=str),
+                engine        = request.engine,
+            )
+            db.add(snap)
+            db.commit()
+            db.refresh(snap)
+            return _snapshot_row(snap)
+
+
+@router.get("/analytics/snapshots")
+async def list_snapshots(
+    analysis_type: Optional[str] = None,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """List all saved snapshots for this org / user, newest first."""
+    user_id = user.get("id", 0) if user else 0
+    with get_db() as db:
+        q = db.query(AnalyticsSnapshot).filter(
+            AnalyticsSnapshot.org_id  == org.id,
+            AnalyticsSnapshot.user_id == user_id,
+        )
+        if analysis_type:
+            q = q.filter(AnalyticsSnapshot.analysis_type == analysis_type)
+        rows = q.order_by(AnalyticsSnapshot.updated_at.desc()).all()
+        return {"snapshots": [_snapshot_row(r) for r in rows]}
+
+
+@router.get("/analytics/snapshots/{snapshot_id}")
+async def load_snapshot(
+    snapshot_id: int,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Load a single snapshot by id."""
+    user_id = user.get("id", 0) if user else 0
+    with get_db() as db:
+        snap = db.query(AnalyticsSnapshot).filter(
+            AnalyticsSnapshot.id      == snapshot_id,
+            AnalyticsSnapshot.org_id  == org.id,
+            AnalyticsSnapshot.user_id == user_id,
+        ).first()
+        if not snap:
+            raise HTTPException(status_code=404, detail="Snapshot not found")
+        return _snapshot_row(snap)
+
+
+@router.delete("/analytics/snapshots/{snapshot_id}", status_code=204)
+async def delete_snapshot(
+    snapshot_id: int,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Delete a snapshot."""
+    user_id = user.get("id", 0) if user else 0
+    with get_db() as db:
+        snap = db.query(AnalyticsSnapshot).filter(
+            AnalyticsSnapshot.id      == snapshot_id,
+            AnalyticsSnapshot.org_id  == org.id,
+            AnalyticsSnapshot.user_id == user_id,
+        ).first()
+        if not snap:
+            raise HTTPException(status_code=404, detail="Snapshot not found")
+        db.delete(snap)
+        db.commit()
+    return None
 
 
 @router.get("/analytics/history")

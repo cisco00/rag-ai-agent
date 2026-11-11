@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
-import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
+import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock } from 'lucide-react';
 import { api } from '../../lib/api';
 import {
   ComposedChart, Area, Line, ScatterChart, Scatter,
@@ -63,6 +63,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(true);
 
+  // Snapshots
+  const [snapshots, setSnapshots] = useState<any[]>([]);
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
+
   const [tables, setTables] = useState<string[]>([]);
   const [forecastColumns, setForecastColumns] = useState<string[]>([]);
   const [anomalyColumns, setAnomalyColumns] = useState<string[]>([]);
@@ -71,6 +79,10 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   useEffect(() => {
     fetchTables();
   }, []);
+
+  useEffect(() => {
+    fetchSnapshots(activeTab);
+  }, [activeTab]); // eslint-disable-line
 
   useEffect(() => {
     const fetchForecastCols = async () => {
@@ -148,6 +160,89 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     fetchClusterCols();
   }, [clusterConfig.table]);
 
+  const fetchSnapshots = useCallback(async (tab: AnalyticsTab) => {
+    setSnapshotsLoading(true);
+    try {
+      const resp = await api.get<any>(`/analytics/snapshots?analysis_type=${tab}`);
+      setSnapshots(resp?.snapshots ?? []);
+    } catch { /* non-fatal */ }
+    finally { setSnapshotsLoading(false); }
+  }, []);
+
+  const handleSaveSnapshot = useCallback(async () => {
+    if (!saveName.trim()) return;
+    setSnapshotSaving(true);
+    try {
+      let config: any = {};
+      let result: any = {};
+      let engine: string | null = null;
+      if (activeTab === 'forecast') {
+        config = forecastConfig;
+        result = { chart: forecastData };
+        engine = forecastEngine || null;
+      } else if (activeTab === 'anomaly') {
+        config = anomalyConfig;
+        result = { data: anomalyData };
+      } else if (activeTab === 'correlation') {
+        config = correlationConfig;
+        result = { correlation_matrix: correlationData, columns: correlationColumns };
+      } else if (activeTab === 'cluster') {
+        config = clusterConfig;
+        result = clusterData ?? {};
+      }
+      await api.post('/analytics/snapshots', {
+        name: saveName.trim(),
+        analysis_type: activeTab,
+        config,
+        result,
+        engine,
+      });
+      setSaveDialogOpen(false);
+      setSaveName('');
+      fetchSnapshots(activeTab);
+    } catch (err: any) {
+      alert(`Save failed: ${err.message}`);
+    } finally {
+      setSnapshotSaving(false);
+    }
+  }, [saveName, activeTab, forecastConfig, forecastData, forecastEngine, anomalyConfig, anomalyData, correlationConfig, correlationData, correlationColumns, clusterConfig, clusterData, fetchSnapshots]);
+
+  const handleLoadSnapshot = useCallback((snap: any) => {
+    const { analysis_type, config, result, engine } = snap;
+    if (analysis_type === 'forecast') {
+      if (config) setForecastConfig(config);
+      if (result?.chart?.length) {
+        setForecastData(result.chart);
+        setForecastEngine(engine ?? '');
+      }
+      setActiveTab('forecast');
+    } else if (analysis_type === 'anomaly') {
+      if (config) setAnomalyConfig(config);
+      if (result?.data?.length) setAnomalyData(result.data);
+      setActiveTab('anomaly');
+    } else if (analysis_type === 'correlation') {
+      if (config) setCorrelationConfig(config);
+      if (result?.columns) setCorrelationColumns(result.columns);
+      if (result?.correlation_matrix) setCorrelationData(result.correlation_matrix);
+      setActiveTab('correlation');
+    } else if (analysis_type === 'cluster') {
+      if (config) setClusterConfig(config);
+      if (result && Object.keys(result).length) setClusterData(result);
+      setActiveTab('cluster');
+    }
+    setSnapshotsOpen(false);
+  }, [setForecastConfig, setForecastData, setForecastEngine, setAnomalyConfig, setAnomalyData, setCorrelationConfig, setCorrelationColumns, setCorrelationData, setClusterConfig, setClusterData, setActiveTab]);
+
+  const handleDeleteSnapshot = useCallback(async (id: number) => {
+    if (!confirm('Delete this snapshot?')) return;
+    try {
+      await api.delete(`/analytics/snapshots/${id}`);
+      fetchSnapshots(activeTab);
+    } catch (err: any) {
+      alert(`Delete failed: ${err.message}`);
+    }
+  }, [activeTab, fetchSnapshots]);
+
   const fetchInsights = useCallback(async (tab: AnalyticsTab, stats: Record<string, any>) => {
     if (!stats || Object.keys(stats).length === 0) return;
     setInsightLoading(true);
@@ -223,13 +318,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       setForecastData(chartData);
       setForecastEngine(resp?.engine ?? '');
       fetchInsights('forecast', statsData);
+      fetchSnapshots('forecast');
     } catch (err: any) {
       console.error(err);
       alert(`Forecast failed: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
-  }, [forecastConfig, setForecastData, fetchInsights]);
+  }, [forecastConfig, setForecastData, fetchInsights, fetchSnapshots]);
 
   const handleRunAnomalyDetection = async () => {
     if (!anomalyConfig.table || !anomalyConfig.valueColumn) return;
@@ -265,6 +361,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
       setAnomalyData(plotData);
       if (resp?.stats) fetchInsights('anomaly', resp.stats);
+      fetchSnapshots('anomaly');
     } catch (err: any) {
       console.error(err);
       alert(`Anomaly detection failed: ${err.message}`);
@@ -291,6 +388,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       setCorrelationColumns(cols);
       setCorrelationData(matrix);
       if (resp?.stats) fetchInsights('correlation', resp.stats);
+      fetchSnapshots('correlation');
     } catch (err: any) {
       console.error(err);
       alert(`Correlation analysis failed: ${err.message}`);
@@ -312,6 +410,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       if (resp?.error) { alert(`Clustering failed: ${resp.error}`); return; }
       setClusterData(resp);
       if (resp?.stats) fetchInsights('cluster', resp.stats);
+      fetchSnapshots('cluster');
     } catch (err: any) {
       console.error(err);
       alert(`Clustering failed: ${err.message}`);
@@ -495,6 +594,32 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                   {forecastEngine === 'prophet' ? '⚡ Prophet · 95% CI' : '📈 Holt-Winters · approx CI'}
                 </span>
               )}
+              {forecastData.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  {saveDialogOpen ? (
+                    <>
+                      <input
+                        autoFocus
+                        value={saveName}
+                        onChange={e => setSaveName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSaveSnapshot(); if (e.key === 'Escape') setSaveDialogOpen(false); }}
+                        placeholder="Snapshot name…"
+                        className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                      />
+                      <button onClick={handleSaveSnapshot} disabled={snapshotSaving || !saveName.trim()}
+                        className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                        {snapshotSaving ? <Loader2 className="size-3 animate-spin" /> : <Save className="size-3" />} Save
+                      </button>
+                      <button onClick={() => setSaveDialogOpen(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5">✕</button>
+                    </>
+                  ) : (
+                    <button onClick={() => { setSaveDialogOpen(true); setSaveName(''); }}
+                      className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+                      <Save className="size-3" /> Save snapshot
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {forecastData.length > 0 ? (
@@ -640,7 +765,31 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
           </div>
 
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-bold text-gray-900 mb-4">Anomaly Detection Results</h3>
+            <div className="flex items-center gap-3 mb-4">
+              <h3 className="font-bold text-gray-900">Anomaly Detection Results</h3>
+              {anomalyData.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  {saveDialogOpen ? (
+                    <>
+                      <input autoFocus value={saveName} onChange={e => setSaveName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSaveSnapshot(); if (e.key === 'Escape') setSaveDialogOpen(false); }}
+                        placeholder="Snapshot name…"
+                        className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                      <button onClick={handleSaveSnapshot} disabled={snapshotSaving || !saveName.trim()}
+                        className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                        {snapshotSaving ? <Loader2 className="size-3 animate-spin" /> : <Save className="size-3" />} Save
+                      </button>
+                      <button onClick={() => setSaveDialogOpen(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5">✕</button>
+                    </>
+                  ) : (
+                    <button onClick={() => { setSaveDialogOpen(true); setSaveName(''); }}
+                      className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+                      <Save className="size-3" /> Save snapshot
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             {anomalyData.length > 0 ? (
               <ResponsiveContainer width="100%" height={400}>
@@ -766,7 +915,31 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
           </div>
 
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-bold text-gray-900 mb-4">Correlation Heatmap</h3>
+            <div className="flex items-center gap-3 mb-4">
+              <h3 className="font-bold text-gray-900">Correlation Heatmap</h3>
+              {correlationData.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  {saveDialogOpen ? (
+                    <>
+                      <input autoFocus value={saveName} onChange={e => setSaveName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSaveSnapshot(); if (e.key === 'Escape') setSaveDialogOpen(false); }}
+                        placeholder="Snapshot name…"
+                        className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                      <button onClick={handleSaveSnapshot} disabled={snapshotSaving || !saveName.trim()}
+                        className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                        {snapshotSaving ? <Loader2 className="size-3 animate-spin" /> : <Save className="size-3" />} Save
+                      </button>
+                      <button onClick={() => setSaveDialogOpen(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5">✕</button>
+                    </>
+                  ) : (
+                    <button onClick={() => { setSaveDialogOpen(true); setSaveName(''); }}
+                      className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+                      <Save className="size-3" /> Save snapshot
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             {correlationData.length > 0 ? (
               <div className="overflow-x-auto">
@@ -908,7 +1081,31 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
           {/* Chart panel */}
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-bold text-gray-900 mb-1">Cluster Scatter Plot</h3>
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="font-bold text-gray-900">Cluster Scatter Plot</h3>
+              {clusterData?.points?.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  {saveDialogOpen ? (
+                    <>
+                      <input autoFocus value={saveName} onChange={e => setSaveName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleSaveSnapshot(); if (e.key === 'Escape') setSaveDialogOpen(false); }}
+                        placeholder="Snapshot name…"
+                        className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:ring-2 focus:ring-purple-400" />
+                      <button onClick={handleSaveSnapshot} disabled={snapshotSaving || !saveName.trim()}
+                        className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center gap-1">
+                        {snapshotSaving ? <Loader2 className="size-3 animate-spin" /> : <Save className="size-3" />} Save
+                      </button>
+                      <button onClick={() => setSaveDialogOpen(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5">✕</button>
+                    </>
+                  ) : (
+                    <button onClick={() => { setSaveDialogOpen(true); setSaveName(''); }}
+                      className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+                      <Save className="size-3" /> Save snapshot
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             {clusterData?.points?.length > 0 ? (
               <>
                 <p className="text-xs text-gray-400 mb-4">
@@ -1024,6 +1221,79 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
           <span className="text-sm text-violet-600">Generating AI insights…</span>
         </div>
       )}
+
+      {/* ── Saved Snapshots panel ─────────────────────────────────────────── */}
+      <div className="mt-6 bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <button
+          onClick={() => setSnapshotsOpen(v => !v)}
+          className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <BookOpen className="size-4 text-gray-500 flex-shrink-0" />
+            <span className="font-semibold text-sm text-gray-700">Saved Snapshots</span>
+            {snapshots.length > 0 && (
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full ml-1">
+                {snapshots.length}
+              </span>
+            )}
+          </div>
+          {snapshotsLoading
+            ? <Loader2 className="size-4 text-gray-400 animate-spin flex-shrink-0" />
+            : snapshotsOpen
+              ? <ChevronUp className="size-4 text-gray-400 flex-shrink-0" />
+              : <ChevronDown className="size-4 text-gray-400 flex-shrink-0" />
+          }
+        </button>
+
+        {snapshotsOpen && (
+          <div className="border-t border-gray-100 px-5 py-4">
+            {snapshots.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">
+                No snapshots saved for {activeTab} yet. Run an analysis and click <strong>Save snapshot</strong>.
+              </p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {snapshots.map((snap) => (
+                  <div key={snap.id} className="flex items-center gap-3 py-3 group">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{snap.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {snap.engine && (
+                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                            snap.engine === 'prophet' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'
+                          }`}>
+                            {snap.engine}
+                          </span>
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-gray-400">
+                          <Clock className="size-3" />
+                          {new Date(snap.updated_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleLoadSnapshot(snap)}
+                        title="Load snapshot"
+                        className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 hover:bg-purple-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
+                      >
+                        <BookOpen className="size-3" /> Load
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSnapshot(snap.id)}
+                        title="Delete snapshot"
+                        className="text-xs text-red-500 hover:text-red-700 border border-red-200 hover:bg-red-50 px-2 py-1.5 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
