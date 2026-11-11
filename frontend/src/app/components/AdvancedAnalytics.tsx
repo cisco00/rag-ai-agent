@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
 import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock } from 'lucide-react';
 import { api } from '../../lib/api';
@@ -387,6 +387,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       const matrix: number[][] = resp.correlation_matrix ?? resp.matrix ?? [];
       setCorrelationColumns(cols);
       setCorrelationData(matrix);
+      setDrillDown(null);
       if (resp?.stats) fetchInsights('correlation', resp.stats);
       fetchSnapshots('correlation');
     } catch (err: any) {
@@ -419,13 +420,50 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     }
   };
 
-  const getCorrelationColor = (value: number) => {
-    const absValue = Math.abs(value);
-    if (absValue > 0.7) return value > 0 ? 'bg-green-600' : 'bg-red-600';
-    if (absValue > 0.4) return value > 0 ? 'bg-green-400' : 'bg-red-400';
-    if (absValue > 0.2) return value > 0 ? 'bg-green-200' : 'bg-red-200';
-    return 'bg-gray-100';
+  // Smooth diverging colour scale: red(-1) → white(0) → green(+1)
+  const getCellStyle = (value: number): React.CSSProperties => {
+    const v = Math.max(-1, Math.min(1, value));
+    // Interpolate between red/white/green using the sign
+    let r: number, g: number, b: number;
+    if (v < 0) {
+      // white → red
+      const t = -v; // 0..1
+      r = Math.round(255 - (255 - 220) * t);  // 255→220
+      g = Math.round(255 - (255 -  38) * t);  // 255→38
+      b = Math.round(255 - (255 -  38) * t);  // 255→38
+    } else {
+      // white → green
+      const t = v;  // 0..1
+      r = Math.round(255 - (255 -  22) * t);  // 255→22
+      g = Math.round(255 - (255 - 163) * t);  // 255→163
+      b = Math.round(255 - (255 -  74) * t);  // 255→74
+    }
+    const bg = `rgb(${r},${g},${b})`;
+    // Dark text near white (abs < 0.4), white text otherwise
+    const textColor = Math.abs(v) < 0.4 ? '#374151' : '#ffffff';
+    return { backgroundColor: bg, color: textColor, cursor: 'pointer', transition: 'filter 0.15s' };
   };
+
+  // Drill-down state: scatter of two correlated columns
+  const [drillDown, setDrillDown] = useState<null | {
+    col1: string; col2: string; r: number; data: { x: number; y: number }[];
+  }>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
+
+  const handleCellClick = useCallback(async (col1: string, col2: string, r: number) => {
+    if (col1 === col2) return; // diagonal — no meaningful scatter
+    setDrillDown(null);
+    setDrillLoading(true);
+    try {
+      const resp = await api.get<any>(`/tables/${correlationConfig.table}/preview?limit=2000`);
+      const rows: any[] = resp?.data ?? resp?.rows ?? [];
+      const pts = rows
+        .map((row: any) => ({ x: parseFloat(row[col1]), y: parseFloat(row[col2]) }))
+        .filter((p: { x: number; y: number }) => !isNaN(p.x) && !isNaN(p.y));
+      setDrillDown({ col1, col2, r, data: pts });
+    } catch { /* ignore — drill-down is non-critical */ }
+    finally { setDrillLoading(false); }
+  }, [correlationConfig.table]);
 
   // Cluster colour palette (up to 8 clusters)
   const CLUSTER_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899','#8b5cf6','#14b8a6'];
@@ -957,36 +995,114 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                   <tbody>
                     {correlationData.map((row, i) => (
                       <tr key={i}>
-                        <td className="p-2 border border-gray-300 bg-gray-50 text-xs font-medium text-gray-700">
+                        <td className="p-2 border border-gray-300 bg-gray-50 text-xs font-medium text-gray-700 whitespace-nowrap">
                           {correlationColumns[i]}
                         </td>
-                        {row.map((value, j) => (
-                          <td
-                            key={j}
-                            className={`p-4 border border-gray-300 text-center text-white font-bold ${getCorrelationColor(value)}`}
-                          >
-                            {value.toFixed(2)}
-                          </td>
-                        ))}
+                        {row.map((value, j) => {
+                          const isDiag = i === j;
+                          const isActive = drillDown?.col1 === correlationColumns[i] && drillDown?.col2 === correlationColumns[j]
+                                        || drillDown?.col1 === correlationColumns[j] && drillDown?.col2 === correlationColumns[i];
+                          return (
+                            <td
+                              key={j}
+                              style={getCellStyle(value)}
+                              onClick={() => !isDiag && handleCellClick(correlationColumns[i], correlationColumns[j], value)}
+                              className={`p-4 border border-gray-200 text-center font-bold text-sm select-none
+                                ${!isDiag ? 'hover:brightness-90 active:brightness-75' : ''}
+                                ${isActive ? 'ring-2 ring-inset ring-purple-500' : ''}
+                              `}
+                              title={isDiag ? correlationColumns[i] : `${correlationColumns[i]} × ${correlationColumns[j]}: ${value.toFixed(3)}\nClick to explore`}
+                            >
+                              {value.toFixed(2)}
+                            </td>
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
                 </table>
 
-                <div className="flex items-center justify-center gap-6 mt-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 bg-red-600 rounded"></div>
-                    <span className="text-sm text-gray-600">Strong Negative</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 bg-gray-100 rounded"></div>
-                    <span className="text-sm text-gray-600">No Correlation</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 bg-green-600 rounded"></div>
-                    <span className="text-sm text-gray-600">Strong Positive</span>
-                  </div>
+                {/* Smooth gradient legend */}
+                <div className="mt-6 flex items-center gap-3 justify-center">
+                  <span className="text-xs text-gray-500 font-medium">−1</span>
+                  <div
+                    className="h-3 rounded-full flex-1 max-w-xs"
+                    style={{ background: 'linear-gradient(to right, rgb(220,38,38), rgb(255,255,255), rgb(22,163,74))' }}
+                  />
+                  <span className="text-xs text-gray-500 font-medium">+1</span>
                 </div>
+                <p className="text-center text-xs text-gray-400 mt-2">Click any off-diagonal cell to explore a scatter plot</p>
+
+                {/* Drill-down scatter panel */}
+                {(drillLoading || drillDown) && (
+                  <div className="mt-6 border-t border-gray-100 pt-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="font-semibold text-sm text-gray-800">
+                          {drillDown ? `${drillDown.col1} × ${drillDown.col2}` : 'Loading…'}
+                        </span>
+                        {drillDown && (
+                          <span className={`ml-2 text-xs font-medium px-2 py-0.5 rounded-full ${
+                            drillDown.r > 0.4 ? 'bg-green-100 text-green-700'
+                            : drillDown.r < -0.4 ? 'bg-red-100 text-red-700'
+                            : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            r = {drillDown.r.toFixed(3)}
+                          </span>
+                        )}
+                      </div>
+                      {drillDown && (
+                        <button onClick={() => setDrillDown(null)}
+                          className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded-lg hover:bg-gray-100 transition-colors">
+                          ✕ Close
+                        </button>
+                      )}
+                    </div>
+                    {drillLoading && (
+                      <div className="flex items-center justify-center h-48 text-gray-400">
+                        <Loader2 className="size-6 animate-spin mr-2" /> Loading scatter data…
+                      </div>
+                    )}
+                    {drillDown && drillDown.data.length > 0 && (
+                      <>
+                        <p className="text-xs text-gray-400 mb-2">{drillDown.data.length.toLocaleString()} points</p>
+                        <ResponsiveContainer width="100%" height={300}>
+                          <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                            <XAxis type="number" dataKey="x" name={drillDown.col1}
+                              tick={{ fontSize: 11 }}
+                              label={{ value: drillDown.col1, position: 'insideBottom', offset: -10, fontSize: 11 }} />
+                            <YAxis type="number" dataKey="y" name={drillDown.col2}
+                              tick={{ fontSize: 11 }}
+                              label={{ value: drillDown.col2, angle: -90, position: 'insideLeft', fontSize: 11 }} />
+                            <Tooltip
+                              cursor={{ strokeDasharray: '3 3' }}
+                              content={({ payload }) => {
+                                if (!payload?.length) return null;
+                                const d = payload[0].payload;
+                                return (
+                                  <div className="bg-white border border-gray-200 rounded-lg shadow px-3 py-2 text-xs">
+                                    <p>{drillDown.col1}: <strong>{Number(d.x).toLocaleString(undefined, { maximumFractionDigits: 3 })}</strong></p>
+                                    <p>{drillDown.col2}: <strong>{Number(d.y).toLocaleString(undefined, { maximumFractionDigits: 3 })}</strong></p>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Scatter
+                              data={drillDown.data}
+                              fill={drillDown.r >= 0 ? '#16a34a' : '#dc2626'}
+                              fillOpacity={0.5}
+                              r={3}
+                            />
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </>
+                    )}
+                    {drillDown && drillDown.data.length === 0 && (
+                      <p className="text-sm text-gray-400 text-center py-8">No numeric data found for these two columns.</p>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex items-center justify-center h-96 text-gray-400">
