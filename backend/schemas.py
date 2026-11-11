@@ -205,8 +205,10 @@ class ForecastRequest(BaseModel):
 
 class AnomalyRequest(BaseModel):
     table_name: str
-    value_column: str
+    value_column: str                           # primary column (univariate & multivariate)
+    columns: Optional[List[str]] = None         # 2–4 columns for multivariate mode
     contamination: float = 0.05
+    multivariate: bool = False                  # False = single-column, True = multi-column
 
 class CorrelationRequest(BaseModel):
     table_name: str

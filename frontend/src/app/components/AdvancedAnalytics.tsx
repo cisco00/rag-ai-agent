@@ -37,7 +37,11 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     table: 'sales',
     valueColumn: 'revenue',
     contamination: 0.05,
+    multivariate: false,
+    mvColumns: [] as string[],  // selected columns for multivariate mode
   });
+  // Full anomaly API response (needed for multivariate meta: pairs, feature_cols)
+  const [anomalyResult, setAnomalyResult] = useSessionStorage<any>('advanced_analytics_anomalyResult', null);
 
   // Correlation configuration
   const [correlationConfig, setCorrelationConfig] = useSessionStorage('advanced_analytics_correlationConfig', {
@@ -329,37 +333,45 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
   const handleRunAnomalyDetection = async () => {
     if (!anomalyConfig.table || !anomalyConfig.valueColumn) return;
+    // multivariate requires ≥2 selected columns
+    if (anomalyConfig.multivariate && anomalyConfig.mvColumns.length < 2) {
+      alert('Select at least 2 columns for multivariate mode.');
+      return;
+    }
     setIsProcessing(true);
 
     try {
-      const resp = await api.post<any>('/analytics/anomaly', {
-        table_name: anomalyConfig.table,
-        value_column: anomalyConfig.valueColumn,
-        contamination: anomalyConfig.contamination
-      });
+      const payload: any = {
+        table_name:    anomalyConfig.table,
+        value_column:  anomalyConfig.valueColumn,
+        contamination: anomalyConfig.contamination,
+        multivariate:  anomalyConfig.multivariate,
+      };
+      if (anomalyConfig.multivariate) {
+        payload.columns = anomalyConfig.mvColumns;
+      }
 
-      // Handle multiple server response formats
+      const resp = await api.post<any>('/analytics/anomaly', payload);
+
+      // Normalise response shape
       let plotData: any[] = [];
-      if (resp && (resp.data || resp.anomalies)) {
-        const raw = resp.data ?? resp.anomalies;
-        if (Array.isArray(raw)) {
-          // Format: [{index, value, isAnomaly}, ...]
-          plotData = raw;
-        } else if (typeof raw === 'object') {
-          // Format: {index: value, ...} dict — anomalies only (no normal points)
-          // We need to mark these as anomalies and infer a full dataset
-          // Fallback: show only anomaly points
-          plotData = Object.entries(raw).map(([idx, val]: [string, any]) => ({
-            index: parseInt(idx),
-            value: typeof val === 'object' ? val.value ?? val : val,
-            isAnomaly: true
-          })).sort((a, b) => a.index - b.index);
-        }
+      if (resp?.data && Array.isArray(resp.data)) {
+        plotData = resp.data;
       } else if (Array.isArray(resp)) {
         plotData = resp;
+      } else if (resp?.anomalies) {
+        const raw = resp.anomalies;
+        plotData = Array.isArray(raw)
+          ? raw
+          : Object.entries(raw).map(([idx, val]: [string, any]) => ({
+              index: parseInt(idx),
+              value: typeof val === 'object' ? val.value ?? val : val,
+              isAnomaly: true,
+            })).sort((a, b) => a.index - b.index);
       }
 
       setAnomalyData(plotData);
+      setAnomalyResult(resp ?? null);
       if (resp?.stats) fetchInsights('anomaly', resp.stats);
       fetchSnapshots('anomaly');
     } catch (err: any) {
@@ -711,100 +723,143 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       {/* Anomaly Detection */}
       {activeTab === 'anomaly' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* ── Config panel ── */}
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h3 className="font-bold text-gray-900 mb-4">Anomaly Configuration</h3>
 
             <div className="space-y-4">
+              {/* Table */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Table
-                </label>
-                <select
-                  value={anomalyConfig.table}
-                  onChange={(e) => setAnomalyConfig({ ...anomalyConfig, table: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                >
-                  {tables.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
+                <label className="block text-sm font-medium text-gray-700 mb-2">Table</label>
+                <select value={anomalyConfig.table}
+                  onChange={e => setAnomalyConfig({ ...anomalyConfig, table: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  {tables.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
 
+              {/* Mode toggle */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Detection Mode</label>
+                <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
+                  <button
+                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: false })}
+                    className={`flex-1 py-2 transition-colors ${!anomalyConfig.multivariate ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    Univariate
+                  </button>
+                  <button
+                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: true })}
+                    className={`flex-1 py-2 transition-colors ${anomalyConfig.multivariate ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    Multivariate
+                  </button>
+                </div>
+              </div>
+
+              {/* Primary value column (always shown; in MV mode it's the "index" column for the univariate chart fallback) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Value Column
+                  {anomalyConfig.multivariate ? 'Primary Column (reference)' : 'Value Column'}
                 </label>
-                <select
-                  value={anomalyConfig.valueColumn}
-                  onChange={(e) => setAnomalyConfig({ ...anomalyConfig, valueColumn: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                >
-                  <option value="">Select column...</option>
+                <select value={anomalyConfig.valueColumn}
+                  onChange={e => setAnomalyConfig({ ...anomalyConfig, valueColumn: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  <option value="">Select column…</option>
                   {anomalyColumns.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
 
+              {/* Multivariate column picker (2–4 columns) */}
+              {anomalyConfig.multivariate && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Feature Columns <span className="text-gray-400 font-normal">(pick 2–4)</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto pr-1">
+                    {anomalyColumns.map(c => {
+                      const checked = anomalyConfig.mvColumns.includes(c);
+                      const atMax   = anomalyConfig.mvColumns.length >= 4 && !checked;
+                      return (
+                        <label key={c} className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm cursor-pointer select-none transition-colors ${
+                          checked   ? 'bg-purple-50 border-purple-400 text-purple-800'
+                          : atMax   ? 'opacity-40 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400'
+                          :           'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                        }`}>
+                          <input type="checkbox" className="sr-only"
+                            checked={checked}
+                            disabled={atMax}
+                            onChange={e => {
+                              const next = e.target.checked
+                                ? [...anomalyConfig.mvColumns, c]
+                                : anomalyConfig.mvColumns.filter((x: string) => x !== c);
+                              setAnomalyConfig({ ...anomalyConfig, mvColumns: next });
+                            }} />
+                          <span className={`inline-block w-3 h-3 rounded border mr-0.5 flex-shrink-0 ${checked ? 'bg-purple-500 border-purple-500' : 'border-gray-300'}`} />
+                          {c}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    {anomalyConfig.mvColumns.length}/4 selected · IsolationForest scores all selected dimensions jointly
+                  </p>
+                </div>
+              )}
+
+              {/* Contamination slider */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Contamination Factor ({anomalyConfig.contamination})
+                  Contamination <span className="text-purple-600 font-semibold">({(anomalyConfig.contamination * 100).toFixed(0)}%)</span>
                 </label>
-                <input
-                  type="range"
+                <input type="range" min="0.01" max="0.5" step="0.01"
                   value={anomalyConfig.contamination}
-                  onChange={(e) => setAnomalyConfig({ ...anomalyConfig, contamination: parseFloat(e.target.value) })}
-                  className="w-full"
-                  min="0.01"
-                  max="0.5"
-                  step="0.01"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Expected proportion of outliers
-                </p>
+                  onChange={e => setAnomalyConfig({ ...anomalyConfig, contamination: parseFloat(e.target.value) })}
+                  className="w-full accent-purple-600" />
+                <p className="text-xs text-gray-500 mt-1">Expected proportion of outliers in the data</p>
               </div>
 
-              <button
-                onClick={handleRunAnomalyDetection}
-                disabled={isProcessing}
-                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors font-medium"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="size-5 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Play className="size-5" />
-                    Detect Anomalies
-                  </>
-                )}
+              <button onClick={handleRunAnomalyDetection} disabled={isProcessing}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors font-medium">
+                {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Detect Anomalies</>}
               </button>
             </div>
 
-            <div className="mt-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+            <div className="mt-5 p-4 bg-purple-50 border border-purple-200 rounded-lg space-y-1">
+              <p className="text-sm text-purple-800"><strong>Algorithm:</strong> Isolation Forest (sklearn)</p>
               <p className="text-sm text-purple-800">
-                <strong>Algorithm:</strong> Isolation Forest
-              </p>
-              <p className="text-sm text-purple-800 mt-2">
-                Identifies statistical outliers and irregular patterns.
+                {anomalyConfig.multivariate
+                  ? 'Fits an ensemble of random isolation trees across all selected features simultaneously — catches anomalies invisible in any single dimension.'
+                  : 'Partitions values with random cuts; points requiring few cuts are outliers.'}
               </p>
             </div>
 
             {anomalyData.length > 0 && (
-              <div className="mt-6 p-4 bg-orange-50 border border-orange-200 rounded-lg">
+              <div className="mt-4 p-4 bg-orange-50 border border-orange-200 rounded-lg">
                 <p className="text-sm font-bold text-orange-900">
-                  Anomalies Detected: {anomalyData.filter(d => d.isAnomaly).length}
+                  {anomalyData.filter(d => d.isAnomaly).length} anomalies detected
                 </p>
-                <p className="text-sm text-orange-800 mt-1">
-                  Out of {anomalyData.length} total data points
+                <p className="text-sm text-orange-700 mt-0.5">
+                  out of {anomalyResult?.total_points ?? anomalyData.length} total points
+                  {anomalyResult?.stats?.anomaly_pct != null && (
+                    <> · <strong>{anomalyResult.stats.anomaly_pct}%</strong></>
+                  )}
                 </p>
+                {anomalyResult?.multivariate && anomalyResult?.feature_cols && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {anomalyResult.feature_cols.map((f: string) => (
+                      <span key={f} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{f}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
 
+          {/* ── Results panel ── */}
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
             <div className="flex items-center gap-3 mb-4">
-              <h3 className="font-bold text-gray-900">Anomaly Detection Results</h3>
+              <h3 className="font-bold text-gray-900">
+                {anomalyResult?.multivariate ? 'Multivariate Anomaly Results' : 'Anomaly Detection Results'}
+              </h3>
               {anomalyData.length > 0 && (
                 <div className="ml-auto flex items-center gap-2">
                   {saveDialogOpen ? (
@@ -830,25 +885,122 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
             </div>
 
             {anomalyData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={400}>
-                <ScatterChart>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="index" name="Index" />
-                  <YAxis dataKey="value" name="Value" />
-                  <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                  <Legend />
-                  <Scatter
-                    name="Normal Data"
-                    data={anomalyData.filter(d => !d.isAnomaly)}
-                    fill="#8b5cf6"
-                  />
-                  <Scatter
-                    name="Anomalies"
-                    data={anomalyData.filter(d => d.isAnomaly)}
-                    fill="#ef4444"
-                  />
-                </ScatterChart>
-              </ResponsiveContainer>
+              <>
+                {/* ── Univariate: simple index vs value scatter ── */}
+                {!anomalyResult?.multivariate && (
+                  <ResponsiveContainer width="100%" height={380}>
+                    <ScatterChart>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="index" name="Index" tick={{ fontSize: 11 }} />
+                      <YAxis dataKey="value" name="Value" tick={{ fontSize: 11 }} />
+                      <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                        content={({ payload }) => {
+                          if (!payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div className="bg-white border border-gray-200 rounded-lg shadow px-3 py-2 text-xs">
+                              <p className={`font-semibold mb-1 ${d.isAnomaly ? 'text-red-600' : 'text-purple-600'}`}>
+                                {d.isAnomaly ? '⚠ Anomaly' : '● Normal'}
+                              </p>
+                              <p>Index: <strong>{d.index}</strong></p>
+                              <p>Value: <strong>{Number(d.value).toLocaleString(undefined, { maximumFractionDigits: 3 })}</strong></p>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Legend />
+                      <Scatter name="Normal" data={anomalyData.filter(d => !d.isAnomaly)} fill="#8b5cf6" fillOpacity={0.6} r={3} />
+                      <Scatter name="Anomaly" data={anomalyData.filter(d => d.isAnomaly)} fill="#ef4444" fillOpacity={0.9} r={5} />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                )}
+
+                {/* ── Multivariate: scatter matrix (all column pairs) ── */}
+                {anomalyResult?.multivariate && anomalyResult?.pairs?.length > 0 && (() => {
+                  const pairs: { x: string; y: string }[] = anomalyResult.pairs;
+                  const normal   = anomalyData.filter(d => !d.isAnomaly);
+                  const outliers = anomalyData.filter(d =>  d.isAnomaly);
+                  return (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-3">
+                        {pairs.length} pair{pairs.length > 1 ? 's' : ''} · {outliers.length} anomalies highlighted in red
+                        — hover for anomaly score
+                      </p>
+                      <div className={`grid gap-4 ${pairs.length === 1 ? 'grid-cols-1' : pairs.length <= 3 ? 'grid-cols-2' : 'grid-cols-2 xl:grid-cols-3'}`}>
+                        {pairs.map(({ x: xCol, y: yCol }) => (
+                          <div key={`${xCol}-${yCol}`} className="border border-gray-100 rounded-xl p-2 bg-gray-50/50">
+                            <p className="text-xs font-medium text-gray-500 text-center mb-1">{xCol} × {yCol}</p>
+                            <ResponsiveContainer width="100%" height={220}>
+                              <ScatterChart margin={{ top: 5, right: 10, bottom: 20, left: 10 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                <XAxis type="number" dataKey={xCol} name={xCol} tick={{ fontSize: 10 }}
+                                  label={{ value: xCol, position: 'insideBottom', offset: -10, fontSize: 10 }} />
+                                <YAxis type="number" dataKey={yCol} name={yCol} tick={{ fontSize: 10 }}
+                                  label={{ value: yCol, angle: -90, position: 'insideLeft', fontSize: 10 }} />
+                                <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                                  content={({ payload }) => {
+                                    if (!payload?.length) return null;
+                                    const d = payload[0].payload;
+                                    return (
+                                      <div className="bg-white border border-gray-200 rounded-lg shadow px-3 py-2 text-xs">
+                                        <p className={`font-semibold mb-1 ${d.isAnomaly ? 'text-red-600' : 'text-purple-600'}`}>
+                                          {d.isAnomaly ? '⚠ Anomaly' : '● Normal'}
+                                        </p>
+                                        <p>{xCol}: <strong>{Number(d[xCol]).toLocaleString(undefined, { maximumFractionDigits: 3 })}</strong></p>
+                                        <p>{yCol}: <strong>{Number(d[yCol]).toLocaleString(undefined, { maximumFractionDigits: 3 })}</strong></p>
+                                        {d.anomalyScore != null && (
+                                          <p className="mt-1 text-orange-600">Score: <strong>{(d.anomalyScore * 100).toFixed(1)}%</strong></p>
+                                        )}
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <Scatter name="Normal"  data={normal.map(d => ({ ...d, [xCol]: d[xCol], [yCol]: d[yCol] }))}
+                                  fill="#8b5cf6" fillOpacity={0.45} r={2.5} />
+                                <Scatter name="Anomaly" data={outliers.map(d => ({ ...d, [xCol]: d[xCol], [yCol]: d[yCol] }))}
+                                  fill="#ef4444" fillOpacity={0.85} r={5}
+                                  shape={(props: any) => {
+                                    const { cx, cy } = props;
+                                    return (
+                                      <g>
+                                        <circle cx={cx} cy={cy} r={6} fill="#ef4444" fillOpacity={0.15} stroke="#ef4444" strokeWidth={1.5} />
+                                        <circle cx={cx} cy={cy} r={3} fill="#ef4444" />
+                                      </g>
+                                    );
+                                  }} />
+                              </ScatterChart>
+                            </ResponsiveContainer>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Anomaly score distribution */}
+                      {outliers.length > 0 && (
+                        <div className="mt-5 border-t border-gray-100 pt-4">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Top anomalies by score</p>
+                          <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                            {[...outliers]
+                              .sort((a, b) => (b.anomalyScore ?? 0) - (a.anomalyScore ?? 0))
+                              .slice(0, 20)
+                              .map((d, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs">
+                                  <span className="text-gray-400 w-6 text-right flex-shrink-0">#{d.index}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
+                                    <div className="h-full rounded-full bg-gradient-to-r from-orange-400 to-red-500"
+                                      style={{ width: `${((d.anomalyScore ?? 0) * 100).toFixed(1)}%` }} />
+                                  </div>
+                                  <span className="text-orange-600 font-medium w-10 text-right flex-shrink-0">
+                                    {((d.anomalyScore ?? 0) * 100).toFixed(0)}%
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
             ) : (
               <div className="flex items-center justify-center h-96 text-gray-400">
                 <div className="text-center">

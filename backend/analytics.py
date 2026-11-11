@@ -178,72 +178,148 @@ def perform_forecast(
     }
 
 def detect_anomalies(
-    df: pd.DataFrame, 
-    value_col: str, 
-    contamination: float = 0.05
+    df: pd.DataFrame,
+    value_col: str,
+    contamination: float = 0.05,
+    columns: Optional[List[str]] = None,
+    multivariate: bool = False,
 ) -> Dict[str, Any]:
     """
     Detect anomalies using Isolation Forest.
+
+    Univariate mode (multivariate=False, default):
+        Runs on `value_col` only.  Returns plot_data with {index, value, isAnomaly}.
+
+    Multivariate mode (multivariate=True):
+        Runs IsolationForest on `columns` (2–4 numeric columns).
+        Returns plot_data with {index, <col>:..., isAnomaly, anomaly_score}
+        plus a `pairs` list (all 2-column combinations) for the scatter matrix.
     """
     try:
         from sklearn.ensemble import IsolationForest
+        from sklearn.preprocessing import StandardScaler
     except ImportError:
         logger.error("scikit-learn is not installed")
         return {"error": "Analytics dependencies not installed"}
 
+    # ── 1. Column selection ──────────────────────────────────────────────────
+    if multivariate and columns and len(columns) >= 2:
+        feature_cols = [c for c in columns if c in df.columns]
+        if len(feature_cols) < 2:
+            return {"error": "At least 2 valid columns are required for multivariate mode"}
+        feature_cols = feature_cols[:4]          # cap at 4
+    else:
+        feature_cols = [value_col]
+        multivariate = False
+
+    # ── 2. Prep & validate ───────────────────────────────────────────────────
     try:
-        data = df[[value_col]].dropna()
-        
-        if len(data) < 10:
-            return {"error": "Not enough data points for anomaly detection"}
+        data = df[feature_cols].copy()
+        for col in feature_cols:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
+        data = data.dropna()
+    except Exception as e:
+        return {"error": f"Data preparation failed: {e}"}
+
+    total_len = len(data)
+    if total_len < 10:
+        return {"error": f"Not enough data points (need ≥10, got {total_len})"}
+
+    # ── 3. Isolation Forest ──────────────────────────────────────────────────
+    try:
+        scaler = StandardScaler()
+        X = scaler.fit_transform(data[feature_cols].values)
 
         clf = IsolationForest(contamination=contamination, random_state=42)
-        preds = clf.fit_predict(data)
-        
-        # -1 indicates anomaly, 1 indicates normal
-        data['is_anomaly'] = preds == -1
-        
-        # Prepare data for frontend - Downsample if too large to prevent browser crash
-        max_points = 2000
-        total_len = len(data)
-        
-        if total_len > max_points:
-            step = total_len // max_points
-            data_to_plot = data.iloc[::step].copy()
-        else:
-            data_to_plot = data.copy()
+        preds = clf.fit_predict(X)
+        # decision_function: more negative = more anomalous → invert for "anomaly score"
+        raw_scores = clf.decision_function(X)
+        # Normalise to 0–1 (1 = most anomalous)
+        s_min, s_max = raw_scores.min(), raw_scores.max()
+        norm_scores = (raw_scores - s_max) / (s_min - s_max + 1e-9)
 
-        plot_data = []
-        for i, (idx, row) in enumerate(data_to_plot.iterrows()):
+        data = data.copy()
+        data['_is_anomaly']    = preds == -1
+        data['_anomaly_score'] = norm_scores
+
+    except Exception as e:
+        logger.error(f"IsolationForest failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+    # ── 4. Downsample for browser ────────────────────────────────────────────
+    max_points = 2000
+    if total_len > max_points:
+        step = total_len // max_points
+        data_plot = data.iloc[::step].copy()
+    else:
+        data_plot = data.copy()
+
+    # ── 5. Build plot_data ───────────────────────────────────────────────────
+    plot_data: List[Dict[str, Any]] = []
+    if not multivariate:
+        # Univariate: simple {index, value, isAnomaly}
+        for i, (_, row) in enumerate(data_plot.iterrows()):
             val = row[value_col]
             plot_data.append({
-                "index": int(i),
-                "value": float(val) if not pd.isna(val) else None,
-                "isAnomaly": bool(row['is_anomaly'])
+                "index":     int(i),
+                "value":     float(val) if not pd.isna(val) else None,
+                "isAnomaly": bool(row['_is_anomaly']),
             })
-            
-        anomaly_count = int(data['is_anomaly'].sum())
-        all_vals = data[value_col].dropna()
-        return {
-            "data": plot_data,
-            "total_points": total_len,
-            "anomaly_count": anomaly_count,
-            "stats": {
-                "total_points":    total_len,
-                "anomaly_count":   anomaly_count,
-                "anomaly_pct":     round(anomaly_count / total_len * 100, 1) if total_len else 0,
-                "value_mean":      round(float(all_vals.mean()), 2) if len(all_vals) else None,
-                "value_std":       round(float(all_vals.std()),  2) if len(all_vals) else None,
-                "value_min":       round(float(all_vals.min()),  2) if len(all_vals) else None,
-                "value_max":       round(float(all_vals.max()),  2) if len(all_vals) else None,
-                "value_column":    value_col,
-                "contamination":   contamination,
+    else:
+        # Multivariate: include all feature columns + score
+        for i, (_, row) in enumerate(data_plot.iterrows()):
+            pt: Dict[str, Any] = {
+                "index":        int(i),
+                "isAnomaly":    bool(row['_is_anomaly']),
+                "anomalyScore": round(float(row['_anomaly_score']), 4),
             }
+            for col in feature_cols:
+                val = row[col]
+                pt[col] = float(val) if not pd.isna(val) else None
+            plot_data.append(pt)
+
+    # ── 6. Build scatter pairs for multivariate drill-down ───────────────────
+    pairs: List[Dict[str, str]] = []
+    if multivariate:
+        from itertools import combinations
+        pairs = [{"x": a, "y": b} for a, b in combinations(feature_cols, 2)]
+
+    # ── 7. Per-column stats ──────────────────────────────────────────────────
+    anomaly_count = int(data['_is_anomaly'].sum())
+    col_stats: Dict[str, Any] = {}
+    for col in feature_cols:
+        vals = data.loc[data[col].notna(), col]
+        col_stats[col] = {
+            "mean": round(float(vals.mean()), 2) if len(vals) else None,
+            "std":  round(float(vals.std()),  2) if len(vals) else None,
+            "min":  round(float(vals.min()),  2) if len(vals) else None,
+            "max":  round(float(vals.max()),  2) if len(vals) else None,
         }
-        
-    except Exception as e:
-        logger.error(f"Anomaly detection failed: {e}", exc_info=True)
-        return {"error": str(e)}
+
+    primary_vals = data[value_col].dropna() if value_col in feature_cols else data[feature_cols[0]].dropna()
+
+    return {
+        "data":          plot_data,
+        "pairs":         pairs,
+        "feature_cols":  feature_cols,
+        "multivariate":  multivariate,
+        "total_points":  total_len,
+        "anomaly_count": anomaly_count,
+        "stats": {
+            "total_points":   total_len,
+            "anomaly_count":  anomaly_count,
+            "anomaly_pct":    round(anomaly_count / total_len * 100, 1) if total_len else 0,
+            "value_mean":     round(float(primary_vals.mean()), 2) if len(primary_vals) else None,
+            "value_std":      round(float(primary_vals.std()),  2) if len(primary_vals) else None,
+            "value_min":      round(float(primary_vals.min()),  2) if len(primary_vals) else None,
+            "value_max":      round(float(primary_vals.max()),  2) if len(primary_vals) else None,
+            "value_column":   value_col,
+            "feature_cols":   feature_cols,
+            "multivariate":   multivariate,
+            "contamination":  contamination,
+            "col_stats":      col_stats,
+        },
+    }
 
 def calculate_correlation(
     df: pd.DataFrame, 

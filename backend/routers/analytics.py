@@ -93,36 +93,46 @@ async def get_forecast(request: ForecastRequest, org=Depends(get_current_org),
 @router.post("/analytics/anomaly")
 async def get_anomalies(request: AnomalyRequest, org=Depends(get_current_org),
                         user=Depends(require_permission("VIEW_ADVANCED"))):
-    """Detect anomalies in a dataset."""
+    """Detect anomalies — univariate (single column) or multivariate (2–4 columns)."""
     try:
         db_conn = get_org_connection_string(org)
         if not db_conn:
              raise HTTPException(status_code=400, detail="No database or file configured for this organization.")
-             
+
         import pandas as pd
         db_manager = DatabaseManager(connection_string=db_conn)
-        
+
         tbl = _safe_identifier(request.table_name)
-        val_col = _safe_identifier(request.value_column)
-        query = f"SELECT {val_col} FROM {tbl} LIMIT 10000"
-        # Offload blocking SQL read
+
+        # Determine which columns to SELECT
+        if request.multivariate and request.columns and len(request.columns) >= 2:
+            cols_to_fetch = list({request.value_column, *request.columns})  # deduplicate
+        else:
+            cols_to_fetch = [request.value_column]
+
+        select_clause = ", ".join(_safe_identifier(c) for c in cols_to_fetch)
+        query = f"SELECT {select_clause} FROM {tbl} LIMIT 10000"
+
         df = await run_in_threadpool(pd.read_sql, query, db_manager.get_engine())
         db_manager.close()
-        
+
         from analytics import detect_anomalies
-        # Offload heavy anomaly detection computation
         result = await run_in_threadpool(
-            detect_anomalies, 
-            df, 
-            request.value_column, 
-            request.contamination
+            detect_anomalies,
+            df,
+            request.value_column,
+            request.contamination,
+            request.columns if request.multivariate else None,
+            request.multivariate,
         )
-        
+
         if isinstance(result, dict) and "error" in result:
              raise HTTPException(status_code=400, detail=result["error"])
-             
+
         return result
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
          logger.error(f"Anomaly detection failed: {e}", exc_info=True)
          raise HTTPException(status_code=500, detail="Anomaly detection failed. This usually occurs if there are too few data points or invalid numeric values.")
