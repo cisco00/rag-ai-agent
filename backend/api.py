@@ -585,7 +585,6 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
         await websocket.close(code=4000)
         return
 
-    # ── Fix #2: Validate table_name to prevent SQL injection ──────────────
     from validators import TableNameValidator
     try:
         TableNameValidator.validate(table_name)
@@ -594,43 +593,81 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
         return
 
     await websocket.accept()
+
+    # ── Ping task: send a heartbeat every 20 s to prevent silent drops ────
+    async def _ping_loop():
+        try:
+            while True:
+                await asyncio.sleep(20)
+                await websocket.send_text(json.dumps({"_ping": True}))
+        except Exception:
+            pass
+
+    ping_task = asyncio.create_task(_ping_loop())
+
     try:
         db = DatabaseManager(connection_string=conn_str)
         try:
-            # Verify table actually exists in the org's database
             available_tables = db.get_tables()
             if table_name not in available_tables:
                 await websocket.send_text(json.dumps({"error": f"Table '{table_name}' not found"}))
                 await websocket.close(code=4001, reason="Table not found")
                 return
 
-            dialect      = db.engine.dialect.name
-            id_col       = "ctid" if dialect == "postgresql" else "rowid"
-            # L-2 fix: double-quote the table name for defence-in-depth even
-            # though TableNameValidator already restricts to [a-zA-Z0-9_].
-            safe_table   = f'"{table_name}"'
+            dialect    = db.engine.dialect.name
+            id_col     = "ctid" if dialect == "postgresql" else "rowid"
+            safe_table = f'"{table_name}"'
+
+            # ── Bootstrap: send up to 20 existing rows immediately ─────────
+            bootstrap_q = (
+                f"SELECT *, {id_col} as _stream_id FROM {safe_table} "
+                f"ORDER BY {id_col} DESC LIMIT 20"
+            )
+            boot_rows = await run_in_threadpool(db.execute_query, bootstrap_q)
             last_sent_id = None
+            if boot_rows:
+                # Send oldest-first so the chart builds left-to-right
+                for row in reversed(boot_rows):
+                    row.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+                    last_sent_id = row.pop("_stream_id", None)
+                    await websocket.send_text(json.dumps(row, default=str))
+
+            # ── Incremental loop: fetch ALL rows newer than last_sent_id ──
+            # Poll at 500 ms so new inserts arrive within half a second.
             while True:
-                query   = f"SELECT *, {id_col} as _stream_id FROM {safe_table} ORDER BY {id_col} DESC LIMIT 1"
-                # Offload blocking query to threadpool
-                results = await run_in_threadpool(db.execute_query, query)
-                if results:
-                    point      = results[0]
-                    current_id = point.get("_stream_id")
-                    if current_id != last_sent_id:
-                        if "timestamp" not in point:
-                            point["timestamp"] = datetime.now(timezone.utc).isoformat()
-                        point.pop("_stream_id", None)
-                        await websocket.send_text(json.dumps(point, default=str))
-                        last_sent_id = current_id
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
+
+                if last_sent_id is None:
+                    # table was empty at bootstrap; check for the first row
+                    q = (
+                        f"SELECT *, {id_col} as _stream_id FROM {safe_table} "
+                        f"ORDER BY {id_col} ASC LIMIT 50"
+                    )
+                else:
+                    # Fetch every row inserted since the last one we sent
+                    q = (
+                        f"SELECT *, {id_col} as _stream_id FROM {safe_table} "
+                        f"WHERE {id_col} > {last_sent_id} "
+                        f"ORDER BY {id_col} ASC LIMIT 50"
+                    )
+
+                new_rows = await run_in_threadpool(db.execute_query, q)
+                for row in new_rows:
+                    row.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+                    last_sent_id = row.pop("_stream_id", None)
+                    await websocket.send_text(json.dumps(row, default=str))
         finally:
             db.close()
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: {table_name}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+    finally:
+        ping_task.cancel()
 
 # ── SPA Static Files ──────────────────────────────────────────────────────────
 # Fix #14: The catch-all is GET-only. Registering it with POST/PUT/DELETE/OPTIONS
