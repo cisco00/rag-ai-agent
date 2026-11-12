@@ -375,37 +375,7 @@ interface DataTransformationProps {
 export function DataTransformation({ apiKey, initialJoin }: DataTransformationProps) {
   const [mode, setMode] = useState<'list' | 'canvas'>(initialJoin ? 'canvas' : 'list');
 
-  // ── Canvas mode: render entirely different UI ─────────────────────────────
-  if (mode === 'canvas') {
-    return (
-      <div className="flex flex-col h-full">
-        {/* Mode toggle header */}
-        <div className="flex items-center gap-2 px-6 pt-4 pb-0 shrink-0">
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-            <button onClick={() => setMode('list')}
-              className="flex items-center gap-1.5 px-4 py-2 bg-white text-gray-600 hover:bg-gray-50 font-medium">
-              <Wrench className="size-4" /> List View
-            </button>
-            <button
-              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium">
-              <GitBranch className="size-4" /> Canvas
-            </button>
-          </div>
-          <span className="text-xs text-gray-400">Visual pipeline with branching · error ports · drag &amp; drop</span>
-          {initialJoin && (
-            <span className="ml-2 flex items-center gap-1.5 text-xs font-medium text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full">
-              <span>🔗</span>
-              Join from Schema: <strong>{initialJoin.leftTable}</strong> ↔ <strong>{initialJoin.rightTable}</strong>
-            </span>
-          )}
-        </div>
-        <div className="flex-1 overflow-hidden mt-4">
-          <PipelineCanvas apiKey={apiKey ?? ''} initialJoin={initialJoin} />
-        </div>
-      </div>
-    );
-  }
-
+  // ── All hooks must come before any conditional return ─────────────────────
   const [selectedTable, setSelectedTable] = useState('');
   const [operations, setOperations] = useState<Operation[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1343,6 +1313,35 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
 
   const categories = [...new Set(operationTypes.map(op => op.category))];
   const previewData = previewTab==='before' ? previewBefore : previewAfter;
+
+  // ── Canvas mode (must come after all hooks) ───────────────────────────────
+  if (mode === 'canvas') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-2 px-6 pt-4 pb-0 shrink-0">
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            <button onClick={() => setMode('list')}
+              className="flex items-center gap-1.5 px-4 py-2 bg-white text-gray-600 hover:bg-gray-50 font-medium">
+              <Wrench className="size-4" /> List View
+            </button>
+            <button className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white font-medium">
+              <GitBranch className="size-4" /> Canvas
+            </button>
+          </div>
+          <span className="text-xs text-gray-400">Visual pipeline with branching · error ports · drag &amp; drop</span>
+          {initialJoin && (
+            <span className="ml-2 flex items-center gap-1.5 text-xs font-medium text-violet-700 bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full">
+              <span>🔗</span>
+              Join from Schema: <strong>{initialJoin.leftTable}</strong> ↔ <strong>{initialJoin.rightTable}</strong>
+            </span>
+          )}
+        </div>
+        <div className="flex-1 overflow-hidden mt-4">
+          <PipelineCanvas apiKey={apiKey ?? ''} initialJoin={initialJoin} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
