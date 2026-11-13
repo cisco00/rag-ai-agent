@@ -633,9 +633,14 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
                     await websocket.send_text(json.dumps(row, default=str))
 
             # ── Incremental loop: fetch ALL rows newer than last_sent_id ──
-            # Poll at 500 ms so new inserts arrive within half a second.
+            # Adaptive poll interval:
+            #   • 200 ms when rows are arriving (keep latency low)
+            #   • backs off up to 2 s when the table is idle (saves DB load)
+            poll_interval = 0.5
+            idle_polls = 0
+
             while True:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(poll_interval)
 
                 if last_sent_id is None:
                     # table was empty at bootstrap; check for the first row
@@ -652,10 +657,19 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
                     )
 
                 new_rows = await run_in_threadpool(db.execute_query, q)
-                for row in new_rows:
-                    row.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
-                    last_sent_id = row.pop("_stream_id", None)
-                    await websocket.send_text(json.dumps(row, default=str))
+                if new_rows:
+                    # Data is flowing — tighten the interval
+                    idle_polls = 0
+                    poll_interval = max(0.2, poll_interval * 0.5)
+                    for row in new_rows:
+                        row.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+                        last_sent_id = row.pop("_stream_id", None)
+                        await websocket.send_text(json.dumps(row, default=str))
+                else:
+                    # No new rows — gradually back off (saves DB round-trips)
+                    idle_polls += 1
+                    if idle_polls >= 4:
+                        poll_interval = min(poll_interval * 1.5, 2.0)
         finally:
             db.close()
     except WebSocketDisconnect:
