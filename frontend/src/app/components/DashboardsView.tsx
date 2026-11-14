@@ -3,12 +3,13 @@ import {
   LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw,
   X, Pin, Globe, EyeOff, FileText, Users, Maximize2, Minimize2,
   GripVertical, TrendingUp, CheckCircle2, Menu, PanelLeftClose,
-  Code2, Copy, Check, History,
+  Code2, Copy, Check, History, Sparkles,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
 import { CardComments, CommentBubble } from './CardComments';
 import { DashboardVersionHistory } from './DashboardVersionHistory';
+import { AiChartBuilderModal } from './AiChartBuilderModal';
 
 interface Dashboard {
   id: number; name: string; description?: string; is_public: number;
@@ -94,6 +95,9 @@ export function DashboardsView({
 
   // Mobile sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // AI Chart Builder modal
+  const [showAiBuilder, setShowAiBuilder] = useState(false);
 
   // Embed modal state
   const [embedModal, setEmbedModal] = useState<{
@@ -511,6 +515,15 @@ export function DashboardsView({
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {/* AI Chart Builder */}
+                <button
+                  onClick={() => setShowAiBuilder(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors"
+                  title="Build a chart with AI"
+                >
+                  <Sparkles className="size-3.5" />
+                  <span className="hidden sm:inline">AI Builder</span>
+                </button>
                 {/* Refresh All */}
                 <button
                   onClick={handleRefreshAll}
@@ -870,6 +883,18 @@ export function DashboardsView({
             );
             setSelected((prev: any) => prev ? { ...prev, ...dash } : prev);
             setCards(restoredCards);
+          }}
+        />
+      )}
+
+      {/* AI Chart Builder modal */}
+      {showAiBuilder && (
+        <AiChartBuilderModal
+          dashboards={dashboards.map(d => ({ id: d.id, name: d.name }))}
+          onClose={() => setShowAiBuilder(false)}
+          onCardAdded={(dashId) => {
+            setShowAiBuilder(false);
+            if (selected?.id === dashId) fetchCards(dashId);
           }}
         />
       )}

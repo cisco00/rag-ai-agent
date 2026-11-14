@@ -80,6 +80,7 @@ export function Sidebar({
     { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
     { id: 'schema', label: 'Schema Diagram', icon: Network, disabled: !isConfigured },
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
+    { id: 'quality', label: 'Data Quality', icon: ShieldCheck, disabled: !isConfigured },
   ];
 
   const hasPerm = (perm: string) => {

@@ -615,3 +615,67 @@ async def semantic_search_queries(
     except Exception as exc:
         logger.warning(f"[semantic-search] failed: {exc}")
         return {"results": [], "method": "error", "error": str(exc)}
+
+
+# ── AI Chart Builder ──────────────────────────────────────────────────────────
+
+class AiChartBuilderRequest(_BM):
+    prompt: str
+    table_hint: Optional[str] = None   # optional table to focus on
+
+@router.post("/analytics/ai-chart-builder")
+async def ai_chart_builder(
+    request: AiChartBuilderRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """
+    Natural language → SQL → preview data ready to pin as a dashboard card.
+
+    Returns:
+        sql_query    – the generated SELECT
+        data         – up to 50 rows as list[dict]
+        columns      – column names
+        visualization – suggested chart config (type, x, y, …)
+        title        – short card title derived from the prompt
+        response_text – LLM narrative
+    """
+    from dependencies import get_org_connection_string
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+
+    schema_summary = get_cached_schema_summary(conn_str)
+
+    # Augment prompt: ask the agent to stay concise and chart-friendly
+    table_ctx = f" Focus on the table '{request.table_hint}'." if request.table_hint else ""
+    chart_prompt = (
+        f"{request.prompt}{table_ctx} "
+        "Return data suitable for a chart. Keep the result to at most 50 rows, "
+        "ordered so a time-series or ranked chart reads naturally."
+    )
+
+    try:
+        from main import AnalyticsAgent
+        agent = AnalyticsAgent(
+            connection_string=conn_str,
+            schema_summary=schema_summary,
+        )
+        result = await run_in_threadpool(agent.run_query, chart_prompt)
+    except Exception as exc:
+        logger.error(f"[ai-chart-builder] agent failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Chart generation failed: {exc}")
+
+    # Clamp data to 50 rows
+    data = result.get("data") or []
+    if len(data) > 50:
+        data = data[:50]
+
+    return {
+        "sql_query":     result.get("sql_query", ""),
+        "data":          data,
+        "columns":       result.get("columns", []),
+        "visualization": result.get("visualization"),
+        "title":         request.prompt[:80],
+        "response_text": result.get("response", ""),
+    }

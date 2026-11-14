@@ -58,6 +58,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 # Domain Routers
 from routers import auth, data, analytics, branding, sessions, transformations, alerts, dashboards, insights, org_context, admin, integrations, billing, query_templates, schema_diagram, card_comments, sheets, totp, data_permissions, audit, sso
 from routers import cloud_storage as cloud_storage_router
+from routers import data_quality
 
 load_dotenv()
 
@@ -557,6 +558,7 @@ app.include_router(data_permissions.router,                          tags=["Data
 app.include_router(audit.router,                                     tags=["Audit Trail"])
 app.include_router(sso.router,                                       tags=["SSO / SAML"])
 app.include_router(cloud_storage_router.router,                      tags=["Cloud Storage"])
+app.include_router(data_quality.router,                              tags=["Data Quality"])
 
 
 @app.get("/")

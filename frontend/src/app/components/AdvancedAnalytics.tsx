@@ -25,17 +25,17 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
   // Forecast configuration
   const [forecastConfig, setForecastConfig] = useSessionStorage('advanced_analytics_forecastConfig', {
-    table: 'sales',
-    dateColumn: 'date',
-    valueColumn: 'revenue',
+    table: '',
+    dateColumn: '',
+    valueColumn: '',
     periods: 30,
     freq: 'D',
   });
 
   // Anomaly configuration
   const [anomalyConfig, setAnomalyConfig] = useSessionStorage('advanced_analytics_anomalyConfig', {
-    table: 'sales',
-    valueColumn: 'revenue',
+    table: '',
+    valueColumn: '',
     contamination: 0.05,
     multivariate: false,
     mvColumns: [] as string[],  // selected columns for multivariate mode
@@ -45,14 +45,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
   // Correlation configuration
   const [correlationConfig, setCorrelationConfig] = useSessionStorage('advanced_analytics_correlationConfig', {
-    table: 'sales',
-    columns: ['revenue', 'quantity', 'profit', 'discount'],
+    table: '',
+    columns: [] as string[],
     method: 'pearson',
   });
 
   // Cluster configuration
   const [clusterConfig, setClusterConfig] = useSessionStorage('advanced_analytics_clusterConfig', {
-    table: 'sales',
+    table: '',
     xColumn: '',
     yColumn: '',
     nClusters: 3,
@@ -266,19 +266,19 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const fetchTables = useCallback(async () => {
     try {
       const resp = await api.get<{ tables: string[] }>('/tables');
-      if (resp.tables) {
+      if (resp.tables && resp.tables.length > 0) {
         setTables(resp.tables);
-        if (resp.tables.length > 0) {
-          // Only auto-select table if not already configured in session storage
-          setForecastConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
-          setAnomalyConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
-          setCorrelationConfig((prev: any) => prev.table !== 'sales' ? prev : { ...prev, table: resp.tables[0] });
-        }
+        const first = resp.tables[0];
+        // Auto-select the first real table if the config is empty or stale
+        setForecastConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
+        setAnomalyConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
+        setCorrelationConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
+        setClusterConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
       }
     } catch (err) {
       console.error('Failed to fetch tables:', err);
     }
-  }, [setForecastConfig, setAnomalyConfig, setCorrelationConfig]);
+  }, [setForecastConfig, setAnomalyConfig, setCorrelationConfig, setClusterConfig]);
 
   const handleRunForecast = useCallback(async () => {
     if (!forecastConfig.table || !forecastConfig.dateColumn || !forecastConfig.valueColumn) return;
