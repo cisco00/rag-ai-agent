@@ -334,7 +334,8 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const handleRunAnomalyDetection = async () => {
     if (!anomalyConfig.table || !anomalyConfig.valueColumn) return;
     // multivariate requires ≥2 selected columns
-    if (anomalyConfig.multivariate && anomalyConfig.mvColumns.length < 2) {
+    const mvCols: string[] = anomalyConfig.mvColumns ?? [];
+    if (anomalyConfig.multivariate && mvCols.length < 2) {
       alert('Select at least 2 columns for multivariate mode.');
       return;
     }
@@ -348,7 +349,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         multivariate:  anomalyConfig.multivariate,
       };
       if (anomalyConfig.multivariate) {
-        payload.columns = anomalyConfig.mvColumns;
+        payload.columns = mvCols;
       }
 
       const resp = await api.post<any>('/analytics/anomaly', payload);
@@ -743,12 +744,12 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Detection Mode</label>
                 <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm font-medium">
                   <button
-                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: false })}
+                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: false, mvColumns: anomalyConfig.mvColumns ?? [] })}
                     className={`flex-1 py-2 transition-colors ${!anomalyConfig.multivariate ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                     Univariate
                   </button>
                   <button
-                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: true })}
+                    onClick={() => setAnomalyConfig({ ...anomalyConfig, multivariate: true, mvColumns: anomalyConfig.mvColumns ?? [] })}
                     className={`flex-1 py-2 transition-colors ${anomalyConfig.multivariate ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                     Multivariate
                   </button>
@@ -776,8 +777,9 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                   </label>
                   <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto pr-1">
                     {anomalyColumns.map(c => {
-                      const checked = anomalyConfig.mvColumns.includes(c);
-                      const atMax   = anomalyConfig.mvColumns.length >= 4 && !checked;
+                      const safeMvCols: string[] = anomalyConfig.mvColumns ?? [];
+                      const checked = safeMvCols.includes(c);
+                      const atMax   = safeMvCols.length >= 4 && !checked;
                       return (
                         <label key={c} className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm cursor-pointer select-none transition-colors ${
                           checked   ? 'bg-purple-50 border-purple-400 text-purple-800'
@@ -789,8 +791,8 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                             disabled={atMax}
                             onChange={e => {
                               const next = e.target.checked
-                                ? [...anomalyConfig.mvColumns, c]
-                                : anomalyConfig.mvColumns.filter((x: string) => x !== c);
+                                ? [...safeMvCols, c]
+                                : safeMvCols.filter((x: string) => x !== c);
                               setAnomalyConfig({ ...anomalyConfig, mvColumns: next });
                             }} />
                           <span className={`inline-block w-3 h-3 rounded border mr-0.5 flex-shrink-0 ${checked ? 'bg-purple-500 border-purple-500' : 'border-gray-300'}`} />
@@ -800,7 +802,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                     })}
                   </div>
                   <p className="text-xs text-gray-400 mt-1.5">
-                    {anomalyConfig.mvColumns.length}/4 selected · IsolationForest scores all selected dimensions jointly
+                    {(anomalyConfig.mvColumns ?? []).length}/4 selected · IsolationForest scores all selected dimensions jointly
                   </p>
                 </div>
               )}
@@ -916,10 +918,11 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 )}
 
                 {/* ── Multivariate: scatter matrix (all column pairs) ── */}
-                {anomalyResult?.multivariate && anomalyResult?.pairs?.length > 0 && (() => {
-                  const pairs: { x: string; y: string }[] = anomalyResult.pairs;
-                  const normal   = anomalyData.filter(d => !d.isAnomaly);
-                  const outliers = anomalyData.filter(d =>  d.isAnomaly);
+                {anomalyResult?.multivariate && (anomalyResult?.pairs?.length ?? 0) > 0 && (() => {
+                  const pairs: { x: string; y: string }[] = anomalyResult.pairs ?? [];
+                  const safeData: any[] = Array.isArray(anomalyData) ? anomalyData : [];
+                  const normal   = safeData.filter(d => !d.isAnomaly);
+                  const outliers = safeData.filter(d =>  d.isAnomaly);
                   return (
                     <div>
                       <p className="text-xs text-gray-400 mb-3">
