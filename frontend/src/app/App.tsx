@@ -531,6 +531,7 @@ export default function App() {
                 setJoinToTransform(joinConfig);
                 setCurrentView('transform');
               }}
+              onNavigate={(view) => setCurrentView(view as any)}
             />
           )}
           {currentView === 'admin' && (!desktop || !license || license.hasFeature('admin_panel') ? <AdminPanel /> : <FeatureLockedMessage feature="Admin Panel" />)}
@@ -550,7 +551,7 @@ export default function App() {
               <TwoFactorSettings />
             </div>
           )}
-          {currentView === 'catalog' && <DataCatalog />}
+          {currentView === 'catalog' && <DataCatalog onNavigate={(view) => setCurrentView(view as any)} />}
           {currentView === 'permissions' && <DataPermissions />}
           {currentView === 'audit' && <AuditTrail />}
           {currentView === 'sso' && <SSOConfig />}

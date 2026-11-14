@@ -30,6 +30,7 @@ import {
   Clock,
   Tag,
 } from 'lucide-react';
+import { ImpactButton } from './ImpactAnalysisPanel';
 
 /* ──────────────────────────── types ──────────────────────────────────────── */
 
@@ -66,9 +67,10 @@ function timeAgo(iso: string): string {
 interface ColumnRowProps {
   entry: ColumnDescription;
   onSave: (col: string, desc: string) => Promise<void>;
+  onNavigate?: (view: string) => void;
 }
 
-function ColumnRow({ entry, onSave }: ColumnRowProps) {
+function ColumnRow({ entry, onSave, onNavigate }: ColumnRowProps) {
   const [editing,  setEditing]  = useState(false);
   const [draft,    setDraft]    = useState(entry.description || '');
   const [saving,   setSaving]   = useState(false);
@@ -141,8 +143,13 @@ function ColumnRow({ entry, onSave }: ColumnRowProps) {
             }`}>
               {entry.description || 'No description yet'}
             </p>
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               {saved && <CheckCircle2 className="size-3.5 text-emerald-500" />}
+              <ImpactButton
+                table={entry.table_name}
+                column={entry.column_name}
+                onNavigate={onNavigate}
+              />
               <button
                 onClick={() => setEditing(true)}
                 className="p-1 text-slate-400 hover:text-blue-600 rounded-lg transition-colors"
@@ -240,7 +247,11 @@ function TableSection({
 
 /* ──────────────────────────── main component ──────────────────────────────── */
 
-export function DataCatalog() {
+interface DataCatalogProps {
+  onNavigate?: (view: string) => void;
+}
+
+export function DataCatalog({ onNavigate }: DataCatalogProps = {}) {
   const [tables,     setTables]     = useState<string[]>([]);
   const [selected,   setSelected]   = useState<string | null>(null);
   const [columns,    setColumns]    = useState<Record<string, ColumnDescription[]>>({});
@@ -453,6 +464,7 @@ export function DataCatalog() {
                         key={col.column_name}
                         entry={col}
                         onSave={(colName, desc) => handleSave(tableName, colName, desc)}
+                        onNavigate={onNavigate}
                       />
                     ))}
                   </div>

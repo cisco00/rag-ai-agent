@@ -13,9 +13,10 @@ import {
   Network, RefreshCw, ZoomIn, ZoomOut, Maximize2,
   CheckSquare, Square, Play, Key, Link2, Info,
   GitMerge, Eye, ArrowRight, ChevronDown, Loader2, ExternalLink,
-  X, Code2,
+  X, Code2, Zap,
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { ImpactAnalysisPanel } from './ImpactAnalysisPanel';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ interface TablePos {
 interface SchemaDiagramProps {
   onRunQuery?: (query: string) => void;
   onSendToTransform?: (pipeline: { leftTable: string; rightTable: string; leftKey: string; rightKey: string; joinType: string }) => void;
+  onNavigate?: (view: string) => void;
 }
 
 // ── Join explorer types ───────────────────────────────────────────────────────
@@ -117,7 +119,7 @@ function autoLayout(tables: string[], columns: Record<string, Column[]>): Record
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramProps) {
+export function SchemaDiagram({ onRunQuery, onSendToTransform, onNavigate }: SchemaDiagramProps) {
   const [data, setData] = useState<DiagramData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +128,7 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [hoveredTable, setHoveredTable] = useState<string | null>(null);
+  const [impactTarget, setImpactTarget] = useState<{ table: string; column: string } | null>(null);
 
   // ── Join Explorer state ───────────────────────────────────────────────────
   const [joinMode, setJoinMode] = useState(false);
@@ -465,13 +468,18 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
           const badge = colTypeBadge(col.type);
           const isFk = fkCols.has(col.name);
           const isId = col.name.toLowerCase() === 'id';
+          const isImpactActive = impactTarget?.table === table && impactTarget?.column === col.name;
           return (
-            <g key={col.name} transform={`translate(0, ${HEADER_H + i * ROW_H})`}>
+            <g
+              key={col.name}
+              transform={`translate(0, ${HEADER_H + i * ROW_H})`}
+              style={{ cursor: 'pointer' }}
+              onClick={e => { e.stopPropagation(); setImpactTarget({ table, column: col.name }); }}
+            >
               <rect
                 width={TABLE_W}
                 height={ROW_H}
-                fill={i % 2 === 0 ? '#f8fafc' : 'white'}
-                style={{ pointerEvents: 'none' }}
+                fill={isImpactActive ? '#fef3c7' : i % 2 === 0 ? '#f8fafc' : 'white'}
               />
               {/* Key icon */}
               {(isId || isFk) && (
@@ -484,7 +492,7 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
                 x={isId || isFk ? 26 : 12}
                 y={ROW_H / 2 + 1}
                 dominantBaseline="middle"
-                fill="#374151"
+                fill={isImpactActive ? '#92400e' : '#374151'}
                 fontSize={11}
                 fontFamily="system-ui, sans-serif"
                 style={{ userSelect: 'none', pointerEvents: 'none' }}
@@ -493,8 +501,8 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
               </text>
               {/* Type badge */}
               <foreignObject x={TABLE_W - 42} y={ROW_H / 2 - 8} width={38} height={16}>
-                <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${badge.cls}`}>
-                  {badge.label}
+                <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${isImpactActive ? 'bg-amber-200 text-amber-800' : badge.cls}`}>
+                  {isImpactActive ? '⚡' : badge.label}
                 </span>
               </foreignObject>
             </g>
@@ -619,7 +627,7 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
             <span className="flex items-center gap-1"><span className="text-amber-500">🔑</span> Primary Key</span>
             <span className="flex items-center gap-1"><span className="text-indigo-500">🔗</span> Foreign Key</span>
             <span className="flex items-center gap-1"><span className="inline-block w-6 h-px bg-slate-400 border-dashed border" /></span><span>Inferred relationship</span>
-            <span className="ml-auto flex items-center gap-1 text-gray-400"><Info size={12} /> Drag tables · Scroll to zoom · Click checkbox to select</span>
+            <span className="ml-auto flex items-center gap-1 text-gray-400"><Info size={12} /> Drag tables · Scroll to zoom · <span className="text-amber-500 font-medium">Click column → impact</span></span>
           </>
         ) : (
           <>
@@ -801,6 +809,18 @@ export function SchemaDiagram({ onRunQuery, onSendToTransform }: SchemaDiagramPr
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── Impact Analysis panel ───────────────────────────────────────── */}
+        {impactTarget && (
+          <div className="absolute top-3 right-3 w-96 max-h-[80%] overflow-y-auto z-40 shadow-2xl rounded-2xl">
+            <ImpactAnalysisPanel
+              table={impactTarget.table}
+              column={impactTarget.column}
+              onClose={() => setImpactTarget(null)}
+              onNavigate={v => { setImpactTarget(null); onNavigate?.(v); }}
+            />
           </div>
         )}
 
