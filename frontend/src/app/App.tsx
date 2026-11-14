@@ -41,6 +41,7 @@ import { SSOConfig } from './components/SSOConfig';
 import { CloudStorageSettings } from './components/CloudStorageSettings';
 import { SharedDashboard } from './components/SharedDashboard';
 import { DataQualityMonitor } from './components/DataQualityMonitor';
+import { NotebookView } from './components/NotebookView';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
@@ -69,7 +70,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality' | 'notebook';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -561,6 +562,7 @@ export default function App() {
           {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}
           {currentView === 'quality' && <DataQualityMonitor apiKey={apiKey!} />}
+          {currentView === 'notebook' && <NotebookView apiKey={apiKey!} />}
         </main>
       </div>
     </div>

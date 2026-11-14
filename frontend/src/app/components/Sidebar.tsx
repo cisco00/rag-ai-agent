@@ -29,7 +29,8 @@ import {
   ClipboardList,
   KeyRound,
   CloudUpload,
-  X
+  X,
+  NotebookPen,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -78,6 +79,7 @@ export function Sidebar({
     { id: 'boards', label: 'Dashboards', icon: LayoutGrid, disabled: !isConfigured },
     { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured, badge: unseenAlerts > 0 ? unseenAlerts : undefined },
     { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
+    { id: 'notebook', label: 'Notebook', icon: NotebookPen, disabled: !isConfigured },
     { id: 'schema', label: 'Schema Diagram', icon: Network, disabled: !isConfigured },
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
     { id: 'quality', label: 'Data Quality', icon: ShieldCheck, disabled: !isConfigured },
