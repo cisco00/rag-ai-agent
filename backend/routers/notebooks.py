@@ -19,7 +19,7 @@ from sqlalchemy import create_engine
 
 from dependencies import get_current_org, get_org_connection_string
 from auth import get_current_user
-from models import get_db
+from models import get_db, admin_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -140,9 +140,8 @@ async def list_notebooks(
     org=Depends(get_current_org),
     user=Depends(get_current_user),
 ):
+    _ensure_table(admin_engine)
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
         rows = (
             db.query(NotebookRecord)
             .filter(NotebookRecord.org_id == org.id)
@@ -158,9 +157,8 @@ async def create_notebook(
     org=Depends(get_current_org),
     user=Depends(get_current_user),
 ):
+    _ensure_table(admin_engine)
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
         nb = NotebookRecord(
             org_id=org.id,
             created_by=getattr(user, "id", None),
@@ -179,9 +177,8 @@ async def get_notebook(
     org=Depends(get_current_org),
     user=Depends(get_current_user),
 ):
+    _ensure_table(admin_engine)
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
@@ -198,9 +195,8 @@ async def update_notebook(
     org=Depends(get_current_org),
     user=Depends(get_current_user),
 ):
+    _ensure_table(admin_engine)
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
@@ -223,9 +219,8 @@ async def delete_notebook(
     org=Depends(get_current_org),
     user=Depends(get_current_user),
 ):
+    _ensure_table(admin_engine)
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
