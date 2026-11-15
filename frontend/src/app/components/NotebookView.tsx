@@ -214,12 +214,7 @@ function SqlCell({
                 </span>
                 {hasChart && (
                   <div className="flex items-center gap-1 ml-auto">
-                    <button
-                      onClick={() => {/* handled by parent toggle */}}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-gray-500 hover:bg-gray-100"
-                    >
-                      {/* Chart/table toggle handled in parent via showChart prop */}
-                    </button>
+                    <span className="text-xs text-gray-400 italic">Use Table / Chart below</span>
                   </div>
                 )}
               </div>
@@ -228,7 +223,6 @@ function SqlCell({
               {hasChart && (
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-white border-b border-gray-100">
                   <button
-                    onClick={() => {/* parent must handle showChart toggle */}}
                     className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
                       !cell.showChart ? 'bg-gray-100 text-gray-700' : 'text-gray-400 hover:bg-gray-50'
                     }`}

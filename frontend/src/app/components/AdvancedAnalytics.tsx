@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
-import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock } from 'lucide-react';
+import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock, GitBranch, TreePine, Sigma, FlaskConical } from 'lucide-react';
 import { api } from '../../lib/api';
 import { AnalyticsInterpretation } from './AnalyticsInterpretation';
 import {
@@ -13,7 +13,7 @@ interface AdvancedAnalyticsProps {
   apiKey: string;
 }
 
-type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation' | 'cluster';
+type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation' | 'cluster' | 'regression' | 'classification' | 'pca' | 'hypothesis';
 
 export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
@@ -61,9 +61,42 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [clusterData, setClusterData] = useSessionStorage<any>('advanced_analytics_clusterData', null);
   const [clusterColumns, setClusterColumns] = useState<string[]>([]);
 
+  // Regression
+  const [regressionConfig, setRegressionConfig] = useSessionStorage('advanced_analytics_regressionConfig', {
+    table: '', targetColumn: '', featureColumns: [] as string[], testSize: 0.2,
+  });
+  const [regressionResult, setRegressionResult] = useSessionStorage<any>('advanced_analytics_regressionResult', null);
+  const [regressionColumns, setRegressionColumns] = useState<string[]>([]);
+  const [regressionStats, setRegressionStats] = useState<Record<string, any>>({});
+
+  // Classification
+  const [classConfig, setClassConfig] = useSessionStorage('advanced_analytics_classConfig', {
+    table: '', targetColumn: '', featureColumns: [] as string[], testSize: 0.2, maxDepth: '' as string,
+  });
+  const [classResult, setClassResult] = useSessionStorage<any>('advanced_analytics_classResult', null);
+  const [classColumns, setClassColumns] = useState<string[]>([]);
+  const [classStats, setClassStats] = useState<Record<string, any>>({});
+
+  // PCA
+  const [pcaConfig, setPcaConfig] = useSessionStorage('advanced_analytics_pcaConfig', {
+    table: '', columns: [] as string[], nComponents: 2,
+  });
+  const [pcaResult, setPcaResult] = useSessionStorage<any>('advanced_analytics_pcaResult', null);
+  const [pcaColumns, setPcaColumns] = useState<string[]>([]);
+  const [pcaStats, setPcaStats] = useState<Record<string, any>>({});
+
+  // Hypothesis
+  const [hypoConfig, setHypoConfig] = useSessionStorage('advanced_analytics_hypoConfig', {
+    table: '', column1: '', column2: '', testType: 'ttest_ind', alpha: 0.05, popmean: 0,
+  });
+  const [hypoResult, setHypoResult] = useSessionStorage<any>('advanced_analytics_hypoResult', null);
+  const [hypoColumns, setHypoColumns] = useState<string[]>([]);
+  const [hypoStats, setHypoStats] = useState<Record<string, any>>({});
+
   // AI insights
   const [insights, setInsights] = useState<Record<AnalyticsTab, string[]>>({
     forecast: [], anomaly: [], correlation: [], cluster: [],
+    regression: [], classification: [], pca: [], hypothesis: [],
   });
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(true);
@@ -170,6 +203,19 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     };
     fetchClusterCols();
   }, [clusterConfig.table]);
+
+  // Regression / Classification / PCA / Hypothesis column fetchers
+  const _fetchColsFor = useCallback(async (table: string, setter: (c: string[]) => void) => {
+    if (!table) return;
+    try {
+      const data = await api.get<any>(`/tables/${table}/preview?limit=1`);
+      if (data?.columns) setter(data.columns.map((c: any) => c.name));
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { _fetchColsFor(regressionConfig.table, setRegressionColumns); }, [regressionConfig.table]);
+  useEffect(() => { _fetchColsFor(classConfig.table, setClassColumns); }, [classConfig.table]);
+  useEffect(() => { _fetchColsFor(pcaConfig.table, setPcaColumns); }, [pcaConfig.table]);
+  useEffect(() => { _fetchColsFor(hypoConfig.table, setHypoColumns); }, [hypoConfig.table]);
 
   const fetchSnapshots = useCallback(async (tab: AnalyticsTab) => {
     setSnapshotsLoading(true);
@@ -445,6 +491,83 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     }
   };
 
+  // ── New module run handlers ──────────────────────────────────────────────
+
+  const handleRunRegression = async () => {
+    if (!regressionConfig.table || !regressionConfig.targetColumn || regressionConfig.featureColumns.length === 0) return;
+    setIsProcessing(true);
+    try {
+      const resp = await api.post<any>('/analytics/regression', {
+        table_name:       regressionConfig.table,
+        target_column:    regressionConfig.targetColumn,
+        feature_columns:  regressionConfig.featureColumns,
+        test_size:        regressionConfig.testSize,
+        include_residuals: true,
+      });
+      if (resp?.error) { alert(`Regression failed: ${resp.error}`); return; }
+      setRegressionResult(resp);
+      setRegressionStats({ ...(resp?.stats ?? {}), table: regressionConfig.table });
+    } catch (err: any) {
+      alert(`Regression failed: ${err.message}`);
+    } finally { setIsProcessing(false); }
+  };
+
+  const handleRunClassification = async () => {
+    if (!classConfig.table || !classConfig.targetColumn || classConfig.featureColumns.length === 0) return;
+    setIsProcessing(true);
+    try {
+      const resp = await api.post<any>('/analytics/classification', {
+        table_name:      classConfig.table,
+        target_column:   classConfig.targetColumn,
+        feature_columns: classConfig.featureColumns,
+        test_size:       classConfig.testSize,
+        max_depth:       classConfig.maxDepth ? parseInt(classConfig.maxDepth) : null,
+      });
+      if (resp?.error) { alert(`Classification failed: ${resp.error}`); return; }
+      setClassResult(resp);
+      setClassStats({ ...(resp?.stats ?? {}), table: classConfig.table });
+    } catch (err: any) {
+      alert(`Classification failed: ${err.message}`);
+    } finally { setIsProcessing(false); }
+  };
+
+  const handleRunPCA = async () => {
+    if (!pcaConfig.table) return;
+    setIsProcessing(true);
+    try {
+      const resp = await api.post<any>('/analytics/pca', {
+        table_name:   pcaConfig.table,
+        columns:      pcaConfig.columns.length > 0 ? pcaConfig.columns : null,
+        n_components: pcaConfig.nComponents,
+      });
+      if (resp?.error) { alert(`PCA failed: ${resp.error}`); return; }
+      setPcaResult(resp);
+      setPcaStats({ ...(resp?.stats ?? {}), table: pcaConfig.table });
+    } catch (err: any) {
+      alert(`PCA failed: ${err.message}`);
+    } finally { setIsProcessing(false); }
+  };
+
+  const handleRunHypothesis = async () => {
+    if (!hypoConfig.table || !hypoConfig.column1) return;
+    setIsProcessing(true);
+    try {
+      const resp = await api.post<any>('/analytics/hypothesis', {
+        table_name: hypoConfig.table,
+        column1:    hypoConfig.column1,
+        column2:    hypoConfig.column2 || null,
+        test_type:  hypoConfig.testType,
+        alpha:      hypoConfig.alpha,
+        popmean:    hypoConfig.popmean,
+      });
+      if (resp?.error) { alert(`Hypothesis test failed: ${resp.error}`); return; }
+      setHypoResult(resp);
+      setHypoStats({ ...(resp?.stats ?? {}), table: hypoConfig.table });
+    } catch (err: any) {
+      alert(`Hypothesis test failed: ${err.message}`);
+    } finally { setIsProcessing(false); }
+  };
+
   // Smooth diverging colour scale: red(-1) → white(0) → green(+1)
   const getCellStyle = (value: number): React.CSSProperties => {
     const v = Math.max(-1, Math.min(1, value));
@@ -494,10 +617,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const CLUSTER_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6','#ec4899','#8b5cf6','#14b8a6'];
 
   const tabs = useMemo(() => [
-    { id: 'forecast',     label: 'Time Series Forecast', icon: TrendingUp },
-    { id: 'anomaly',      label: 'Anomaly Detection',    icon: Activity   },
-    { id: 'correlation',  label: 'Correlation Analysis', icon: Grid3x3    },
-    { id: 'cluster',      label: 'Cluster Analysis',     icon: Layers     },
+    { id: 'forecast',       label: 'Forecast',       icon: TrendingUp  },
+    { id: 'anomaly',        label: 'Anomaly',         icon: Activity    },
+    { id: 'correlation',    label: 'Correlation',     icon: Grid3x3     },
+    { id: 'cluster',        label: 'Clustering',      icon: Layers      },
+    { id: 'regression',     label: 'Regression',      icon: GitBranch   },
+    { id: 'classification', label: 'Classification',  icon: TreePine    },
+    { id: 'pca',            label: 'PCA',             icon: Sigma       },
+    { id: 'hypothesis',     label: 'Hypothesis',      icon: FlaskConical },
   ], []);
 
   return (
@@ -1534,6 +1661,421 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
         <div className="mt-6 bg-violet-50 border border-violet-200 rounded-xl px-5 py-4 flex items-center gap-3">
           <Loader2 className="size-4 text-violet-500 animate-spin flex-shrink-0" />
           <span className="text-sm text-violet-600">Generating AI insights…</span>
+        </div>
+      )}
+
+      {/* ── Regression Analysis ───────────────────────────────────────────── */}
+      {activeTab === 'regression' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Config */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="font-bold text-gray-900">Regression Configuration</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Table</label>
+              <select value={regressionConfig.table} onChange={e => setRegressionConfig(p => ({ ...p, table: e.target.value, targetColumn: '', featureColumns: [] }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select table…</option>
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Target column (Y)</label>
+              <select value={regressionConfig.targetColumn} onChange={e => setRegressionConfig(p => ({ ...p, targetColumn: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select target…</option>
+                {regressionColumns.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Feature columns (X) — hold Ctrl/⌘ to multi-select</label>
+              <select multiple value={regressionConfig.featureColumns}
+                onChange={e => setRegressionConfig(p => ({ ...p, featureColumns: Array.from(e.target.selectedOptions, o => o.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm h-28">
+                {regressionColumns.filter(c => c !== regressionConfig.targetColumn).map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Test split</label>
+              <select value={regressionConfig.testSize} onChange={e => setRegressionConfig(p => ({ ...p, testSize: parseFloat(e.target.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                {[0.1, 0.2, 0.3].map(v => <option key={v} value={v}>{v * 100}% held-out test</option>)}
+              </select>
+            </div>
+            <button onClick={handleRunRegression} disabled={isProcessing || !regressionConfig.targetColumn || regressionConfig.featureColumns.length === 0}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium">
+              {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Run Regression</>}
+            </button>
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800 space-y-1">
+              <p><strong>Algorithm:</strong> OLS Linear Regression (scikit-learn)</p>
+              <p><strong>Scaling:</strong> StandardScaler applied before fitting</p>
+            </div>
+          </div>
+
+          {/* Results */}
+          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-4">Regression Results</h3>
+            {!regressionResult && <p className="text-gray-400 text-sm">Configure and run regression to see results.</p>}
+            {regressionResult && (
+              <div className="space-y-5">
+                {/* Stats row */}
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'R²', value: regressionResult.stats?.r2, good: regressionResult.stats?.r2 > 0.7 },
+                    { label: 'RMSE', value: regressionResult.stats?.rmse },
+                    { label: 'MAE',  value: regressionResult.stats?.mae },
+                  ].map(s => (
+                    <div key={s.label} className={`rounded-xl p-4 text-center border ${s.good ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'}`}>
+                      <div className={`text-2xl font-bold ${s.good ? 'text-emerald-700' : 'text-gray-900'}`}>{s.value ?? '—'}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Coefficients */}
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-2">Feature Coefficients (standardised)</h4>
+                  <div className="space-y-1">
+                    {(regressionResult.coefficients || []).map((c: any) => {
+                      const max = Math.max(...(regressionResult.coefficients || []).map((x: any) => Math.abs(x.coefficient)));
+                      const pct = max ? Math.abs(c.coefficient) / max * 100 : 0;
+                      const pos = c.coefficient >= 0;
+                      return (
+                        <div key={c.feature} className="flex items-center gap-2 text-sm">
+                          <span className="w-32 truncate text-gray-600 text-xs">{c.feature}</span>
+                          <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                            <div className={`h-full rounded-full ${pos ? 'bg-blue-500' : 'bg-red-400'}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className={`w-16 text-right text-xs font-mono ${pos ? 'text-blue-700' : 'text-red-600'}`}>{c.coefficient > 0 ? '+' : ''}{c.coefficient}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* Scatter */}
+                {regressionResult.scatter?.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">Actual vs Predicted</h4>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <ScatterChart><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="actual" name="Actual" /><YAxis dataKey="predicted" name="Predicted" /><Tooltip cursor={{ strokeDasharray: '3 3' }} /><Scatter data={regressionResult.scatter} fill="#6366f1" fillOpacity={0.6} /></ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                <AnalyticsInterpretation module="regression" results={regressionStats} label="AI Interpretation" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Classification Analysis ────────────────────────────────────────── */}
+      {activeTab === 'classification' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="font-bold text-gray-900">Classification Configuration</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Table</label>
+              <select value={classConfig.table} onChange={e => setClassConfig(p => ({ ...p, table: e.target.value, targetColumn: '', featureColumns: [] }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select table…</option>
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Target column (class label)</label>
+              <select value={classConfig.targetColumn} onChange={e => setClassConfig(p => ({ ...p, targetColumn: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select target…</option>
+                {classColumns.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Feature columns — hold Ctrl/⌘ to multi-select</label>
+              <select multiple value={classConfig.featureColumns}
+                onChange={e => setClassConfig(p => ({ ...p, featureColumns: Array.from(e.target.selectedOptions, o => o.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm h-28">
+                {classColumns.filter(c => c !== classConfig.targetColumn).map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Test split</label>
+                <select value={classConfig.testSize} onChange={e => setClassConfig(p => ({ ...p, testSize: parseFloat(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  {[0.1, 0.2, 0.3].map(v => <option key={v} value={v}>{v * 100}%</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max depth</label>
+                <select value={classConfig.maxDepth} onChange={e => setClassConfig(p => ({ ...p, maxDepth: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">Auto</option>
+                  {[3,5,7,10].map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={handleRunClassification} disabled={isProcessing || !classConfig.targetColumn || classConfig.featureColumns.length === 0}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium">
+              {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Run Classification</>}
+            </button>
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800 space-y-1">
+              <p><strong>Algorithm:</strong> Random Forest (100 trees)</p>
+              <p><strong>Metrics:</strong> Accuracy, Precision, Recall, F1 per class</p>
+            </div>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-4">Classification Results</h3>
+            {!classResult && <p className="text-gray-400 text-sm">Configure and run classification to see results.</p>}
+            {classResult && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'Accuracy',   value: `${(classResult.stats?.accuracy * 100).toFixed(1)}%`, good: classResult.stats?.accuracy > 0.8 },
+                    { label: 'Macro F1',   value: classResult.stats?.macro_f1 },
+                    { label: 'Classes',    value: classResult.stats?.n_classes },
+                  ].map(s => (
+                    <div key={s.label} className={`rounded-xl p-4 text-center border ${s.good ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'}`}>
+                      <div className={`text-2xl font-bold ${s.good ? 'text-emerald-700' : 'text-gray-900'}`}>{s.value ?? '—'}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Per-class metrics */}
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-2">Per-Class Metrics</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead><tr className="border-b border-gray-200">{['Class','Precision','Recall','F1','Support'].map(h => <th key={h} className="text-left py-1.5 px-2 text-gray-500">{h}</th>)}</tr></thead>
+                      <tbody>
+                        {(classResult.per_class || []).map((r: any) => (
+                          <tr key={r.class} className="border-b border-gray-100">
+                            <td className="py-1.5 px-2 font-medium">{r.class}</td>
+                            <td className="py-1.5 px-2">{r.precision}</td>
+                            <td className="py-1.5 px-2">{r.recall}</td>
+                            <td className="py-1.5 px-2 font-semibold">{r.f1}</td>
+                            <td className="py-1.5 px-2 text-gray-400">{r.support}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {/* Feature importances */}
+                {(classResult.feature_importances || []).length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">Feature Importances</h4>
+                    <div className="space-y-1">
+                      {classResult.feature_importances.map((fi: any) => (
+                        <div key={fi.feature} className="flex items-center gap-2 text-sm">
+                          <span className="w-32 truncate text-gray-600 text-xs">{fi.feature}</span>
+                          <div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                            <div className="h-full rounded-full bg-indigo-500" style={{ width: `${fi.importance * 100}%` }} />
+                          </div>
+                          <span className="w-10 text-right text-xs font-mono text-indigo-700">{(fi.importance * 100).toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <AnalyticsInterpretation module="classification" results={classStats} label="AI Interpretation" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── PCA ───────────────────────────────────────────────────────────── */}
+      {activeTab === 'pca' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="font-bold text-gray-900">PCA Configuration</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Table</label>
+              <select value={pcaConfig.table} onChange={e => setPcaConfig(p => ({ ...p, table: e.target.value, columns: [] }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select table…</option>
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Columns (leave empty = all numeric)</label>
+              <select multiple value={pcaConfig.columns}
+                onChange={e => setPcaConfig(p => ({ ...p, columns: Array.from(e.target.selectedOptions, o => o.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm h-28">
+                {pcaColumns.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Components to retain</label>
+              <select value={pcaConfig.nComponents} onChange={e => setPcaConfig(p => ({ ...p, nComponents: parseInt(e.target.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                {[2,3,4,5,6,8,10].map(n => <option key={n} value={n}>{n} components</option>)}
+              </select>
+            </div>
+            <button onClick={handleRunPCA} disabled={isProcessing || !pcaConfig.table}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium">
+              {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Run PCA</>}
+            </button>
+            <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800 space-y-1">
+              <p><strong>Scaling:</strong> StandardScaler applied</p>
+              <p><strong>Chart:</strong> PC1 vs PC2 scatter</p>
+            </div>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-4">PCA Results</h3>
+            {!pcaResult && <p className="text-gray-400 text-sm">Configure and run PCA to see results.</p>}
+            {pcaResult && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'Variance explained', value: `${(pcaResult.stats?.total_variance_explained * 100).toFixed(1)}%`, good: pcaResult.stats?.total_variance_explained > 0.7 },
+                    { label: 'Components', value: pcaResult.stats?.n_components },
+                    { label: 'Samples', value: pcaResult.stats?.n_samples },
+                  ].map(s => (
+                    <div key={s.label} className={`rounded-xl p-4 text-center border ${s.good ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-200'}`}>
+                      <div className={`text-2xl font-bold ${s.good ? 'text-emerald-700' : 'text-gray-900'}`}>{s.value ?? '—'}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Variance bar chart */}
+                {(pcaResult.variance_per_component || []).length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">Variance Explained per Component</h4>
+                    <ResponsiveContainer width="100%" height={160}>
+                      <ComposedChart data={pcaResult.variance_per_component}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="component" />
+                        <YAxis yAxisId="l" tickFormatter={v => `${(v*100).toFixed(0)}%`} />
+                        <YAxis yAxisId="r" orientation="right" tickFormatter={v => `${(v*100).toFixed(0)}%`} />
+                        <Tooltip formatter={(v: number) => `${(v*100).toFixed(1)}%`} />
+                        <Legend />
+                        <Area yAxisId="r" type="monotone" dataKey="cumulative" fill="#c7d2fe" stroke="#6366f1" name="Cumulative %" />
+                        <Line yAxisId="l" type="monotone" dataKey="explained_variance" stroke="#8b5cf6" strokeWidth={2} dot name="Per component %" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {/* PC1 vs PC2 scatter */}
+                {(pcaResult.scatter || []).length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">PC1 vs PC2 Scatter</h4>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <ScatterChart><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="pc1" name="PC1" /><YAxis dataKey="pc2" name="PC2" /><Tooltip cursor={{ strokeDasharray: '3 3' }} /><Scatter data={pcaResult.scatter} fill="#8b5cf6" fillOpacity={0.5} /></ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                <AnalyticsInterpretation module="pca" results={pcaStats} label="AI Interpretation" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Statistical Hypothesis Testing ────────────────────────────────── */}
+      {activeTab === 'hypothesis' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="font-bold text-gray-900">Hypothesis Test Configuration</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Table</label>
+              <select value={hypoConfig.table} onChange={e => setHypoConfig(p => ({ ...p, table: e.target.value, column1: '', column2: '' }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select table…</option>
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Test type</label>
+              <select value={hypoConfig.testType} onChange={e => setHypoConfig(p => ({ ...p, testType: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="ttest_ind">Independent samples t-test</option>
+                <option value="ttest_1samp">One-sample t-test</option>
+                <option value="mannwhitneyu">Mann-Whitney U (non-parametric)</option>
+                <option value="chi2">Chi-square (independence)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Column 1</label>
+              <select value={hypoConfig.column1} onChange={e => setHypoConfig(p => ({ ...p, column1: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Select column…</option>
+                {hypoColumns.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {hypoConfig.testType !== 'ttest_1samp' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Column 2</label>
+                <select value={hypoConfig.column2} onChange={e => setHypoConfig(p => ({ ...p, column2: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">Select column…</option>
+                  {hypoColumns.filter(c => c !== hypoConfig.column1).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            {hypoConfig.testType === 'ttest_1samp' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Population mean (μ₀)</label>
+                <input type="number" value={hypoConfig.popmean} onChange={e => setHypoConfig(p => ({ ...p, popmean: parseFloat(e.target.value) || 0 }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Significance level (α)</label>
+              <select value={hypoConfig.alpha} onChange={e => setHypoConfig(p => ({ ...p, alpha: parseFloat(e.target.value) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                {[0.01, 0.05, 0.1].map(a => <option key={a} value={a}>α = {a}</option>)}
+              </select>
+            </div>
+            <button onClick={handleRunHypothesis} disabled={isProcessing || !hypoConfig.column1}
+              className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium">
+              {isProcessing ? <><Loader2 className="size-5 animate-spin" />Processing…</> : <><Play className="size-5" />Run Test</>}
+            </button>
+          </div>
+
+          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="font-bold text-gray-900 mb-4">Hypothesis Test Results</h3>
+            {!hypoResult && <p className="text-gray-400 text-sm">Configure and run the test to see results.</p>}
+            {hypoResult && (() => {
+              const s = hypoResult.stats;
+              const reject = s?.reject_null;
+              return (
+                <div className="space-y-5">
+                  {/* Decision banner */}
+                  <div className={`rounded-xl p-5 border-2 text-center ${reject ? 'bg-emerald-50 border-emerald-400' : 'bg-amber-50 border-amber-300'}`}>
+                    <div className={`text-2xl font-black mb-1 ${reject ? 'text-emerald-700' : 'text-amber-700'}`}>{s?.decision}</div>
+                    <div className="text-sm text-gray-600">{s?.test_label} · α = {s?.alpha}</div>
+                  </div>
+                  {/* Stats grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {[
+                      { label: 'Test statistic', value: s?.statistic },
+                      { label: 'p-value',         value: s?.p_value },
+                      s?.cohens_d != null    ? { label: "Cohen's d",     value: s.cohens_d }   :
+                      s?.cramers_v != null   ? { label: "Cramér's V",    value: s.cramers_v }  :
+                      s?.rank_biserial_r != null ? { label: 'Rank-biserial r', value: s.rank_biserial_r } :
+                      { label: 'Effect size', value: '—' },
+                    ].map((item, i) => (
+                      <div key={i} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                        <div className="text-xl font-bold text-gray-900">{item?.value ?? '—'}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{item?.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Detail rows */}
+                  <div className="border border-gray-200 rounded-xl overflow-hidden">
+                    {Object.entries(s || {}).filter(([k]) => !['test_type','test_label','statistic','p_value','alpha','reject_null','decision'].includes(k)).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between px-4 py-2 even:bg-gray-50 text-sm">
+                        <span className="text-gray-600">{k.replace(/_/g, ' ')}</span>
+                        <span className="font-mono font-medium">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <AnalyticsInterpretation module="hypothesis" results={hypoStats} label="AI Interpretation" />
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 

@@ -457,3 +457,399 @@ def perform_cluster(
     except Exception as e:
         logger.error(f"Clustering failed: {e}", exc_info=True)
         return {"error": str(e)}
+
+# ── Regression Analysis ───────────────────────────────────────────────────────
+
+def perform_regression(
+    df: pd.DataFrame,
+    target_col: str,
+    feature_cols: List[str],
+    test_size: float = 0.2,
+    include_residuals: bool = True,
+) -> Dict[str, Any]:
+    """
+    Multiple linear regression.  Returns coefficients, R², RMSE, and
+    a sample of actual-vs-predicted points for the scatter chart.
+    """
+    try:
+        from sklearn.linear_model import LinearRegression
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import mean_squared_error, r2_score
+        from sklearn.preprocessing import StandardScaler
+
+        cols = [target_col] + feature_cols
+        df2 = df[cols].dropna().copy()
+        for c in cols:
+            df2[c] = pd.to_numeric(df2[c], errors='coerce')
+        df2 = df2.dropna()
+
+        if len(df2) < 10:
+            return {"error": "Need at least 10 rows with numeric data for regression."}
+
+        X = df2[feature_cols].values
+        y = df2[target_col].values
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42
+        )
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_test_s  = scaler.transform(X_test)
+
+        model = LinearRegression()
+        model.fit(X_train_s, y_train)
+
+        y_pred   = model.predict(X_test_s)
+        r2       = float(r2_score(y_test, y_pred))
+        rmse     = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+        mae      = float(np.mean(np.abs(y_test - y_pred)))
+
+        coefficients = [
+            {"feature": f, "coefficient": float(c)}
+            for f, c in zip(feature_cols, model.coef_)
+        ]
+        coefficients.sort(key=lambda x: abs(x["coefficient"]), reverse=True)
+
+        # Scatter: actual vs predicted (capped at 300 points)
+        scatter = [
+            {"actual": float(a), "predicted": float(p)}
+            for a, p in zip(y_test[:300], y_pred[:300])
+        ]
+
+        residuals = []
+        if include_residuals:
+            res = y_test - y_pred
+            residuals = [
+                {"predicted": float(p), "residual": float(r)}
+                for p, r in zip(y_pred[:300], res[:300])
+            ]
+
+        return {
+            "scatter": scatter,
+            "residuals": residuals,
+            "stats": {
+                "r2":           round(r2, 4),
+                "rmse":         round(rmse, 4),
+                "mae":          round(mae, 4),
+                "n_train":      int(len(X_train)),
+                "n_test":       int(len(X_test)),
+                "intercept":    round(float(model.intercept_), 4),
+                "target_col":   target_col,
+                "feature_cols": feature_cols,
+            },
+            "coefficients": coefficients,
+        }
+
+    except ImportError:
+        return {"error": "scikit-learn is required for regression. Install with: pip install scikit-learn"}
+    except Exception as e:
+        logger.error(f"Regression failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+# ── Classification Analysis ───────────────────────────────────────────────────
+
+def perform_classification(
+    df: pd.DataFrame,
+    target_col: str,
+    feature_cols: List[str],
+    test_size: float = 0.2,
+    max_depth: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Random Forest classification.  Returns accuracy, per-class precision/recall/F1,
+    confusion matrix, and feature importances.
+    """
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import (
+            accuracy_score, classification_report, confusion_matrix
+        )
+        from sklearn.preprocessing import LabelEncoder
+
+        cols = [target_col] + feature_cols
+        df2 = df[cols].dropna().copy()
+        for f in feature_cols:
+            df2[f] = pd.to_numeric(df2[f], errors='coerce')
+        df2 = df2.dropna()
+
+        if len(df2) < 10:
+            return {"error": "Need at least 10 rows with numeric features for classification."}
+
+        le = LabelEncoder()
+        y = le.fit_transform(df2[target_col].astype(str))
+        X = df2[feature_cols].values
+
+        n_classes = len(le.classes_)
+        if n_classes < 2:
+            return {"error": "Target column must have at least 2 distinct classes."}
+        if n_classes > 50:
+            return {"error": "Too many classes (>50). Consider binning the target column first."}
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y if len(df2) >= 50 else None
+        )
+
+        depth = min(max_depth, 10) if max_depth else None
+        model = RandomForestClassifier(n_estimators=100, max_depth=depth, random_state=42, n_jobs=-1)
+        model.fit(X_train, y_train)
+
+        y_pred   = model.predict(X_test)
+        accuracy = float(accuracy_score(y_test, y_pred))
+
+        report = classification_report(
+            y_test, y_pred,
+            target_names=[str(c) for c in le.classes_],
+            output_dict=True, zero_division=0
+        )
+        per_class = [
+            {
+                "class":     str(cls),
+                "precision": round(float(report[str(cls)]["precision"]), 3),
+                "recall":    round(float(report[str(cls)]["recall"]),    3),
+                "f1":        round(float(report[str(cls)]["f1-score"]),  3),
+                "support":   int(report[str(cls)]["support"]),
+            }
+            for cls in le.classes_
+            if str(cls) in report
+        ]
+
+        cm = confusion_matrix(y_test, y_pred).tolist()
+
+        importances = [
+            {"feature": f, "importance": round(float(imp), 4)}
+            for f, imp in sorted(
+                zip(feature_cols, model.feature_importances_),
+                key=lambda x: x[1], reverse=True
+            )
+        ]
+
+        return {
+            "per_class": per_class,
+            "confusion_matrix": cm,
+            "class_labels": [str(c) for c in le.classes_],
+            "feature_importances": importances,
+            "stats": {
+                "accuracy":     round(accuracy, 4),
+                "n_train":      int(len(X_train)),
+                "n_test":       int(len(X_test)),
+                "n_classes":    n_classes,
+                "target_col":   target_col,
+                "feature_cols": feature_cols,
+                "macro_f1":     round(float(report["macro avg"]["f1-score"]), 4),
+                "weighted_f1":  round(float(report["weighted avg"]["f1-score"]), 4),
+            },
+        }
+
+    except ImportError:
+        return {"error": "scikit-learn is required. Install with: pip install scikit-learn"}
+    except Exception as e:
+        logger.error(f"Classification failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+# ── Principal Component Analysis ──────────────────────────────────────────────
+
+def perform_pca(
+    df: pd.DataFrame,
+    columns: Optional[List[str]],
+    n_components: int = 2,
+) -> Dict[str, Any]:
+    """
+    PCA on numeric columns.  Returns explained variance, loadings, and
+    a 2-D scatter of the first two components for visualisation.
+    """
+    try:
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+
+        if columns:
+            df2 = df[columns].copy()
+        else:
+            df2 = df.select_dtypes(include=[np.number]).copy()
+
+        df2 = df2.dropna()
+        for c in df2.columns:
+            df2[c] = pd.to_numeric(df2[c], errors='coerce')
+        df2 = df2.dropna()
+
+        if df2.shape[0] < 5:
+            return {"error": "Need at least 5 rows for PCA."}
+        if df2.shape[1] < 2:
+            return {"error": "Need at least 2 numeric columns for PCA."}
+
+        n_comp = min(n_components, df2.shape[1], df2.shape[0])
+        feature_names = list(df2.columns)
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(df2.values)
+
+        pca = PCA(n_components=n_comp, random_state=42)
+        X_pca = pca.fit_transform(X_scaled)
+
+        evr  = [round(float(v), 4) for v in pca.explained_variance_ratio_]
+        cum  = [round(float(v), 4) for v in np.cumsum(pca.explained_variance_ratio_)]
+
+        loadings = []
+        for i, comp in enumerate(pca.components_):
+            for j, feat in enumerate(feature_names):
+                loadings.append({
+                    "component": f"PC{i+1}",
+                    "feature":   feat,
+                    "loading":   round(float(comp[j]), 4),
+                })
+
+        # 2-D scatter of PC1 vs PC2 (capped at 500 points)
+        scatter = [
+            {"pc1": round(float(X_pca[i, 0]), 4),
+             "pc2": round(float(X_pca[i, 1]), 4) if n_comp > 1 else 0.0}
+            for i in range(min(len(X_pca), 500))
+        ]
+
+        variance_per_component = [
+            {"component": f"PC{i+1}", "explained_variance": evr[i], "cumulative": cum[i]}
+            for i in range(len(evr))
+        ]
+
+        return {
+            "scatter": scatter,
+            "variance_per_component": variance_per_component,
+            "loadings": loadings,
+            "stats": {
+                "n_components":          n_comp,
+                "total_variance_explained": round(float(sum(evr)), 4),
+                "n_samples":             int(df2.shape[0]),
+                "n_features":            int(df2.shape[1]),
+                "feature_names":         feature_names,
+            },
+        }
+
+    except ImportError:
+        return {"error": "scikit-learn is required. Install with: pip install scikit-learn"}
+    except Exception as e:
+        logger.error(f"PCA failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+# ── Hypothesis Testing ────────────────────────────────────────────────────────
+
+def perform_hypothesis_test(
+    df: pd.DataFrame,
+    col1: str,
+    col2: Optional[str],
+    test_type: str,
+    alpha: float,
+    popmean: float,
+) -> Dict[str, Any]:
+    """
+    Statistical hypothesis tests: ttest_ind, ttest_1samp, mannwhitneyu, chi2.
+    Returns statistic, p_value, decision, effect_size where applicable.
+    """
+    try:
+        from scipy import stats
+
+        def _clean(col: str) -> np.ndarray:
+            s = pd.to_numeric(df[col], errors='coerce').dropna()
+            return s.values
+
+        if test_type == "ttest_1samp":
+            a = _clean(col1)
+            if len(a) < 3:
+                return {"error": "Need at least 3 data points for one-sample t-test."}
+            stat, p = stats.ttest_1samp(a, popmean)
+            effect_size = round(float((np.mean(a) - popmean) / np.std(a, ddof=1)), 4) if np.std(a, ddof=1) else None
+            return _hypothesis_response(test_type, stat, p, alpha, {
+                "sample_mean":   round(float(np.mean(a)), 4),
+                "sample_std":    round(float(np.std(a, ddof=1)), 4),
+                "population_mean_tested": popmean,
+                "n":             int(len(a)),
+                "cohens_d":      effect_size,
+            })
+
+        elif test_type == "ttest_ind":
+            if not col2:
+                return {"error": "Two-sample t-test requires a second column."}
+            a, b = _clean(col1), _clean(col2)
+            if len(a) < 3 or len(b) < 3:
+                return {"error": "Need at least 3 data points per group."}
+            stat, p = stats.ttest_ind(a, b)
+            pooled_std = np.sqrt((np.std(a, ddof=1)**2 + np.std(b, ddof=1)**2) / 2)
+            d = round(float((np.mean(a) - np.mean(b)) / pooled_std), 4) if pooled_std else None
+            return _hypothesis_response(test_type, stat, p, alpha, {
+                "group1_mean": round(float(np.mean(a)), 4),
+                "group2_mean": round(float(np.mean(b)), 4),
+                "group1_std":  round(float(np.std(a, ddof=1)), 4),
+                "group2_std":  round(float(np.std(b, ddof=1)), 4),
+                "group1_n":    int(len(a)),
+                "group2_n":    int(len(b)),
+                "cohens_d":    d,
+            })
+
+        elif test_type == "mannwhitneyu":
+            if not col2:
+                return {"error": "Mann-Whitney U test requires a second column."}
+            a, b = _clean(col1), _clean(col2)
+            if len(a) < 3 or len(b) < 3:
+                return {"error": "Need at least 3 data points per group."}
+            stat, p = stats.mannwhitneyu(a, b, alternative='two-sided')
+            r = round(float(stat / (len(a) * len(b))), 4)   # rank-biserial correlation
+            return _hypothesis_response(test_type, stat, p, alpha, {
+                "group1_median": round(float(np.median(a)), 4),
+                "group2_median": round(float(np.median(b)), 4),
+                "group1_n":      int(len(a)),
+                "group2_n":      int(len(b)),
+                "rank_biserial_r": r,
+            })
+
+        elif test_type == "chi2":
+            if not col2:
+                return {"error": "Chi-square test requires a second column."}
+            ct = pd.crosstab(df[col1].astype(str), df[col2].astype(str))
+            if ct.shape[0] < 2 or ct.shape[1] < 2:
+                return {"error": "Chi-square test requires at least 2 categories in each variable."}
+            stat, p, dof, expected = stats.chi2_contingency(ct)
+            cramers = round(float(np.sqrt(stat / (len(df) * (min(ct.shape) - 1)))), 4) if len(df) > 0 else None
+            return _hypothesis_response(test_type, stat, p, alpha, {
+                "degrees_of_freedom": int(dof),
+                "cramers_v":          cramers,
+                "table_shape":        list(ct.shape),
+            })
+
+        else:
+            return {"error": f"Unknown test_type: '{test_type}'. Use ttest_ind, ttest_1samp, mannwhitneyu, or chi2."}
+
+    except ImportError:
+        return {"error": "scipy is required. Install with: pip install scipy"}
+    except Exception as e:
+        logger.error(f"Hypothesis test failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+def _hypothesis_response(
+    test_type: str,
+    stat: float,
+    p: float,
+    alpha: float,
+    extra: dict,
+) -> Dict[str, Any]:
+    reject = bool(p < alpha)
+    labels = {
+        "ttest_1samp":  "One-sample t-test",
+        "ttest_ind":    "Independent samples t-test",
+        "mannwhitneyu": "Mann-Whitney U test",
+        "chi2":         "Chi-square test of independence",
+    }
+    return {
+        "stats": {
+            "test_type":   test_type,
+            "test_label":  labels.get(test_type, test_type),
+            "statistic":   round(float(stat), 4),
+            "p_value":     round(float(p), 6),
+            "alpha":       alpha,
+            "reject_null": reject,
+            "decision":    "Reject H₀" if reject else "Fail to reject H₀",
+            **extra,
+        }
+    }

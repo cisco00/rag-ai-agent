@@ -222,6 +222,33 @@ class ClusterRequest(BaseModel):
     n_clusters: int = 3
     color_column: Optional[str] = None   # optional third dimension for size/tooltip
 
+class RegressionRequest(BaseModel):
+    table_name:       str
+    target_column:    str
+    feature_columns:  List[str]
+    test_size:        float = 0.2        # fraction held out for evaluation
+    include_residuals: bool = True
+
+class ClassificationRequest(BaseModel):
+    table_name:       str
+    target_column:    str
+    feature_columns:  List[str]
+    test_size:        float = 0.2
+    max_depth:        Optional[int] = None   # None → auto; cap 10
+
+class PCARequest(BaseModel):
+    table_name:   str
+    columns:      Optional[List[str]] = None   # None → all numeric columns
+    n_components: int = 2                       # 2–10
+
+class HypothesisRequest(BaseModel):
+    table_name:  str
+    column1:     str
+    column2:     Optional[str] = None     # required for two-sample & chi2
+    test_type:   str = "ttest_ind"        # ttest_ind | ttest_1samp | mannwhitneyu | chi2
+    alpha:       float = 0.05
+    popmean:     float = 0.0              # used for ttest_1samp only
+
 class InsightRequest(BaseModel):
     analysis_type: str                   # forecast | anomaly | correlation | cluster
     stats: dict                          # summary numbers from the analysis result

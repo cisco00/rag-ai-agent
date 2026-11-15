@@ -30,6 +30,7 @@ from typing import Optional
 from schemas import (
     ForecastRequest, AnomalyRequest, CorrelationRequest, SuggestQueriesResponse,
     ClusterRequest, InsightRequest,
+    RegressionRequest, ClassificationRequest, PCARequest, HypothesisRequest,
 )
 from pydantic import BaseModel as _BM
 
@@ -221,6 +222,127 @@ async def get_cluster(request: ClusterRequest, org=Depends(get_current_org),
     except Exception as e:
         logger.error(f"Cluster failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Clustering failed. Ensure the selected columns contain numeric data.")
+
+
+@router.post("/analytics/regression")
+async def get_regression(request: RegressionRequest, org=Depends(get_current_org),
+                         user=Depends(require_permission("VIEW_ADVANCED"))):
+    """Multiple linear regression — coefficients, R², RMSE, actual-vs-predicted scatter."""
+    try:
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured.")
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        cols = [request.target_column] + request.feature_columns
+        col_list = ", ".join(_safe_identifier(c) for c in cols)
+        tbl = _safe_identifier(request.table_name)
+        df = await run_in_threadpool(pd.read_sql, f"SELECT {col_list} FROM {tbl} LIMIT 10000", db_manager.get_engine())
+        db_manager.close()
+        from analytics import perform_regression
+        result = await run_in_threadpool(
+            perform_regression, df, request.target_column, request.feature_columns,
+            request.test_size, request.include_residuals
+        )
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Regression route failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Regression analysis failed.")
+
+
+@router.post("/analytics/classification")
+async def get_classification(request: ClassificationRequest, org=Depends(get_current_org),
+                              user=Depends(require_permission("VIEW_ADVANCED"))):
+    """Random Forest classification — accuracy, per-class metrics, confusion matrix, feature importances."""
+    try:
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured.")
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        cols = [request.target_column] + request.feature_columns
+        col_list = ", ".join(_safe_identifier(c) for c in cols)
+        tbl = _safe_identifier(request.table_name)
+        df = await run_in_threadpool(pd.read_sql, f"SELECT {col_list} FROM {tbl} LIMIT 10000", db_manager.get_engine())
+        db_manager.close()
+        from analytics import perform_classification
+        result = await run_in_threadpool(
+            perform_classification, df, request.target_column, request.feature_columns,
+            request.test_size, request.max_depth
+        )
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Classification route failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Classification analysis failed.")
+
+
+@router.post("/analytics/pca")
+async def get_pca(request: PCARequest, org=Depends(get_current_org),
+                  user=Depends(require_permission("VIEW_ADVANCED"))):
+    """PCA — explained variance per component, loadings, 2-D scatter of PC1 vs PC2."""
+    try:
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured.")
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        if request.columns:
+            col_list = ", ".join(_safe_identifier(c) for c in request.columns)
+        else:
+            col_list = "*"
+        tbl = _safe_identifier(request.table_name)
+        df = await run_in_threadpool(pd.read_sql, f"SELECT {col_list} FROM {tbl} LIMIT 10000", db_manager.get_engine())
+        db_manager.close()
+        from analytics import perform_pca
+        result = await run_in_threadpool(perform_pca, df, request.columns, request.n_components)
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PCA route failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="PCA analysis failed.")
+
+
+@router.post("/analytics/hypothesis")
+async def get_hypothesis(request: HypothesisRequest, org=Depends(get_current_org),
+                         user=Depends(require_permission("VIEW_ADVANCED"))):
+    """Statistical hypothesis test — t-test, Mann-Whitney U, or chi-square."""
+    try:
+        db_conn = get_org_connection_string(org)
+        if not db_conn:
+            raise HTTPException(status_code=400, detail="No database configured.")
+        import pandas as pd
+        db_manager = DatabaseManager(connection_string=db_conn)
+        cols = [request.column1]
+        if request.column2:
+            cols.append(request.column2)
+        col_list = ", ".join(_safe_identifier(c) for c in cols)
+        tbl = _safe_identifier(request.table_name)
+        df = await run_in_threadpool(pd.read_sql, f"SELECT {col_list} FROM {tbl} LIMIT 10000", db_manager.get_engine())
+        db_manager.close()
+        from analytics import perform_hypothesis_test
+        result = await run_in_threadpool(
+            perform_hypothesis_test, df, request.column1, request.column2,
+            request.test_type, request.alpha, request.popmean
+        )
+        if isinstance(result, dict) and "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Hypothesis route failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Hypothesis test failed.")
 
 
 @router.post("/analytics/insights")
