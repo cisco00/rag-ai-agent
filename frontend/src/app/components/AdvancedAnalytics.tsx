@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
 import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock } from 'lucide-react';
 import { api } from '../../lib/api';
+import { AnalyticsInterpretation } from './AnalyticsInterpretation';
 import {
   ComposedChart, Area, Line, ScatterChart, Scatter,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -74,6 +75,12 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [snapshotSaving, setSnapshotSaving] = useState(false);
+
+  // Stats for AI interpretation (not persisted to sessionStorage)
+  const [forecastStats, setForecastStats]       = useState<Record<string, any>>({});
+  const [anomalyStats, setAnomalyStats]         = useState<Record<string, any>>({});
+  const [correlationStats, setCorrelationStats] = useState<Record<string, any>>({});
+  const [clusterStats, setClusterStats]         = useState<Record<string, any>>({});
 
   const [tables, setTables] = useState<string[]>([]);
   const [forecastColumns, setForecastColumns] = useState<string[]>([]);
@@ -321,6 +328,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
       setForecastData(chartData);
       setForecastEngine(resp?.engine ?? '');
+      setForecastStats({ ...statsData, table: forecastConfig.table, date_column: forecastConfig.dateColumn, value_column: forecastConfig.valueColumn, periods: forecastConfig.periods, engine: resp?.engine });
       fetchInsights('forecast', statsData);
       fetchSnapshots('forecast');
     } catch (err: any) {
@@ -373,6 +381,8 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
       setAnomalyData(plotData);
       setAnomalyResult(resp ?? null);
+      const aStats = resp?.stats ?? { anomaly_count: plotData.filter((d: any) => d.isAnomaly).length, total_count: plotData.length };
+      setAnomalyStats({ ...aStats, table: anomalyConfig.table, value_column: anomalyConfig.valueColumn, multivariate: anomalyConfig.multivariate });
       if (resp?.stats) fetchInsights('anomaly', resp.stats);
       fetchSnapshots('anomaly');
     } catch (err: any) {
@@ -401,6 +411,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       setCorrelationColumns(cols);
       setCorrelationData(matrix);
       setDrillDown(null);
+      setCorrelationStats({ columns: cols, method: correlationConfig.method, table: correlationConfig.table, matrix_summary: matrix.length > 0 ? { size: `${matrix.length}x${matrix.length}` } : {}, ...(resp?.stats ?? {}) });
       if (resp?.stats) fetchInsights('correlation', resp.stats);
       fetchSnapshots('correlation');
     } catch (err: any) {
@@ -423,6 +434,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       });
       if (resp?.error) { alert(`Clustering failed: ${resp.error}`); return; }
       setClusterData(resp);
+      setClusterStats({ ...(resp?.stats ?? {}), table: clusterConfig.table, x_column: clusterConfig.xColumn, y_column: clusterConfig.yColumn, n_clusters: clusterConfig.nClusters, centroids: resp?.centroids });
       if (resp?.stats) fetchInsights('cluster', resp.stats);
       fetchSnapshots('cluster');
     } catch (err: any) {
@@ -717,6 +729,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 </div>
               </div>
             )}
+
+            {/* AI Interpretation — Forecast */}
+            <AnalyticsInterpretation
+              module="forecast"
+              results={forecastStats}
+              datasetMeta={{ table: forecastConfig.table, columns: forecastColumns }}
+              objective={`Forecast ${forecastConfig.valueColumn} over ${forecastConfig.periods} ${forecastConfig.freq} periods`}
+            />
           </div>
         </div>
       )}
@@ -1012,6 +1032,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 </div>
               </div>
             )}
+
+            {/* AI Interpretation — Anomaly */}
+            <AnalyticsInterpretation
+              module="anomaly"
+              results={anomalyStats}
+              datasetMeta={{ table: anomalyConfig.table, columns: anomalyColumns }}
+              objective={`Detect anomalies in ${anomalyConfig.valueColumn}${anomalyConfig.multivariate ? ' (multivariate)' : ''}`}
+            />
           </div>
         </div>
       )}
@@ -1267,6 +1295,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 </div>
               </div>
             )}
+
+            {/* AI Interpretation — Correlation */}
+            <AnalyticsInterpretation
+              module="correlation"
+              results={correlationStats}
+              datasetMeta={{ table: correlationConfig.table, columns: correlationConfig.columns }}
+              objective={`${correlationConfig.method} correlation across ${correlationConfig.columns.length} variables`}
+            />
           </div>
         </div>
       )}
@@ -1445,6 +1481,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 </div>
               </div>
             )}
+
+            {/* AI Interpretation — Cluster */}
+            <AnalyticsInterpretation
+              module="cluster"
+              results={clusterStats}
+              datasetMeta={{ table: clusterConfig.table, columns: clusterColumns }}
+              objective={`K-means clustering of ${clusterConfig.xColumn} vs ${clusterConfig.yColumn} into ${clusterConfig.nClusters} clusters`}
+            />
           </div>
         </div>
       )}
