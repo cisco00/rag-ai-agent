@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Database, FileUp, MessageSquare, TrendingUp, Lightbulb, AlertTriangle, AlertCircle, ChevronRight, LayoutGrid, Bell, RotateCw } from 'lucide-react';
 import { api } from '../../lib/api';
+import { ProfileCompletenessBanner } from './BusinessProfileSetup';
 
 interface DashboardProps {
   onNavigate: (view: string, query?: string) => void;
@@ -91,6 +92,9 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Overview</h1>
         <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Welcome back! Here's an overview of your analytics activity.</p>
       </div>
+
+      {/* Business profile completeness nudge */}
+      <ProfileCompletenessBanner onOpen={() => onNavigate('business-profile')} />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

@@ -33,6 +33,33 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
+/** Minimal completeness nudge — shown when profile < 60% complete */
+function ProfileNudge({ onNavigate }: { onNavigate?: (view: string) => void }) {
+  const [pct, setPct] = useState<number | null>(null);
+  useEffect(() => {
+    api.get<{ completeness: number }>('/business-profile')
+      .then(d => setPct(d.completeness ?? 0))
+      .catch(() => {});
+  }, []);
+  if (pct === null || pct >= 60) return null;
+  return (
+    <div className="mx-5 mt-3 flex items-center gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl px-4 py-2.5 text-sm">
+      <Lightbulb className="size-4 text-amber-500 shrink-0" />
+      <span className="text-amber-800 dark:text-amber-200 flex-1">
+        Your business profile is {pct}% complete — add more context for sharper AI interpretations.
+      </span>
+      {onNavigate && (
+        <button
+          onClick={() => onNavigate('business-profile')}
+          className="shrink-0 text-xs font-semibold text-amber-700 dark:text-amber-300 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100 transition-colors"
+        >
+          Complete profile →
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Interpretation {
@@ -66,6 +93,8 @@ interface AnalyticsInterpretationProps {
   autoFetch?: boolean;
   /** Label shown on the trigger button */
   label?: string;
+  /** Navigate to a view — used by the completeness nudge */
+  onNavigate?: (view: string) => void;
 }
 
 // ── Section config ────────────────────────────────────────────────────────────
@@ -95,6 +124,7 @@ export function AnalyticsInterpretation({
   objective,
   autoFetch = false,
   label = 'AI Interpretation',
+  onNavigate,
 }: AnalyticsInterpretationProps) {
   const [open, setOpen]               = useState(false);
   const [loading, setLoading]         = useState(false);
@@ -234,6 +264,9 @@ export function AnalyticsInterpretation({
           )}
         </div>
       </div>
+
+      {/* Profile completeness nudge */}
+      <ProfileNudge onNavigate={onNavigate} />
 
       {/* Loading state */}
       {loading && (

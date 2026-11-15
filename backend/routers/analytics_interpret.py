@@ -165,20 +165,25 @@ Explain what the result shows, what it means for the organization, and what acti
 """
 
 
-def _build_system_prompt(module: str, org_name: str, industry: str) -> str:
+def _build_system_prompt(module: str, org_name: str, industry: str, profile: dict) -> str:
     guide = MODULE_GUIDE.get(module.lower(), MODULE_DEFAULT)
+    profile_block = _profile_context_block(profile)
     return f"""You are Vantage AI's analytical interpretation engine. Your role is to explain
 advanced analytics results in clear, context-specific business language.
 
 Organisation: {org_name}
 Industry: {industry}
 
+Organisation profile:
+{profile_block}
+
 {guide}
 
 IMPORTANT RULES:
 1. Only use the statistical values provided to you. Do not invent numbers, forecasts, or metrics.
 2. Distinguish clearly: correlation ≠ causation, forecast ≠ certainty, anomaly ≠ confirmed problem.
-3. If key organizational context is missing, state your assumptions explicitly.
+3. Use the organisation profile above to tailor your explanation to this specific business.
+   If the profile is sparse, state your assumptions explicitly rather than inventing context.
 4. Keep each section concise but informative — aim for 2–4 sentences per section.
 5. Write for a business audience, not a data science audience.
 
@@ -210,20 +215,55 @@ def _build_user_message(module: str, results: dict, dataset_meta: dict, objectiv
 
 # ── Org context helper ────────────────────────────────────────────────────────
 
-def _get_org_context(org) -> tuple[str, str]:
-    """Return (org_name, industry) from the org object."""
+def _get_org_context(org) -> tuple[str, str, dict]:
+    """Return (org_name, industry, full_profile_dict) from the org object + business profile table."""
     org_name = getattr(org, "name", None) or getattr(org, "org_name", None) or "this organization"
     industry = "unknown industry"
-    # Try to read industry from org metadata if it exists
-    meta = getattr(org, "metadata", None) or getattr(org, "meta", None)
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except Exception:
-            meta = {}
-    if isinstance(meta, dict):
-        industry = meta.get("industry") or meta.get("sector") or industry
-    return org_name, industry
+    profile: dict = {}
+
+    # Fetch the richer business profile from the dedicated table
+    try:
+        from routers.business_profile import OrgBusinessProfile, _Base, _ensure_table
+        from models import get_db, admin_engine
+        _ensure_table(admin_engine)
+        with get_db() as db:
+            rec = db.query(OrgBusinessProfile).filter(
+                OrgBusinessProfile.org_id == org.id
+            ).first()
+            if rec:
+                import json as _json
+                profile = _json.loads(rec.profile_json or "{}")
+    except Exception as exc:
+        logger.debug("Could not load business profile: %s", exc)
+
+    if profile.get("industry"):
+        industry = profile["industry"]
+    return org_name, industry, profile
+
+
+def _profile_context_block(profile: dict) -> str:
+    """Format the business profile into a prose paragraph for the LLM system prompt."""
+    lines = []
+    if profile.get("business_model"):
+        lines.append(f"Business model: {profile['business_model']}")
+    if profile.get("key_metrics"):
+        metrics = profile["key_metrics"]
+        if isinstance(metrics, list):
+            metrics = ", ".join(metrics)
+        lines.append(f"Key metrics tracked: {metrics}")
+    if profile.get("objectives"):
+        lines.append(f"Strategic objectives: {profile['objectives']}")
+    if profile.get("data_description"):
+        lines.append(f"Data description: {profile['data_description']}")
+    if profile.get("team_size"):
+        lines.append(f"Team size: {profile['team_size']}")
+    if profile.get("region"):
+        lines.append(f"Region: {profile['region']}")
+    if profile.get("custom_context"):
+        lines.append(f"Additional context: {profile['custom_context']}")
+    if not lines:
+        return "(No business profile has been configured. State any assumptions you make about the organisation.)"
+    return "\n".join(lines)
 
 
 def _parse_llm_json(raw: str) -> dict:
@@ -246,8 +286,8 @@ async def interpret_analysis(
     Generate a structured AI interpretation of a completed analytics result.
     Returns a 7-section JSON interpretation.
     """
-    org_name, industry = _get_org_context(org)
-    system_prompt = _build_system_prompt(body.module, org_name, industry)
+    org_name, industry, profile = _get_org_context(org)
+    system_prompt = _build_system_prompt(body.module, org_name, industry, profile)
     user_message  = _build_user_message(
         body.module,
         body.results,
@@ -300,9 +340,14 @@ async def followup_question(
     Answer a follow-up question about an already-interpreted analytics result.
     Uses the original results and prior interpretation as context.
     """
-    org_name, industry = _get_org_context(org)
+    org_name, industry, profile = _get_org_context(org)
+    profile_block = _profile_context_block(profile)
 
     system_prompt = f"""You are Vantage AI's analytical assistant for {org_name} ({industry}).
+
+Organisation profile:
+{profile_block}
+
 You have already produced an interpretation of a {body.module} analysis.
 Now answer the user's follow-up question using the original analytical results and your prior interpretation as context.
 Be specific, grounded in the data provided, and avoid fabricating values.

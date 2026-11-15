@@ -63,6 +63,7 @@ from routers import notebooks as notebooks_router
 from routers import impact as impact_router
 from routers import data_access as data_access_router
 from routers import analytics_interpret as analytics_interpret_router
+from routers import business_profile as business_profile_router
 
 load_dotenv()
 
@@ -567,6 +568,7 @@ app.include_router(notebooks_router.router,                          tags=["Note
 app.include_router(impact_router.router,                             tags=["Impact Analysis"])
 app.include_router(data_access_router.router,                        tags=["Data Access"])
 app.include_router(analytics_interpret_router.router,                tags=["Analytics Interpretation"])
+app.include_router(business_profile_router.router,                   tags=["Business Profile"])
 
 
 @app.get("/")

@@ -111,6 +111,7 @@ export function Sidebar({
     { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
     { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
+    { id: 'business-profile', label: 'Business Profile', icon: Lightbulb, hide: !hasPerm('MANAGE_ORG') },
     { id: 'catalog', label: 'Data Catalog', icon: BookOpen, disabled: !isConfigured, hide: !hasPerm('MANAGE_ORG') },
     { id: 'data-access', label: 'Access Requests', icon: Lock, hide: !hasPerm('MANAGE_ORG') },
     { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },

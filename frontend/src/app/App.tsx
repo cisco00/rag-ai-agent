@@ -43,6 +43,7 @@ import { SharedDashboard } from './components/SharedDashboard';
 import { DataQualityMonitor } from './components/DataQualityMonitor';
 import { NotebookView } from './components/NotebookView';
 import { DataAccessManager } from './components/DataAccessManager';
+import { BusinessProfileSetup } from './components/BusinessProfileSetup';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
@@ -71,7 +72,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality' | 'notebook' | 'data-access';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality' | 'notebook' | 'data-access' | 'business-profile';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -566,6 +567,9 @@ export default function App() {
           {currentView === 'quality' && <DataQualityMonitor apiKey={apiKey!} />}
           {currentView === 'notebook' && <NotebookView apiKey={apiKey!} />}
           {currentView === 'data-access' && <DataAccessManager />}
+          {currentView === 'business-profile' && (
+            <BusinessProfileSetup inline onSaved={() => {}} />
+          )}
         </main>
       </div>
     </div>
