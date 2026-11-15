@@ -61,6 +61,7 @@ from routers import cloud_storage as cloud_storage_router
 from routers import data_quality
 from routers import notebooks as notebooks_router
 from routers import impact as impact_router
+from routers import data_access as data_access_router
 
 load_dotenv()
 
@@ -563,6 +564,7 @@ app.include_router(cloud_storage_router.router,                      tags=["Clou
 app.include_router(data_quality.router,                              tags=["Data Quality"])
 app.include_router(notebooks_router.router,                          tags=["Notebooks"])
 app.include_router(impact_router.router,                             tags=["Impact Analysis"])
+app.include_router(data_access_router.router,                        tags=["Data Access"])
 
 
 @app.get("/")

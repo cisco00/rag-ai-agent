@@ -31,6 +31,7 @@ import {
   CloudUpload,
   X,
   NotebookPen,
+  Lock,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -111,6 +112,7 @@ export function Sidebar({
     { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
     { id: 'catalog', label: 'Data Catalog', icon: BookOpen, disabled: !isConfigured, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'data-access', label: 'Access Requests', icon: Lock, hide: !hasPerm('MANAGE_ORG') },
     { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },
     { id: 'audit', label: 'Audit Trail', icon: ClipboardList, hide: !hasPerm('MANAGE_ORG') },
     { id: 'sso', label: 'SSO / SAML', icon: KeyRound, hide: !hasPerm('MANAGE_ORG') },
