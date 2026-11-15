@@ -46,6 +46,7 @@ import { ChartDisplay } from './ChartDisplay';
 import { ShareModal } from './ShareModal';
 import { ExportModal } from './ExportModal';
 import { SaveTemplateModal } from './SaveTemplateModal';
+import { DataAccessModal } from './DataAccessModal';
 
 // ── CSV / Excel download helpers ──────────────────────────────────────────────
 
@@ -223,6 +224,12 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Data Access consent banner ─────────────────────────────────────────────
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [accessModalTables, setAccessModalTables] = useState<
+    { name: string; columns: string[]; estimated_rows?: number }[]
+  >([]);
 
   useEffect(() => {
     fetchSessions();
@@ -627,9 +634,22 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const currentInput = input;
+    const currentInput = input.trim();
+    if (!currentInput) return;
     setInput('');
-    await executeQuery(currentInput);
+
+    // Extract table names mentioned in the query (simple heuristic: words after FROM/JOIN/UPDATE/INTO)
+    const tableMatches = [...currentInput.matchAll(/\b(?:from|join|update|into)\s+([`"\[]?\w+[`"\]]?)/gi)]
+      .map(m => m[1].replace(/[`"[\]]/g, ''));
+    const uniqueTables = [...new Set(tableMatches)];
+
+    if (uniqueTables.length > 0) {
+      // Show consent modal before running
+      setAccessModalTables(uniqueTables.map(name => ({ name, columns: [] })));
+      setPendingQuery(currentInput);
+    } else {
+      await executeQuery(currentInput);
+    }
   };
 
   const handleVoiceInput = () => {
@@ -1339,6 +1359,33 @@ export function QueryInterface({ apiKey, initialQuery, onQueryProcessed, onNavig
           <SaveTemplateModal
             initialQuery={saveTemplateQuery}
             onClose={() => setSaveTemplateQuery(null)}
+          />
+        )}
+
+        {/* Data Access Consent Modal */}
+        {pendingQuery !== null && (
+          <DataAccessModal
+            databaseName={
+              dataSources.length > 0
+                ? (dataSources[0]?.name || dataSources[0]?.database_name || 'connected database')
+                : 'connected database'
+            }
+            tables={accessModalTables}
+            purpose={pendingQuery}
+            onApprove={async () => {
+              const q = pendingQuery;
+              setPendingQuery(null);
+              setAccessModalTables([]);
+              await executeQuery(q);
+            }}
+            onDecline={() => {
+              setPendingQuery(null);
+              setAccessModalTables([]);
+            }}
+            onClose={() => {
+              setPendingQuery(null);
+              setAccessModalTables([]);
+            }}
           />
         )}
 
