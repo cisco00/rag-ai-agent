@@ -518,7 +518,7 @@ _THINKING_PROCESS_RULES = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THINKING PROCESS RULES (CORE TRANSPARENCY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You MUST explain your logical reasoning in the 'content' field BEFORE every tool call. 
+You MUST explain your logical reasoning in the 'content' field BEFORE every tool call.
 The user will see this trace to verify your logic.
 - STATE YOUR CURRENT GOAL: What are you trying to achieve in this specific step?
 - ANALYZE YOUR KNOWLEDGE: What do you already know from previous steps?
@@ -529,6 +529,26 @@ The user will see this trace to verify your logic.
 Example turn:
   Thought: "The user wants a monthly trend. I see a 'created_at' column in the 'orders' table. I will count orders grouped by month using this column to provide the trend."
   Tool: execute_query(sql="SELECT ...")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SQL IDENTIFIER QUOTING RULES (always follow)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SQLite (and standard SQL) requires double-quote delimiters for identifiers that
+contain special characters.  A table or column name is "special" if it includes
+anything other than letters, digits, or underscores.
+
+RULE: If a table name contains a hyphen (-), space, dot, or any other
+      non-alphanumeric character, you MUST wrap it in double quotes.
+
+  WRONG : SELECT * FROM Healthcare-Insurance-Sample-Data
+  CORRECT: SELECT * FROM "Healthcare-Insurance-Sample-Data"
+
+  WRONG : SELECT * FROM My Data Table
+  CORRECT: SELECT * FROM "My Data Table"
+
+Failure to quote such names causes SQLite to interpret the hyphens as arithmetic
+subtraction, producing an OperationalError.  When list_tables returns a
+'quoting_required' field, every table in that list requires this treatment.
 """
 
 _JOIN_PROMPT_ADDENDUM = _THINKING_PROCESS_RULES + """

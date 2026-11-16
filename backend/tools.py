@@ -10,8 +10,16 @@ Bug #14 — Added get_foreign_keys and get_join_schema tools. main.py's system
 Bug #19 — validate_tool_call now recognises get_foreign_keys and get_join_schema
            instead of raising ValueError("Unknown tool").
            Also removed duplicate 'from typing import ...' line.
+Bug #21 — Table names containing hyphens (e.g. Healthcare-Insurance-Sample-Data)
+           must be double-quoted in SQL; SQLite treats bare hyphens as arithmetic
+           subtraction, producing OperationalError: unrecognised token "".
+           Fix: (a) _auto_quote_identifiers() wraps any such name in the LLM
+           SQL before execution; (b) list_tables / describe_table annotate
+           special-character names so the LLM learns the correct quoted form;
+           (c) the execute_query tool description reminds the LLM to quote them.
 """
 
+import re
 from typing import Dict, List, Tuple, Any, Optional
 
 from sqlalchemy import inspect as sa_inspect
@@ -21,6 +29,37 @@ from analytics import calculate_correlation
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# ── Bug #21: SQL identifier auto-quoter ──────────────────────────────────────
+_NEEDS_QUOTING_RE = re.compile(r'[^A-Za-z0-9_]')
+
+
+def _auto_quote_identifiers(sql: str, known_tables: List[str]) -> str:
+    """
+    For every table name that contains characters requiring quoting (hyphens,
+    spaces, dots, etc.), ensure the name is wrapped in double quotes wherever
+    it appears unquoted in the LLM-generated SQL.
+
+    SQLite (and standard SQL) uses double-quote delimiters for identifiers.
+    Without this guard a table such as ``Healthcare-Insurance-Sample-Data``
+    is parsed by SQLite as ``Healthcare MINUS Insurance MINUS Sample MINUS
+    Data``, yielding OperationalError: unrecognised token "".
+
+    Strategy: negative-lookbehind / lookahead for ``"`` so we never
+    double-quote an identifier that is already quoted.
+    """
+    for table in known_tables:
+        if not _NEEDS_QUOTING_RE.search(table):
+            continue  # plain alphanumeric name — no quoting needed
+        # Match the bare (unquoted) table name in the SQL.
+        # (?<!") ensures the char before the match is not already a double-quote.
+        # (?!")  ensures the char after  the match is not already a double-quote.
+        pattern = r'(?<!")' + re.escape(table) + r'(?!")'
+        new_sql = re.sub(pattern, f'"{table}"', sql)
+        if new_sql != sql:
+            logger.info("auto-quoted special-char table name '%s' in SQL", table)
+            sql = new_sql
+    return sql
 
 
 def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tuple[List[Dict], Dict[str, Any]]:
@@ -79,14 +118,22 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
                 "description": (
                     "Execute a SQL query and return the results. "
                     "Always use SELECT queries for data retrieval. "
-                    "Results are limited to 200 rows."
+                    "Results are limited to 200 rows. "
+                    "IMPORTANT: Table names that contain hyphens, spaces, or other "
+                    "special characters MUST be wrapped in double quotes. "
+                    "Example: SELECT * FROM \"Healthcare-Insurance-Sample-Data\". "
+                    "Failure to quote such names will cause a syntax error."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "sql": {
                             "type": "string",
-                            "description": "The SQL query to execute."
+                            "description": (
+                                "The SQL query to execute. "
+                                "Always double-quote table names that contain hyphens "
+                                "or spaces, e.g. FROM \"My-Table\"."
+                            )
                         }
                     },
                     "required": ["sql"]
@@ -174,6 +221,21 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
             if tables:
                 result = [t for t in result if t in tables]
             logger.debug(f"list_tables returned {len(result)} tables")
+            # Bug #21: annotate tables whose names require quoting in SQL so the
+            # LLM knows to write FROM "Healthcare-Insurance-Sample-Data" rather
+            # than the bare (unquoted) form that SQLite rejects.
+            special = [t for t in result if _NEEDS_QUOTING_RE.search(t)]
+            if special:
+                return {
+                    "tables": result,
+                    "quoting_required": special,
+                    "note": (
+                        "Tables listed in 'quoting_required' contain special "
+                        "characters (hyphens, spaces, etc.) and MUST be wrapped "
+                        "in double quotes in every SQL statement. "
+                        "Example: SELECT * FROM \"Healthcare-Insurance-Sample-Data\""
+                    ),
+                }
             return result
         except Exception as e:
             logger.error(f"list_tables failed: {e}", exc_info=True)
@@ -188,6 +250,20 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
         try:
             result = db.describe_table(table_name)
             logger.debug(f"describe_table returned {len(result)} columns")
+            # Bug #21: for tables whose names contain special characters, attach a
+            # reminder so the LLM uses the correctly-quoted form in SQL.
+            if _NEEDS_QUOTING_RE.search(table_name):
+                return {
+                    "columns": result,
+                    "sql_identifier": f'"{table_name}"',
+                    "warning": (
+                        f"This table name contains special characters. "
+                        f"In every SQL query you MUST reference it as: "
+                        f'FROM "{table_name}" '
+                        f"(with double quotes). Using it unquoted will cause "
+                        f"a syntax error."
+                    ),
+                }
             return result
         except Exception as e:
             logger.error(f"describe_table failed for '{table_name}': {e}", exc_info=True)
@@ -196,6 +272,12 @@ def get_db_tools(db: DatabaseManager, tables: Optional[List[str]] = None) -> Tup
     def execute_query_with_logging(sql: str):
         logger.info(f"Tool called: execute_query(sql={sql[:100]}...)")
         try:
+            # Bug #21: auto-quote any table name containing special characters
+            # (hyphens, spaces, etc.) that the LLM may have left unquoted.
+            # This is a defensive safety net; the LLM is also instructed via
+            # the tool description and list_tables / describe_table responses.
+            known = db.list_tables()
+            sql = _auto_quote_identifiers(sql, known)
             result = db.execute_query(sql, max_rows=200, allow_modifications=False)
             logger.debug(f"execute_query returned {len(result)} rows")
             return result
