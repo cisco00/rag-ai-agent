@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSessionStorage } from '../../hooks/useSessionStorage';
-import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock, GitBranch, TreePine, Sigma, FlaskConical } from 'lucide-react';
+import { TrendingUp, Activity, Grid3x3, Layers, Play, Loader2, Sparkles, ChevronDown, ChevronUp, Save, BookOpen, Trash2, Clock, GitBranch, TreePine, Sigma, FlaskConical, Network, CheckCircle2, XCircle, HelpCircle, RotateCcw } from 'lucide-react';
 import { api } from '../../lib/api';
 import { AnalyticsInterpretation } from './AnalyticsInterpretation';
 import {
@@ -13,7 +13,28 @@ interface AdvancedAnalyticsProps {
   apiKey: string;
 }
 
-type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation' | 'cluster' | 'regression' | 'classification' | 'pca' | 'hypothesis';
+type AnalyticsTab = 'forecast' | 'anomaly' | 'correlation' | 'cluster' | 'regression' | 'classification' | 'pca' | 'hypothesis' | 'cross';
+
+type CrossPhase = 'selector' | 'proposing' | 'voting' | 'synthesizing' | 'result';
+type HypothesisVote = 'pending' | 'accepted' | 'rejected' | 'uncertain';
+interface CrossHypothesis {
+  id: string;
+  claim: string;
+  evidence_a: string;
+  evidence_b: string;
+  analyses_referenced: string[];
+  confidence: string;
+  confidence_reason: string;
+  vote: HypothesisVote;
+}
+interface CrossSynthesis {
+  headline: string;
+  narrative: string;
+  action_threads: string[];
+  caveats: string[];
+  confirmed_count: number;
+  analyses_used: string[];
+}
 
 export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
@@ -93,10 +114,17 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [hypoColumns, setHypoColumns] = useState<string[]>([]);
   const [hypoStats, setHypoStats] = useState<Record<string, any>>({});
 
+  // Cross-Analytical Intelligence
+  const [crossPhase, setCrossPhase] = useSessionStorage<CrossPhase>('advanced_analytics_crossPhase', 'selector');
+  const [crossSelected, setCrossSelected] = useSessionStorage<string[]>('advanced_analytics_crossSelected', []);
+  const [crossHypotheses, setCrossHypotheses] = useSessionStorage<CrossHypothesis[]>('advanced_analytics_crossHypotheses', []);
+  const [crossSynthesis, setCrossSynthesis] = useSessionStorage<CrossSynthesis | null>('advanced_analytics_crossSynthesis', null);
+  const [crossError, setCrossError] = useState('');
+
   // AI insights
   const [insights, setInsights] = useState<Record<AnalyticsTab, string[]>>({
     forecast: [], anomaly: [], correlation: [], cluster: [],
-    regression: [], classification: [], pca: [], hypothesis: [],
+    regression: [], classification: [], pca: [], hypothesis: [], cross: [],
   });
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(true);
@@ -568,6 +596,104 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     } finally { setIsProcessing(false); }
   };
 
+  // ── Cross-Analytical Intelligence ────────────────────────────────────────────
+
+  const CROSS_LABELS: Record<string, string> = {
+    forecast: 'Forecast', anomaly: 'Anomaly Detection', correlation: 'Correlation',
+    cluster: 'Clustering', regression: 'Regression', classification: 'Classification',
+    pca: 'PCA', hypothesis: 'Hypothesis Test',
+  };
+
+  // Which analyses currently have results (used to enable checkboxes)
+  const crossCompleted = useMemo(() => ({
+    forecast:       (forecastData?.length ?? 0) > 0,
+    anomaly:        anomalyResult != null,
+    correlation:    (correlationData?.length ?? 0) > 0,
+    cluster:        clusterData != null,
+    regression:     regressionResult != null,
+    classification: classResult != null,
+    pca:            pcaResult != null,
+    hypothesis:     hypoResult != null,
+  }), [forecastData, anomalyResult, correlationData, clusterData, regressionResult, classResult, pcaResult, hypoResult]);
+
+  const handleCrossToggle = (tabId: string) => {
+    setCrossSelected(prev =>
+      prev.includes(tabId) ? prev.filter(x => x !== tabId) : [...prev, tabId]
+    );
+  };
+
+  const handleCrossPropose = async () => {
+    setCrossPhase('proposing');
+    setCrossError('');
+    try {
+      const analyses = crossSelected.map(tabId => ({
+        type: tabId,
+        label: CROSS_LABELS[tabId] || tabId,
+        stats: {
+          forecast:       (forecastData?.length ?? 0) > 0 ? { ...forecastStats, data_points: forecastData.length } : {},
+          anomaly:        anomalyResult ?? {},
+          correlation:    (correlationData?.length ?? 0) > 0 ? { matrix: correlationData, columns: correlationColumns } : {},
+          cluster:        clusterData ?? {},
+          regression:     regressionResult ?? {},
+          classification: classResult ?? {},
+          pca:            pcaResult ?? {},
+          hypothesis:     hypoResult ?? {},
+        }[tabId] ?? {},
+      }));
+      const data = await api.post<any>('/analytics/cross-analysis/propose', { analyses });
+      const hypotheses: CrossHypothesis[] = (data.hypotheses ?? []).map((h: any) => ({ ...h, vote: 'pending' as HypothesisVote }));
+      setCrossHypotheses(hypotheses);
+      setCrossPhase('voting');
+    } catch (e: any) {
+      setCrossError(e?.message || 'Failed to generate hypotheses.');
+      setCrossPhase('selector');
+    }
+  };
+
+  const handleCrossVote = (id: string, vote: HypothesisVote) => {
+    setCrossHypotheses(prev => prev.map(h => h.id === id ? { ...h, vote } : h));
+  };
+
+  const handleCrossSynthesize = async () => {
+    const confirmed = crossHypotheses.filter(h => h.vote === 'accepted');
+    if (!confirmed.length) return;
+    setCrossPhase('synthesizing');
+    setCrossError('');
+    try {
+      const analyses = crossSelected.map(tabId => ({
+        type: tabId,
+        label: CROSS_LABELS[tabId] || tabId,
+        stats: {
+          forecast:       (forecastData?.length ?? 0) > 0 ? { ...forecastStats, data_points: forecastData.length } : {},
+          anomaly:        anomalyResult ?? {},
+          correlation:    (correlationData?.length ?? 0) > 0 ? { matrix: correlationData, columns: correlationColumns } : {},
+          cluster:        clusterData ?? {},
+          regression:     regressionResult ?? {},
+          classification: classResult ?? {},
+          pca:            pcaResult ?? {},
+          hypothesis:     hypoResult ?? {},
+        }[tabId] ?? {},
+      }));
+      const data = await api.post<any>('/analytics/cross-analysis/synthesize', {
+        confirmed: confirmed.map(({ vote: _v, ...h }) => h),
+        analyses,
+      });
+      setCrossSynthesis(data);
+      setCrossPhase('result');
+    } catch (e: any) {
+      setCrossError(e?.message || 'Failed to synthesize.');
+      setCrossPhase('voting');
+    }
+  };
+
+  const handleCrossReset = () => {
+    setCrossPhase('selector');
+    setCrossSelected([]);
+    setCrossHypotheses([]);
+    setCrossSynthesis(null);
+    setCrossError('');
+  };
+
   // Smooth diverging colour scale: red(-1) → white(0) → green(+1)
   const getCellStyle = (value: number): React.CSSProperties => {
     const v = Math.max(-1, Math.min(1, value));
@@ -625,6 +751,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     { id: 'classification', label: 'Classification',  icon: TreePine    },
     { id: 'pca',            label: 'PCA',             icon: Sigma       },
     { id: 'hypothesis',     label: 'Hypothesis',      icon: FlaskConical },
+    { id: 'cross',          label: 'Cross-Analysis',  icon: Network      },
   ], []);
 
   return (
@@ -2080,6 +2207,312 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       )}
 
       {/* ── Saved Snapshots panel ─────────────────────────────────────────── */}
+      {/* ── Cross-Analytical Intelligence ───────────────────────────────────── */}
+      {activeTab === 'cross' && (
+        <div className="space-y-6">
+          {/* Error banner */}
+          {crossError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700 flex items-start gap-2">
+              <XCircle className="size-4 mt-0.5 flex-shrink-0" />
+              {crossError}
+            </div>
+          )}
+
+          {/* ── Phase: selector ── */}
+          {crossPhase === 'selector' && (
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="flex items-center gap-3 mb-2">
+                <Network className="size-5 text-purple-600" />
+                <h3 className="font-bold text-gray-900">Select Analyses to Connect</h3>
+              </div>
+              <p className="text-sm text-gray-500 mb-6">
+                Choose 2–4 completed analyses. The AI will propose connections between them — you then
+                validate each one before a final synthesis is generated.
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                {Object.entries(CROSS_LABELS).map(([tabId, label]) => {
+                  const done = crossCompleted[tabId as keyof typeof crossCompleted];
+                  const checked = crossSelected.includes(tabId);
+                  return (
+                    <label
+                      key={tabId}
+                      className={`relative flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                        !done ? 'opacity-40 cursor-not-allowed bg-gray-50 border-gray-200' :
+                        checked ? 'bg-purple-50 border-purple-400 ring-1 ring-purple-300' :
+                        'bg-white border-gray-200 hover:border-purple-300'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={!done}
+                        checked={checked}
+                        onChange={() => handleCrossToggle(tabId)}
+                        className="accent-purple-600"
+                      />
+                      <span className="text-sm font-medium text-gray-700">{label}</span>
+                      {done && (
+                        <span className="ml-auto size-2 rounded-full bg-emerald-400 flex-shrink-0" title="Has results" />
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-400">
+                  {crossSelected.length < 2
+                    ? `Select ${2 - crossSelected.length} more to continue`
+                    : `${crossSelected.length} analyses selected — ready to find connections`}
+                </p>
+                <button
+                  onClick={handleCrossPropose}
+                  disabled={crossSelected.length < 2}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-40 font-medium text-sm transition-colors"
+                >
+                  <Sparkles className="size-4" />
+                  Find Connections
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Phase: proposing ── */}
+          {crossPhase === 'proposing' && (
+            <div className="bg-white rounded-xl border border-gray-200 p-12 flex flex-col items-center gap-4">
+              <Loader2 className="size-8 text-purple-500 animate-spin" />
+              <p className="text-gray-600 font-medium">Generating hypotheses…</p>
+              <p className="text-sm text-gray-400 text-center max-w-sm">
+                The AI is looking for numeric cross-connections between your selected analyses.
+                Any hypothesis without cited evidence will be dropped before you see it.
+              </p>
+            </div>
+          )}
+
+          {/* ── Phase: voting ── */}
+          {crossPhase === 'voting' && (
+            <div className="space-y-4">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-gray-900">Review Proposed Connections</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    Accept the connections that look right to you. Only accepted ones feed the final synthesis.
+                  </p>
+                </div>
+                <button
+                  onClick={handleCrossReset}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 border border-gray-200 rounded-lg transition-colors"
+                >
+                  <RotateCcw className="size-3.5" /> Start over
+                </button>
+              </div>
+
+              {/* Vote summary */}
+              {(() => {
+                const accepted  = crossHypotheses.filter(h => h.vote === 'accepted').length;
+                const rejected  = crossHypotheses.filter(h => h.vote === 'rejected').length;
+                const pending   = crossHypotheses.filter(h => h.vote === 'pending').length;
+                return (
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span className="flex items-center gap-1 text-emerald-600 font-medium">
+                      <CheckCircle2 className="size-3.5" /> {accepted} accepted
+                    </span>
+                    <span className="flex items-center gap-1 text-red-500 font-medium">
+                      <XCircle className="size-3.5" /> {rejected} rejected
+                    </span>
+                    <span className="flex items-center gap-1 text-gray-400">
+                      <HelpCircle className="size-3.5" /> {pending} pending
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Hypothesis cards */}
+              {crossHypotheses.map(h => (
+                <div key={h.id} className={`bg-white rounded-xl border-2 p-5 transition-all ${
+                  h.vote === 'accepted'  ? 'border-emerald-400 bg-emerald-50/30' :
+                  h.vote === 'rejected'  ? 'border-red-300 bg-red-50/20 opacity-60' :
+                  h.vote === 'uncertain' ? 'border-amber-300 bg-amber-50/20' :
+                  'border-gray-200'
+                }`}>
+                  {/* Confidence + analyses badges */}
+                  <div className="flex items-center gap-2 flex-wrap mb-3">
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      h.confidence === 'High'   ? 'bg-emerald-100 text-emerald-700' :
+                      h.confidence === 'Medium' ? 'bg-amber-100 text-amber-700' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {h.confidence} confidence
+                    </span>
+                    {h.analyses_referenced.map(a => (
+                      <span key={a} className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">
+                        {a}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Claim */}
+                  <p className="text-gray-900 font-medium mb-3">{h.claim}</p>
+
+                  {/* Evidence */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                    <div className="text-xs bg-blue-50 border border-blue-100 rounded-lg p-3 text-blue-800">
+                      <span className="font-semibold">Evidence A: </span>{h.evidence_a}
+                    </div>
+                    <div className="text-xs bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-indigo-800">
+                      <span className="font-semibold">Evidence B: </span>{h.evidence_b}
+                    </div>
+                  </div>
+
+                  {/* Confidence reason */}
+                  <p className="text-xs text-gray-400 italic mb-4">{h.confidence_reason}</p>
+
+                  {/* Vote buttons */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleCrossVote(h.id, 'accepted')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                        h.vote === 'accepted'
+                          ? 'bg-emerald-600 text-white'
+                          : 'border border-gray-200 text-gray-600 hover:border-emerald-400 hover:text-emerald-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      <CheckCircle2 className="size-3.5" /> Looks right
+                    </button>
+                    <button
+                      onClick={() => handleCrossVote(h.id, 'uncertain')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                        h.vote === 'uncertain'
+                          ? 'bg-amber-500 text-white'
+                          : 'border border-gray-200 text-gray-600 hover:border-amber-400 hover:text-amber-700 hover:bg-amber-50'
+                      }`}
+                    >
+                      <HelpCircle className="size-3.5" /> Not sure
+                    </button>
+                    <button
+                      onClick={() => handleCrossVote(h.id, 'rejected')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                        h.vote === 'rejected'
+                          ? 'bg-red-500 text-white'
+                          : 'border border-gray-200 text-gray-600 hover:border-red-400 hover:text-red-600 hover:bg-red-50'
+                      }`}
+                    >
+                      <XCircle className="size-3.5" /> Doesn't hold
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {/* Synthesize CTA */}
+              {crossHypotheses.filter(h => h.vote === 'accepted').length > 0 && (
+                <div className="sticky bottom-4 flex justify-end">
+                  <button
+                    onClick={handleCrossSynthesize}
+                    className="flex items-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 font-semibold shadow-lg shadow-purple-200 transition-all"
+                  >
+                    <Sparkles className="size-4" />
+                    Synthesize {crossHypotheses.filter(h => h.vote === 'accepted').length} confirmed
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Phase: synthesizing ── */}
+          {crossPhase === 'synthesizing' && (
+            <div className="bg-white rounded-xl border border-gray-200 p-12 flex flex-col items-center gap-4">
+              <Loader2 className="size-8 text-purple-500 animate-spin" />
+              <p className="text-gray-600 font-medium">Writing synthesis…</p>
+              <p className="text-sm text-gray-400 text-center max-w-sm">
+                Synthesizing only your confirmed connections — no new claims will be introduced.
+              </p>
+            </div>
+          )}
+
+          {/* ── Phase: result ── */}
+          {crossPhase === 'result' && crossSynthesis && (
+            <div className="space-y-5">
+              {/* Provenance line */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-purple-700 bg-purple-100 px-2.5 py-1 rounded-full">
+                    Based on {crossSynthesis.confirmed_count} confirmed connection{crossSynthesis.confirmed_count !== 1 ? 's' : ''}
+                  </span>
+                  {crossSynthesis.analyses_used.map(a => (
+                    <span key={a} className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600">
+                      {a}
+                    </span>
+                  ))}
+                </div>
+                <button
+                  onClick={handleCrossReset}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 border border-gray-200 rounded-lg transition-colors"
+                >
+                  <RotateCcw className="size-3.5" /> New analysis
+                </button>
+              </div>
+
+              {/* Headline */}
+              <div className="bg-purple-600 text-white rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-1 opacity-70 text-sm">
+                  <Network className="size-4" /> Cross-Analysis Summary
+                </div>
+                <p className="text-lg font-bold">{crossSynthesis.headline}</p>
+              </div>
+
+              {/* Narrative */}
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h4 className="font-semibold text-gray-900 mb-3">Synthesis</h4>
+                <p className="text-gray-700 leading-relaxed whitespace-pre-line">{crossSynthesis.narrative}</p>
+              </div>
+
+              {/* Two columns: actions + caveats */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {crossSynthesis.action_threads?.length > 0 && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                      <Play className="size-4 text-purple-500" /> Next Investigative Steps
+                    </h4>
+                    <ul className="space-y-2">
+                      {crossSynthesis.action_threads.map((step, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                          <span className="size-5 rounded-full bg-purple-100 text-purple-700 font-bold text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
+                            {i + 1}
+                          </span>
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {crossSynthesis.caveats?.length > 0 && (
+                  <div className="bg-amber-50 rounded-xl border border-amber-200 p-5">
+                    <h4 className="font-semibold text-amber-800 mb-3 flex items-center gap-2">
+                      <HelpCircle className="size-4 text-amber-600" /> Validate Before Acting
+                    </h4>
+                    <ul className="space-y-2">
+                      {crossSynthesis.caveats.map((c, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-amber-800">
+                          <span className="text-amber-500 mt-0.5">•</span>
+                          {c}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              {/* Go back to vote */}
+              <button
+                onClick={() => setCrossPhase('voting')}
+                className="text-sm text-purple-600 hover:text-purple-800 underline"
+              >
+                ← Back to hypothesis review
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-6 bg-white border border-gray-200 rounded-xl overflow-hidden">
         <button
           onClick={() => setSnapshotsOpen(v => !v)}
