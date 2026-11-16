@@ -16,10 +16,11 @@ from pydantic import BaseModel
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index, text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from dependencies import get_current_org, get_org_connection_string
 from auth import get_current_user
-from models import get_db, admin_engine
+from models import admin_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -141,14 +142,14 @@ async def list_notebooks(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         rows = (
             db.query(NotebookRecord)
             .filter(NotebookRecord.org_id == org.id)
             .order_by(NotebookRecord.updated_at.desc())
             .all()
         )
-    return {"notebooks": [_serialize(r) for r in rows]}
+        return {"notebooks": [_serialize(r) for r in rows]}
 
 
 @router.post("/notebooks", status_code=201)
@@ -158,7 +159,7 @@ async def create_notebook(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         nb = NotebookRecord(
             org_id=org.id,
             created_by=getattr(user, "id", None),
@@ -168,7 +169,7 @@ async def create_notebook(
         db.add(nb)
         db.commit()
         db.refresh(nb)
-    return _serialize(nb)
+        return _serialize(nb)
 
 
 @router.get("/notebooks/{notebook_id}")
@@ -178,14 +179,14 @@ async def get_notebook(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
         ).first()
-    if not nb:
-        raise HTTPException(404, "Notebook not found")
-    return _serialize(nb)
+        if not nb:
+            raise HTTPException(404, "Notebook not found")
+        return _serialize(nb)
 
 
 @router.put("/notebooks/{notebook_id}")
@@ -196,7 +197,7 @@ async def update_notebook(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
@@ -210,7 +211,7 @@ async def update_notebook(
         nb.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(nb)
-    return _serialize(nb)
+        return _serialize(nb)
 
 
 @router.delete("/notebooks/{notebook_id}", status_code=204)
@@ -220,7 +221,7 @@ async def delete_notebook(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         nb = db.query(NotebookRecord).filter(
             NotebookRecord.id == notebook_id,
             NotebookRecord.org_id == org.id,
