@@ -28,10 +28,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import Column, Integer, Text, DateTime, Index
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from dependencies import get_current_org
-from models import get_db, admin_engine
+from models import admin_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -121,18 +122,18 @@ async def get_profile(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         record = db.query(OrgBusinessProfile).filter(
             OrgBusinessProfile.org_id == org.id
         ).first()
-    if not record:
-        return {
-            "org_id":       org.id,
-            "completeness": 0,
-            "industries":   INDUSTRIES,
-            "team_sizes":   TEAM_SIZES,
-        }
-    return _serialize(record)
+        if not record:
+            return {
+                "org_id":       org.id,
+                "completeness": 0,
+                "industries":   INDUSTRIES,
+                "team_sizes":   TEAM_SIZES,
+            }
+        return _serialize(record)
 
 
 @router.put("/business-profile")
@@ -142,7 +143,7 @@ async def upsert_profile(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         record = db.query(OrgBusinessProfile).filter(
             OrgBusinessProfile.org_id == org.id
         ).first()
@@ -165,9 +166,12 @@ async def upsert_profile(
         db.commit()
         db.refresh(record)
 
+        # Serialise while session is still open — avoids DetachedInstanceError
+        result = _serialize(record)
+
     logger.info("[BizProfile] org=%s updated — completeness=%s%%",
                 org.id, _completeness(merged))
-    return _serialize(record)
+    return result
 
 
 @router.delete("/business-profile", status_code=204)
@@ -176,7 +180,7 @@ async def clear_profile(
     user=Depends(get_current_user),
 ):
     _ensure_table(admin_engine)
-    with get_db() as db:
+    with Session(admin_engine) as db:
         record = db.query(OrgBusinessProfile).filter(
             OrgBusinessProfile.org_id == org.id
         ).first()
