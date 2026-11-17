@@ -8,14 +8,32 @@ from fastapi import APIRouter, HTTPException, Depends, Query as QueryParam
 from fastapi.concurrency import run_in_threadpool
 import re
 
-_SAFE_IDENT_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+# Accepts letters, digits, underscores, hyphens, spaces, and dots —
+# all characters commonly found in CSV-imported table/column names.
+# Double-quoting the result keeps every such name safe in SQL.
+_SAFE_IDENT_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_ \-\.]*$')
 
 def _safe_identifier(name: str) -> str:
-    """Validate and quote a SQL identifier to prevent injection."""
+    """Validate and double-quote a SQL identifier to prevent injection.
+
+    Supports table/column names that contain hyphens, spaces, or dots
+    (e.g. ``Healthcare-Insurance-Sample-Data``) in addition to the
+    standard alphanumeric+underscore names.  Double-quoting the result
+    makes any such name safe for use in SQL without further escaping.
+    """
+    # Embedded double-quotes would break the quoting scheme — reject them.
+    if not name or '"' in name or '\x00' in name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid identifier: '{name}'."
+        )
     if not _SAFE_IDENT_RE.match(name):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid identifier: '{name}'. Only letters, numbers, and underscores are allowed."
+            detail=(
+                f"Invalid identifier: '{name}'. "
+                "Identifiers may contain letters, numbers, underscores, hyphens, spaces, and dots."
+            )
         )
     return f'"{name}"'
 

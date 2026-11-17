@@ -755,9 +755,9 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   ], []);
 
   return (
-    <div className="p-8">
+    <div className="p-6">
       {/* Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <div className="flex items-center gap-3 mb-3">
           <TrendingUp className="size-8 text-purple-600" />
           <h1 className="text-3xl font-bold text-gray-900">Advanced Analytics</h1>
@@ -769,23 +769,25 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
       {/* Tabs */}
       <div className="bg-white rounded-xl border border-gray-200 mb-6">
-        <div className="flex border-b border-gray-200">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as AnalyticsTab)}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-4 font-medium transition-colors ${activeTab === tab.id
-                  ? 'text-purple-600 border-b-2 border-purple-600'
-                  : 'text-gray-600 hover:text-gray-900'
-                  }`}
-              >
-                <Icon className="size-5" />
-                {tab.label}
-              </button>
-            );
-          })}
+        <div className="overflow-x-auto">
+          <div className="flex border-b border-gray-200 min-w-max">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as AnalyticsTab)}
+                  className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors ${activeTab === tab.id
+                    ? 'text-purple-600 border-b-2 border-purple-600'
+                    : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+                    }`}
+                >
+                  <Icon className="size-4 flex-shrink-0" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
