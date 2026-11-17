@@ -137,9 +137,9 @@ function mapOpForBackend(op: Operation): Record<string, any> {
 
 // ── Sortable operation card wrapper ──────────────────────────────────────────
 
-function SortableCard({ op, index, onRemove, conflicts, children }: {
+function SortableCard({ op, index, onRemove, conflicts, description, children }: {
   op: Operation; index: number; onRemove: () => void;
-  conflicts?: string[]; children: React.ReactNode;
+  conflicts?: string[]; description?: string; children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: op.id });
@@ -167,7 +167,7 @@ function SortableCard({ op, index, onRemove, conflicts, children }: {
   return (
     <div ref={setNodeRef} style={style}
       className={`p-4 border-2 rounded-lg transition-colors ${isDragging ? 'border-blue-400 shadow-lg bg-blue-50' : hasConflicts ? 'border-amber-400 bg-amber-50/40' : 'border-gray-200 hover:border-blue-300'}`}>
-      <div className="flex items-start justify-between mb-3">
+      <div className={`flex items-start justify-between ${description ? 'mb-1' : 'mb-3'}`}>
         <div className="flex items-center gap-2 flex-wrap">
           <button {...attributes} {...listeners}
             className="text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing p-0.5 rounded touch-none">
@@ -185,6 +185,9 @@ function SortableCard({ op, index, onRemove, conflicts, children }: {
         </div>
         <button onClick={onRemove} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded text-lg leading-none">×</button>
       </div>
+      {description && (
+        <p className="text-xs text-gray-400 mb-3 ml-7 leading-snug">{description}</p>
+      )}
       {hasConflicts && (
         <div className="mb-3 space-y-1">
           {conflicts!.map((msg, i) => (
@@ -516,6 +519,23 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
     [pipelineConflicts]
   );
 
+  // ── Track effective column names at each pipeline step ──────────────────────
+  // Accounts for rename_col and drop_col so each op's column picker shows the
+  // names as they actually exist at that point in the pipeline.
+  const effectiveColumnsAt = useMemo(() => {
+    const result: string[][] = [];
+    let cur = [...columns];
+    for (const op of operations) {
+      result.push([...cur]);                            // columns BEFORE this op
+      if (op.type === 'rename_col' && op.params.column && op.params.new_name) {
+        cur = cur.map(c => c === op.params.column ? op.params.new_name : c);
+      } else if (op.type === 'drop_col' && op.params.column) {
+        cur = cur.filter(c => c !== op.params.column);
+      }
+    }
+    return result;
+  }, [columns, operations]);
+
   // ── Feature 11: Post-transform quality score ────────────────────────────────
   const qualityMetrics = useMemo(() => {
     const compute = (rows: any[]) => {
@@ -694,42 +714,43 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
     })();
   }, [selectedTable]);
 
-  // ── Load saved pipelines on table change ────────────────────────────────────
+  // ── Load saved pipelines (all, not filtered by table) ───────────────────────
+  // Loading all pipelines on login prevents them from disappearing when the
+  // first selected table differs from the table the pipelines were saved for.
   const fetchPipelines = useCallback(async () => {
-    if (!selectedTable) return;
     try {
-      const data = await api.get<SavedPipeline[]>(`/transform/pipelines?table=${encodeURIComponent(selectedTable)}`);
+      const data = await api.get<SavedPipeline[]>('/transform/pipelines');
       setSavedPipelines(Array.isArray(data) ? data : []);
     } catch {}
-  }, [selectedTable]);
+  }, []);
 
   useEffect(() => { fetchPipelines(); }, [fetchPipelines]);
 
   // ── Operation types ─────────────────────────────────────────────────────────
   const operationTypes = [
-    { value: 'drop_duplicates',    label: 'Drop Duplicates',       category: 'Cleaning' },
-    { value: 'clean_text',         label: 'Clean Text',            category: 'Cleaning' },
-    { value: 'remove_outliers',    label: 'Remove Outliers',       category: 'Cleaning' },
-    { value: 'filter',             label: 'Filter Rows',           category: 'Select' },
-    { value: 'drop_row',           label: 'Drop Rows',             category: 'Select' },
-    { value: 'rename_col',         label: 'Rename Column',         category: 'Select' },
-    { value: 'drop_col',           label: 'Drop Column',           category: 'Select' },
-    { value: 'change_type',        label: 'Change Type',           category: 'Select' },
-    { value: 'fill_na',            label: 'Fill Missing Values',   category: 'Select' },
-    { value: 'normalize',          label: 'Normalize',             category: 'Smart Prep' },
-    { value: 'encode',             label: 'Encode',                category: 'Smart Prep' },
-    { value: 'feature_engineering',label: 'Feature Engineering',   category: 'Smart Prep' },
-    { value: 'text_feature',       label: 'Text Features',         category: 'Smart Prep' },
-    { value: 'groupby',            label: 'Summarize (Group By)',  category: 'Summarize' },
-    { value: 'resample',           label: 'Time Series Resample',  category: 'Summarize' },
+    { value: 'drop_duplicates',    label: 'Drop Duplicates',       category: 'Cleaning',   description: 'Removes exact duplicate rows so each row in your data is unique.' },
+    { value: 'clean_text',         label: 'Clean Text',            category: 'Cleaning',   description: 'Tidies up text in a column — lowercase, uppercase, remove extra spaces, or strip special characters.' },
+    { value: 'remove_outliers',    label: 'Remove Outliers',       category: 'Cleaning',   description: 'Drops rows with extreme numeric values (using z-score). A threshold of 3 removes anything beyond 3 standard deviations from the mean.' },
+    { value: 'filter',             label: 'Filter Rows',           category: 'Select',     description: 'Keeps only rows where a column meets your condition (e.g. Sales > 1000). Rows that don\'t match are discarded.' },
+    { value: 'drop_row',           label: 'Drop Rows',             category: 'Select',     description: 'Removes rows that are null, blank, match a condition, or are statistical outliers in a column.' },
+    { value: 'rename_col',         label: 'Rename Column',         category: 'Select',     description: 'Gives a column a new, clearer name without changing its data.' },
+    { value: 'drop_col',           label: 'Drop Column',           category: 'Select',     description: 'Permanently removes a column from the dataset. Use when a column is irrelevant or confidential.' },
+    { value: 'change_type',        label: 'Change Type',           category: 'Select',     description: 'Converts a column\'s data type — e.g. text → number, or text → date — so it can be used in calculations or time-based operations.' },
+    { value: 'fill_na',            label: 'Fill Missing Values',   category: 'Select',     description: 'Replaces empty (null/NaN) cells with a computed value like the column mean, median, or a fixed value you choose.' },
+    { value: 'normalize',          label: 'Normalize',             category: 'Smart Prep', description: 'Rescales numeric columns to a comparable range. Min-Max puts values in 0–1; Z-Score centers them around zero; Log compresses large ranges.' },
+    { value: 'encode',             label: 'Encode',                category: 'Smart Prep', description: 'Converts text categories into numbers that machine-learning models can use. One-Hot creates a yes/no column per category; Label assigns each category an integer.' },
+    { value: 'feature_engineering',label: 'Feature Engineering',   category: 'Smart Prep', description: 'Creates new columns from existing ones — multiply/divide two columns together, or extract date parts like year, month, or day of week.' },
+    { value: 'text_feature',       label: 'Text Features',         category: 'Smart Prep', description: 'Extracts numeric signals from text: character length, word count, or TF-IDF relevance scores (useful for text-based modeling).' },
+    { value: 'groupby',            label: 'Summarize (Group By)',  category: 'Summarize',  description: 'Groups rows by one or more columns and computes aggregates (sum, mean, count, etc.) — like a pivot table or SQL GROUP BY.' },
+    { value: 'resample',           label: 'Time Series Resample',  category: 'Summarize',  description: 'Rolls up time-series rows to a coarser frequency — e.g. daily transactions → weekly totals.' },
     // Phase 2
-    { value: 'sample',             label: 'Sample Rows',           category: 'Select' },
-    { value: 'join',               label: 'Join / Merge Tables',   category: 'Combine' },
-    { value: 'union',              label: 'Union / Append',        category: 'Combine' },
-    { value: 'pivot',              label: 'Pivot',                 category: 'Reshape' },
-    { value: 'unpivot',            label: 'Unpivot (Melt)',        category: 'Reshape' },
-    { value: 'formula_col',        label: 'Formula Column',        category: 'Smart Prep' },
-    { value: 'regex_extract',      label: 'Regex Extract',         category: 'Smart Prep' },
+    { value: 'sample',             label: 'Sample Rows',           category: 'Select',     description: 'Takes a random subset of rows — useful for quick analysis or building a smaller test dataset.' },
+    { value: 'join',               label: 'Join / Merge Tables',   category: 'Combine',    description: 'Merges two tables side-by-side by matching values in a key column — like a SQL JOIN or Excel VLOOKUP.' },
+    { value: 'union',              label: 'Union / Append',        category: 'Combine',    description: 'Stacks two tables on top of each other (adds rows) when they share the same columns — like SQL UNION.' },
+    { value: 'pivot',              label: 'Pivot',                 category: 'Reshape',    description: 'Rotates unique values in one column into new column headers, spreading the data wider.' },
+    { value: 'unpivot',            label: 'Unpivot (Melt)',        category: 'Reshape',    description: 'Collapses multiple columns into two (variable + value), making wide data long — the reverse of a Pivot.' },
+    { value: 'formula_col',        label: 'Formula Column',        category: 'Smart Prep', description: 'Adds a new column computed by a custom Python-style expression using existing column names (e.g. Price * Qty).' },
+    { value: 'regex_extract',      label: 'Regex Extract',         category: 'Smart Prep', description: 'Pulls out a specific text pattern from a column using a regular expression (e.g. extract an email domain or a 5-digit code).' },
   ];
 
   const getDefaultParams = (type: string): Record<string, any> => ({
@@ -1013,13 +1034,15 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
   };
 
   // ── Per-operation forms ─────────────────────────────────────────────────────
-  const renderForm = (op: Operation) => {
+  const renderForm = (op: Operation, effectiveCols?: string[]) => {
+    // Use effective columns (post-rename/drop) when available, else fall back to base columns
+    const colList = effectiveCols && effectiveCols.length > 0 ? effectiveCols : columns;
     // Searchable column picker — replaces plain <select> for all column choices
     const sel = (paramName: string, placeholder = 'Select column') => (
       <ColumnCombobox
         value={op.params[paramName] || ''}
         onChange={v => updateParam(op.id, paramName, v)}
-        columns={columns}
+        columns={colList}
         placeholder={placeholder}
       />
     );
@@ -1136,14 +1159,30 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
           <input type="number" step="0.1" placeholder="Z-score threshold (default 3)" value={op.params.threshold??3} onChange={e=>updateParam(op.id,'threshold',parseFloat(e.target.value))} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
         </div>
       );
-      case 'normalize': return (
-        <div className="grid grid-cols-2 gap-3">
-          <input type="text" placeholder="Columns (comma-separated)" value={Array.isArray(op.params.columns)?op.params.columns.join(', '):op.params.columns||''} onChange={e=>updateParam(op.id,'columns',e.target.value.split(',').map((c:string)=>c.trim()).filter(Boolean))} className="px-3 py-2 border border-gray-300 rounded text-sm"/>
-          <select value={op.params.method||'minmax'} onChange={e=>updateParam(op.id,'method',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
-            <option value="minmax">Min-Max (0–1)</option><option value="zscore">Z-Score</option><option value="log">Log transform</option>
-          </select>
-        </div>
-      );
+      case 'normalize': {
+        const selectedNormCols: string[] = Array.isArray(op.params.columns) ? op.params.columns : [];
+        return (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-1 p-2 border border-gray-300 rounded min-h-[38px] bg-white">
+              {selectedNormCols.map(c => (
+                <span key={c} className="flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                  {c}
+                  <button onClick={() => updateParam(op.id, 'columns', selectedNormCols.filter(x => x !== c))} className="hover:text-red-600 leading-none">×</button>
+                </span>
+              ))}
+              <select value="" onChange={e => { const v = e.target.value; if (v && !selectedNormCols.includes(v)) updateParam(op.id, 'columns', [...selectedNormCols, v]); }} className="border-none outline-none text-sm text-gray-500 bg-transparent flex-1 min-w-[120px]">
+                <option value="">+ Add column…</option>
+                {colList.filter(c => !selectedNormCols.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <select value={op.params.method||'minmax'} onChange={e=>updateParam(op.id,'method',e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+              <option value="minmax">Min-Max (0–1) — scales values between 0 and 1</option>
+              <option value="zscore">Z-Score — centers around 0, unit std deviation</option>
+              <option value="log">Log transform — compresses large value ranges</option>
+            </select>
+          </div>
+        );
+      }
       case 'encode': return (
         <div className="grid grid-cols-2 gap-3">
           {sel('column')}
@@ -1177,7 +1216,7 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
             {ft==='time_component' && <div className="grid grid-cols-2 gap-3">
               {sel('column','Date column')}
               <select value={op.params.component||'year'} onChange={e=>updateParam(op.id,'component',e.target.value)} className="px-3 py-2 border border-gray-300 rounded text-sm">
-                <option value="year">Year</option><option value="month">Month</option><option value="day">Day</option><option value="dow">Day of week</option><option value="quarter">Quarter</option>
+                <option value="year">Year</option><option value="month">Month (1–12)</option><option value="day">Day of month (1–31)</option><option value="hour">Hour (0–23)</option><option value="dow">Day of week (0=Mon)</option><option value="quarter">Quarter (1–4)</option>
               </select>
             </div>}
           </div>
@@ -1561,10 +1600,10 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
                     {showLoadMenu && (
                       <div className="absolute right-0 top-9 z-30 w-72 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
                         <div className="p-3 border-b border-gray-100">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Saved Pipelines for "{selectedTable}"</p>
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">All Saved Pipelines</p>
                         </div>
                         {savedPipelines.length === 0 ? (
-                          <p className="p-4 text-sm text-gray-500 text-center">No saved pipelines for this table.</p>
+                          <p className="p-4 text-sm text-gray-500 text-center">No saved pipelines yet.</p>
                         ) : (
                           <div className="max-h-80 overflow-y-auto">
                             {savedPipelines.map(p => {
@@ -1585,7 +1624,7 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
                                           </span>
                                         )}
                                       </div>
-                                      <p className="text-xs text-gray-400">{p.operations.length} ops · {new Date(p.updated_at).toLocaleDateString()}</p>
+                                      <p className="text-xs text-gray-400">{p.operations.length} ops · {p.table_name} · {new Date(p.updated_at).toLocaleDateString()}</p>
                                     </div>
                                     {/* Action icons */}
                                     <div className="flex items-center gap-0.5 ml-2 shrink-0" onClick={e=>e.stopPropagation()}>
@@ -1739,8 +1778,9 @@ export function DataTransformation({ apiKey, initialJoin }: DataTransformationPr
                   <SortableContext items={operations.map(op=>op.id)} strategy={verticalListSortingStrategy}>
                     {operations.map((op, index) => (
                       <SortableCard key={op.id} op={op} index={index} onRemove={()=>removeOperation(op.id)}
-                        conflicts={pipelineConflicts.get(op.id)}>
-                        {renderForm(op)}
+                        conflicts={pipelineConflicts.get(op.id)}
+                        description={operationTypes.find(t => t.value === op.type)?.description}>
+                        {renderForm(op, effectiveColumnsAt[index])}
                       </SortableCard>
                     ))}
                   </SortableContext>

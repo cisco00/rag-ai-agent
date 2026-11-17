@@ -141,7 +141,7 @@ if not JWT_SECRET:
     )
 
 JWT_ALGORITHM     = "HS256"
-ACCESS_TOKEN_TTL  = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "60"))
+ACCESS_TOKEN_TTL  = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "480"))
 REFRESH_TOKEN_TTL = int(os.getenv("REFRESH_TOKEN_TTL_DAYS",   "30"))
 
 ROLES: tuple[str, ...] = (

@@ -23,7 +23,7 @@ class DataTransformer:
         Returns:
             Transformed DataFrame
         """
-        for op in operations:
+        for idx, op in enumerate(operations, start=1):
             op_type = op.get("type")
             try:
                 if op_type == "filter":
@@ -76,8 +76,14 @@ class DataTransformer:
                 else:
                     logger.warning(f"Unknown operation type: {op_type}")
             except Exception as e:
-                logger.error(f"Error applying {op_type}: {e}")
-                raise e
+                # Re-raise with step number so callers can surface which step failed
+                step_label = f"Step {idx} ({op_type})"
+                # Avoid double-wrapping if the error already has step info
+                msg = str(e)
+                if msg.startswith("Step "):
+                    raise
+                logger.error(f"Error applying {step_label}: {e}")
+                raise ValueError(f"{step_label}: {e}") from e
                 
         return df
 
@@ -110,9 +116,13 @@ class DataTransformer:
 
     @staticmethod
     def _change_type(df: pd.DataFrame, op: Dict[str, Any]) -> pd.DataFrame:
-        col = op["column"]
-        new_type = op["new_type"]
-        
+        col = op.get("column", "")
+        if not col:
+            raise ValueError("change_type requires a column to be selected")
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in the data")
+        new_type = op.get("new_type", "str")
+
         if new_type == "int":
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
         elif new_type == "float":
@@ -122,10 +132,10 @@ class DataTransformer:
         elif new_type == "datetime":
             df[col] = pd.to_datetime(df[col], errors='coerce')
         elif new_type == "bool":
-             # "Yes"/"No" -> True/False or 1/0 is handled in encoding usually, 
-             # but here we can do basic bool conversion
-             df[col] = df[col].astype(bool)
-        
+            # Convert via numeric first so NaN → False and non-zero → True
+            numeric = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = numeric.astype(bool)
+
         return df
 
     @staticmethod
@@ -189,7 +199,7 @@ class DataTransformer:
         col = op["column"]
         method = op.get("method", "one-hot")
         
-        if method == "one-hot":
+        if method in ("one-hot", "onehot"):
             # Limit number of categories to avoid explosion
             top_k = op.get("top_k", 10)
             dummies = pd.get_dummies(df[col], prefix=col)
@@ -239,13 +249,17 @@ class DataTransformer:
                 df[name] = df[col1] - df[col2]
                 
         elif feat_type == "time_component":
-            col = op["column"]
-            component = op.get("component") # day, month, year, dow, hour
-            
+            col = op.get("column", "")
+            if not col:
+                raise ValueError("time_component requires a 'column' to be selected")
+            if col not in df.columns:
+                raise ValueError(f"Column '{col}' not found in the data")
+            component = op.get("component", "year")
+
             # Ensure proper type
             if not pd.api.types.is_datetime64_any_dtype(df[col]):
                 df[col] = pd.to_datetime(df[col], errors='coerce')
-                
+
             if component == "day":
                 df[f"{col}_day"] = df[col].dt.day
             elif component == "month":
@@ -256,6 +270,10 @@ class DataTransformer:
                 df[f"{col}_dow"] = df[col].dt.dayofweek
             elif component == "quarter":
                 df[f"{col}_quarter"] = df[col].dt.quarter
+            elif component == "hour":
+                df[f"{col}_hour"] = df[col].dt.hour
+            else:
+                raise ValueError(f"Unknown time component: '{component}'")
                 
         elif feat_type == "lag":
              col = op["column"]

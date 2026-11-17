@@ -417,8 +417,10 @@ class TableNameValidator:
     Validates table names for database operations.
     """
     
-    # Valid table name pattern (alphanumeric and underscores only)
-    VALID_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+    # Valid table name pattern — allows letters, digits, underscores, hyphens,
+    # spaces, and dots so that uploaded files whose names contain those chars
+    # are accepted.  SQL identifiers are always double-quoted before execution.
+    VALID_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_ \-\.]*$')
     
     @staticmethod
     def validate(table_name: str) -> None:
@@ -438,7 +440,7 @@ class TableNameValidator:
             raise InvalidRequestError(
                 f"Invalid table name: {table_name}. "
                 "Table names must start with a letter or underscore and "
-                "contain only letters, numbers, and underscores."
+                "contain only letters, numbers, underscores, hyphens, spaces, or dots."
             )
         
         if len(table_name) > 64:
