@@ -203,6 +203,78 @@ async def import_salesforce(background_tasks: BackgroundTasks, org=Depends(get_c
         if not source:
             raise HTTPException(status_code=404, detail="Salesforce integration not found")
 
+    background_tasks.add_task(_sync_task, source, org, ["leads", "contacts", "opportunities", "accounts"])
+    return {"status": "success", "message": "Salesforce import started"}
+
+
+@router.delete("/{provider}/disconnect")
+async def disconnect_integration(provider: str, org=Depends(get_current_org), user=Depends(require_permission("MANAGE_SYNCS"))):
+    """Remove a connected CRM integration."""
+    if provider not in ["salesforce", "hubspot"]:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    with get_db() as db:
+        source = db.query(DataSource).filter(
+            DataSource.source_type == f"crm_{provider}",
+            DataSource.org_id == org.id
+        ).first()
+        if not source:
+            raise HTTPException(status_code=404, detail=f"{provider} integration not found")
+        db.delete(source)
+        db.commit()
+
+    logger.info(f"Disconnected {provider} integration for org {org.id}")
+    return {"status": "success", "message": f"{provider.capitalize()} disconnected"}
+
+
+@router.post("/{provider}/sync-settings")
+async def save_sync_settings(provider: str, request: Dict[str, Any], org=Depends(get_current_org), user=Depends(require_permission("MANAGE_SYNCS"))):
+    """Persist sync frequency and object selection for a CRM integration."""
+    if provider not in ["salesforce", "hubspot"]:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    frequency = request.get("frequency", 60)
+    objects = request.get("objects", [])
+
+    with get_db() as db:
+        source = db.query(DataSource).filter(
+            DataSource.source_type == f"crm_{provider}",
+            DataSource.org_id == org.id
+        ).first()
+        if not source:
+            raise HTTPException(status_code=404, detail=f"{provider} integration not found")
+
+        # Store settings in connection_details so no schema migration is needed
+        details = dict(source.connection_details or {})
+        details["sync_frequency_minutes"] = frequency
+        details["sync_objects"] = objects
+        source.connection_details = details
+        source.refresh_interval = frequency
+        db.commit()
+
+    return {"status": "success", "message": "Sync settings saved"}
+
+
+@router.get("/{provider}/sync-settings")
+async def get_sync_settings(provider: str, org=Depends(get_current_org), user=Depends(require_permission("MANAGE_SYNCS"))):
+    """Retrieve current sync settings for a CRM integration."""
+    if provider not in ["salesforce", "hubspot"]:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    with get_db() as db:
+        source = db.query(DataSource).filter(
+            DataSource.source_type == f"crm_{provider}",
+            DataSource.org_id == org.id
+        ).first()
+        if not source:
+            return {"frequency": 60, "objects": []}
+
+        details = source.connection_details or {}
+        return {
+            "frequency": details.get("sync_frequency_minutes", source.refresh_interval or 60),
+            "objects": details.get("sync_objects", [])
+        }
+
 @router.post("/{provider}/mock-link")
 async def crm_mock_link(provider: str, org=Depends(get_current_org), user=Depends(require_permission("MANAGE_SYNCS"))):
     """Instantly connect a mock CRM source (One-Click Connect)."""

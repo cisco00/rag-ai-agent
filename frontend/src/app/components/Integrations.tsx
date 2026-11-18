@@ -1,17 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { 
-    Cloud, 
-    Zap, 
-    RefreshCw, 
-    Link as LinkIcon, 
-    CheckCircle2, 
-    AlertCircle, 
+import { useState, useEffect, useRef } from 'react';
+import {
+    Cloud,
+    Zap,
+    RefreshCw,
+    Link as LinkIcon,
+    CheckCircle2,
+    AlertCircle,
     ArrowRight,
     Settings,
     MoreVertical,
-    ExternalLink,
-    Search
+    Unplug,
+    Save,
+    X
 } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
 
@@ -36,13 +38,28 @@ export function Integrations() {
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [success, setSuccess] = useState(false);
+    const [success, setSuccess] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [connecting, setConnecting] = useState<string | null>(null);
     const [configIntegration, setConfigIntegration] = useState<Integration | null>(null);
+    const [menuOpen, setMenuOpen] = useState<string | null>(null);
+    const [disconnectConfirm, setDisconnectConfirm] = useState<Integration | null>(null);
+    const [disconnecting, setDisconnecting] = useState<string | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         loadData();
+    }, []);
+
+    // Close dropdown when clicking outside
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setMenuOpen(null);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
     }, []);
 
     const loadData = async () => {
@@ -63,52 +80,52 @@ export function Integrations() {
         }
     };
 
+    const showSuccess = (msg: string) => {
+        setSuccess(msg);
+        setTimeout(() => setSuccess(null), 4000);
+    };
+
     const handleConnect = async (provider: string) => {
         try {
             setConnecting(provider);
-            
-            // 1. One-Click Mock Link
-            // We check a local flag or the backend response. For now, we try to call mock-link if connecting fails or as a preference
+
+            // Try mock-link first (dev mode)
             try {
-                // If we are in mock mode, try to link instantly
                 const mockRes = await api.post<any>(`/integrations/${provider}/mock-link`);
                 if (mockRes.status === 'success') {
-                    setSuccess(true);
+                    showSuccess(`${provider.charAt(0).toUpperCase() + provider.slice(1)} connected successfully.`);
                     loadData();
-                    setTimeout(() => setSuccess(false), 3000);
                     setConnecting(null);
                     return;
                 }
             } catch (e) {
-                // Ignore and fallback to OAuth if mock link fails (e.g. not in mock mode)
+                // Not in mock mode — fall through to OAuth
             }
 
-            // 2. Popup-based OAuth Flow
+            // Popup-based OAuth Flow
             const res = await api.get<{ url: string }>(`/integrations/${provider}/auth-url`);
-            
+
             const width = 600;
             const height = 700;
             const left = window.screenX + (window.outerWidth - width) / 2;
             const top = window.screenY + (window.outerHeight - height) / 2;
-            
+
             const popup = window.open(
-                res.url, 
-                `Connect ${provider}`, 
+                res.url,
+                `Connect ${provider}`,
                 `width=${width},height=${height},left=${left},top=${top}`
             );
 
-            // Listen for the 'crm_auth_success' message from the popup
             const handleMessage = (event: MessageEvent) => {
                 if (event.data === 'crm_auth_success') {
-                    setSuccess(true);
+                    showSuccess(`${provider.charAt(0).toUpperCase() + provider.slice(1)} connected successfully.`);
                     loadData();
-                    setTimeout(() => setSuccess(false), 3000);
                     window.removeEventListener('message', handleMessage);
+                    setConnecting(null);
                 }
             };
             window.addEventListener('message', handleMessage);
 
-            // Check if popup closed manually
             const timer = setInterval(() => {
                 if (popup?.closed) {
                     clearInterval(timer);
@@ -127,12 +144,11 @@ export function Integrations() {
         try {
             setSyncing(sourceId);
             await api.post('/integrations/sync', { source_id: parseInt(sourceId) });
-            setSuccess(true);
+            showSuccess('Sync started in background.');
             setTimeout(() => {
                 setSyncing(null);
                 loadData();
-                setTimeout(() => setSuccess(false), 3000);
-            }, 1000);
+            }, 1200);
         } catch (err) {
             setSyncing(null);
             setError('Sync failed. Please try again.');
@@ -143,30 +159,52 @@ export function Integrations() {
         try {
             setSyncing(provider);
             await api.post(`/integrations/import/${provider}`);
-            setSuccess(true);
+            showSuccess('Import started in background.');
             setTimeout(() => {
                 setSyncing(null);
                 loadData();
-                setTimeout(() => setSuccess(false), 3000);
-            }, 1000);
+            }, 1200);
         } catch (err) {
             setSyncing(null);
             setError(`Manual import for ${provider} failed.`);
         }
     };
 
-    const isConnected = (id: string) => {
-        return connected.some(c => c.source_type === `crm_${id}`);
+    const handleDisconnect = async (provider: string) => {
+        try {
+            setDisconnecting(provider);
+            await api.delete(`/integrations/${provider}/disconnect`);
+            showSuccess(`${provider.charAt(0).toUpperCase() + provider.slice(1)} disconnected.`);
+            loadData();
+        } catch (err: any) {
+            setError(err?.response?.data?.detail || `Failed to disconnect ${provider}.`);
+        } finally {
+            setDisconnecting(null);
+            setDisconnectConfirm(null);
+        }
     };
 
-    const filteredIntegrations = available.filter(i => 
+    const formatLastSync = (last_sync: string | null) => {
+        if (!last_sync) return 'Never synced';
+        const d = new Date(last_sync);
+        const now = new Date();
+        const isToday = d.toDateString() === now.toDateString();
+        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (isToday) return `Today at ${time}`;
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (d.toDateString() === yesterday.toDateString()) return `Yesterday at ${time}`;
+        return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${time}`;
+    };
+
+    const filteredIntegrations = available.filter(i =>
         i.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     if (loading) {
         return (
             <div className="flex flex-col items-center justify-center h-[60vh] space-y-4">
-                <motion.div 
+                <motion.div
                     initial={{ scale: 0.8, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ duration: 0.5, repeat: Infinity, repeatType: "reverse" }}
@@ -184,8 +222,8 @@ export function Integrations() {
 
     return (
         <div className="max-w-7xl mx-auto space-y-8 p-6 lg:p-10 transition-all">
-            {/* Header Section */}
-            <motion.div 
+            {/* Header */}
+            <motion.div
                 initial={{ y: -20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 className="flex flex-col md:flex-row md:items-end justify-between gap-6"
@@ -198,10 +236,10 @@ export function Integrations() {
                         Seamlessly synchronize your CRM data with Vantage AI to power deep cross-functional insights and predictive analytics.
                     </p>
                 </div>
-                
+
                 <div className="relative w-full md:w-80 group">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
-                    <input 
+                    <input
                         type="text"
                         placeholder="Search integrations..."
                         className="w-full pl-10 pr-4 py-3 bg-secondary/30 backdrop-blur-xl border border-border/50 rounded-2xl focus:ring-4 focus:ring-primary/10 focus:border-primary outline-none transition-all font-medium"
@@ -211,9 +249,10 @@ export function Integrations() {
                 </div>
             </motion.div>
 
+            {/* Toasts */}
             <AnimatePresence>
                 {error && (
-                    <motion.div 
+                    <motion.div
                         initial={{ height: 0, opacity: 0, y: -10 }}
                         animate={{ height: 'auto', opacity: 1, y: 0 }}
                         exit={{ height: 0, opacity: 0, y: -10 }}
@@ -221,14 +260,14 @@ export function Integrations() {
                     >
                         <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                         <div className="flex-1">
-                            <p className="font-bold">Connection Error</p>
+                            <p className="font-bold">Error</p>
                             <p className="text-sm opacity-90">{error}</p>
                         </div>
                         <button onClick={() => setError(null)} className="text-sm font-bold hover:underline">Dismiss</button>
                     </motion.div>
                 )}
                 {success && (
-                    <motion.div 
+                    <motion.div
                         initial={{ height: 0, opacity: 0, y: -10 }}
                         animate={{ height: 'auto', opacity: 1, y: 0 }}
                         exit={{ height: 0, opacity: 0, y: -10 }}
@@ -236,25 +275,25 @@ export function Integrations() {
                     >
                         <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
                         <div className="flex-1">
-                            <p className="font-bold">Operation Successful</p>
-                            <p className="text-sm opacity-90">Your integration task has been queued and is executing in the background.</p>
+                            <p className="font-bold">Success</p>
+                            <p className="text-sm opacity-90">{success}</p>
                         </div>
-                        <button onClick={() => setSuccess(false)} className="text-sm font-bold hover:underline">Dismiss</button>
+                        <button onClick={() => setSuccess(null)} className="text-sm font-bold hover:underline">Dismiss</button>
                     </motion.div>
                 )}
             </AnimatePresence>
 
-            {/* Main Content Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {/* Integration Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" ref={menuRef}>
                 {filteredIntegrations.map((integration, index) => {
                     const connectedSource = connected.find(c => c.source_type === `crm_${integration.id}`);
                     const active = !!connectedSource;
-                    
+
                     const brandColor = integration.id === 'hubspot' ? 'bg-[#ff7a59]' : 'bg-[#00a1e0]';
                     const brandHover = integration.id === 'hubspot' ? 'hover:bg-[#ff8f75]' : 'hover:bg-[#1ab6f5]';
 
                     return (
-                        <motion.div 
+                        <motion.div
                             key={integration.id}
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -264,7 +303,6 @@ export function Integrations() {
                                 active ? 'bg-primary/[0.04] border-primary/20' : 'bg-card border-border/50 hover:border-primary/40'
                             }`}
                         >
-                            {/* Animated Background Gradient */}
                             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
                             <div className="p-8 space-y-8 relative z-10">
@@ -283,9 +321,51 @@ export function Integrations() {
                                                 Available
                                             </span>
                                         )}
-                                        <button className="p-2 hover:bg-secondary rounded-xl transition-colors">
-                                            <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                                        </button>
+
+                                        {/* MoreVertical dropdown — only shown when connected */}
+                                        {active && (
+                                            <div className="relative">
+                                                <button
+                                                    onClick={() => setMenuOpen(menuOpen === integration.id ? null : integration.id)}
+                                                    className="p-2 hover:bg-secondary rounded-xl transition-colors"
+                                                >
+                                                    <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                                                </button>
+                                                <AnimatePresence>
+                                                    {menuOpen === integration.id && (
+                                                        <motion.div
+                                                            initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                                                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                                                            exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                                                            className="absolute right-0 top-10 w-44 bg-card border border-border rounded-2xl shadow-2xl z-50 overflow-hidden"
+                                                        >
+                                                            <button
+                                                                onClick={() => { setMenuOpen(null); setConfigIntegration(integration); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-secondary transition-colors"
+                                                            >
+                                                                <Settings className="w-4 h-4 text-muted-foreground" />
+                                                                Settings
+                                                            </button>
+                                                            <button
+                                                                onClick={() => { setMenuOpen(null); handleSync(connectedSource!.id); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 text-sm font-bold hover:bg-secondary transition-colors"
+                                                            >
+                                                                <RefreshCw className="w-4 h-4 text-muted-foreground" />
+                                                                Sync Now
+                                                            </button>
+                                                            <div className="border-t border-border/50" />
+                                                            <button
+                                                                onClick={() => { setMenuOpen(null); setDisconnectConfirm(integration); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 text-sm font-bold text-destructive hover:bg-destructive/10 transition-colors"
+                                                            >
+                                                                <Unplug className="w-4 h-4" />
+                                                                Disconnect
+                                                            </button>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -301,15 +381,15 @@ export function Integrations() {
                                         <div className="flex items-center justify-between">
                                             <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground flex items-center gap-2">
                                                 <RefreshCw className="w-3 h-3" />
-                                                Sync Status
+                                                Last Sync
                                             </span>
                                             <span className="text-xs font-bold text-foreground/80">
-                                                {connectedSource?.last_sync ? new Date(connectedSource.last_sync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending...'}
+                                                {formatLastSync(connectedSource?.last_sync ?? null)}
                                             </span>
                                         </div>
-                                        
+
                                         <div className="grid grid-cols-2 gap-4">
-                                            <motion.button 
+                                            <motion.button
                                                 whileTap={{ scale: 0.95 }}
                                                 onClick={() => handleSync(connectedSource!.id)}
                                                 disabled={!!syncing}
@@ -324,7 +404,7 @@ export function Integrations() {
                                                     </>
                                                 )}
                                             </motion.button>
-                                            <motion.button 
+                                            <motion.button
                                                 whileTap={{ scale: 1.05 }}
                                                 onClick={() => setConfigIntegration(integration)}
                                                 className="flex h-14 items-center justify-center gap-2 bg-secondary font-black rounded-2xl hover:bg-secondary/80 transition-all border border-border/50"
@@ -335,7 +415,7 @@ export function Integrations() {
                                         </div>
                                     </div>
                                 ) : (
-                                    <motion.button 
+                                    <motion.button
                                         whileTap={{ scale: 0.98 }}
                                         onClick={() => handleConnect(integration.id)}
                                         disabled={connecting === integration.id}
@@ -361,7 +441,7 @@ export function Integrations() {
                 })}
 
                 {/* Coming Soon Placeholder */}
-                <motion.div 
+                <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 0.7 }}
                     className="rounded-[2.5rem] border-2 border-dashed border-border/80 bg-secondary/10 flex flex-col items-center justify-center p-10 space-y-6 group hover:bg-secondary/20 transition-all"
@@ -373,9 +453,12 @@ export function Integrations() {
                         <p className="text-xl font-black italic">More On Way</p>
                         <p className="text-sm text-muted-foreground font-medium">Request your custom ecosystem</p>
                     </div>
-                    <button className="px-6 py-2 bg-primary/10 text-primary font-black text-xs uppercase tracking-widest rounded-full hover:bg-primary/20 transition-all">
+                    <a
+                        href="mailto:support@vantage.ai?subject=Integration%20Request"
+                        className="px-6 py-2 bg-primary/10 text-primary font-black text-xs uppercase tracking-widest rounded-full hover:bg-primary/20 transition-all"
+                    >
                         Suggest Sync
-                    </button>
+                    </a>
                 </motion.div>
             </div>
 
@@ -383,23 +466,70 @@ export function Integrations() {
             <AnimatePresence>
                 {configIntegration && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             onClick={() => setConfigIntegration(null)}
                             className="absolute inset-0 bg-background/80 backdrop-blur-sm"
                         />
-                        <ConfigModal 
-                            integration={configIntegration} 
+                        <ConfigModal
+                            integration={configIntegration}
                             onClose={() => setConfigIntegration(null)}
-                            onSuccess={() => {
-                                setSuccess(true);
-                                setTimeout(() => setSuccess(false), 3000);
-                            }}
+                            onSuccess={(msg: string) => showSuccess(msg)}
                             handleManualImport={handleManualImport}
                             syncing={syncing}
                         />
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Disconnect Confirm Dialog */}
+            <AnimatePresence>
+                {disconnectConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setDisconnectConfirm(null)}
+                            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            className="relative z-10 bg-card border border-border rounded-[2rem] p-8 max-w-md w-full shadow-2xl space-y-6"
+                        >
+                            <div className="flex items-start gap-4">
+                                <div className="p-3 bg-destructive/10 rounded-2xl">
+                                    <Unplug className="w-6 h-6 text-destructive" />
+                                </div>
+                                <div>
+                                    <h3 className="text-xl font-black">Disconnect {disconnectConfirm.name}?</h3>
+                                    <p className="text-sm text-muted-foreground mt-1">
+                                        This will remove the connection and stop all syncs. Your already-imported data will remain intact.
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setDisconnectConfirm(null)}
+                                    className="flex-1 h-12 bg-secondary font-bold rounded-2xl hover:bg-secondary/80 transition-all border border-border/50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => handleDisconnect(disconnectConfirm.id)}
+                                    disabled={disconnecting === disconnectConfirm.id}
+                                    className="flex-1 h-12 bg-destructive text-destructive-foreground font-bold rounded-2xl hover:opacity-90 transition-all disabled:opacity-60"
+                                >
+                                    {disconnecting === disconnectConfirm.id ? (
+                                        <RefreshCw className="w-4 h-4 animate-spin mx-auto" />
+                                    ) : 'Yes, Disconnect'}
+                                </button>
+                            </div>
+                        </motion.div>
                     </div>
                 )}
             </AnimatePresence>
@@ -407,15 +537,42 @@ export function Integrations() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Config Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FREQUENCY_OPTIONS = [
+    { label: 'Every 15 minutes', value: 15 },
+    { label: 'Every 30 minutes', value: 30 },
+    { label: 'Every 60 minutes (Default)', value: 60 },
+    { label: 'Every 4 hours', value: 240 },
+    { label: 'Daily at Midnight', value: 1440 },
+    { label: 'Manual Only', value: 0 },
+];
+
+const PROVIDER_OBJECTS: Record<string, string[]> = {
+    hubspot: ['contacts', 'companies', 'deals', 'tasks'],
+    salesforce: ['leads', 'contacts', 'opportunities', 'accounts'],
+};
+
 function ConfigModal({ integration, onClose, onSuccess, handleManualImport, syncing }: any) {
     const [tab, setTab] = useState<'sync' | 'provision'>('sync');
     const [clientId, setClientId] = useState('');
     const [clientSecret, setClientSecret] = useState('');
     const [redirectUri, setRedirectUri] = useState('');
     const [saving, setSaving] = useState(false);
+    const [savingSync, setSavingSync] = useState(false);
+
+    // Sync settings state
+    const [frequency, setFrequency] = useState(60);
+    const [selectedObjects, setSelectedObjects] = useState<string[]>([]);
+    const [loadingSettings, setLoadingSettings] = useState(true);
+
+    const availableObjects = PROVIDER_OBJECTS[integration.id] || [];
 
     useEffect(() => {
         loadCredentials();
+        loadSyncSettings();
     }, []);
 
     const loadCredentials = async () => {
@@ -424,7 +581,43 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
             setClientId(res.client_id || '');
             setRedirectUri(res.redirect_uri || '');
         } catch (e) {
-            console.error("Failed to load credentials", e);
+            console.error('Failed to load credentials', e);
+        }
+    };
+
+    const loadSyncSettings = async () => {
+        try {
+            setLoadingSettings(true);
+            const res = await api.get<any>(`/integrations/${integration.id}/sync-settings`);
+            setFrequency(res.frequency ?? 60);
+            // Default: all objects selected if none saved yet
+            setSelectedObjects(res.objects?.length > 0 ? res.objects : availableObjects);
+        } catch (e) {
+            setSelectedObjects(availableObjects);
+        } finally {
+            setLoadingSettings(false);
+        }
+    };
+
+    const toggleObject = (obj: string) => {
+        setSelectedObjects(prev =>
+            prev.includes(obj) ? prev.filter(o => o !== obj) : [...prev, obj]
+        );
+    };
+
+    const handleSaveSyncSettings = async () => {
+        try {
+            setSavingSync(true);
+            await api.post(`/integrations/${integration.id}/sync-settings`, {
+                frequency,
+                objects: selectedObjects,
+            });
+            onSuccess('Sync settings saved.');
+            onClose();
+        } catch (e: any) {
+            alert(e.response?.data?.detail || 'Failed to save sync settings.');
+        } finally {
+            setSavingSync(false);
         }
     };
 
@@ -436,25 +629,25 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                 client_secret: clientSecret,
                 redirect_uri: redirectUri
             });
-            onSuccess();
+            onSuccess('Credentials saved.');
             setTab('sync');
         } catch (e: any) {
-            const msg = e.response?.data?.detail || "Failed to save credentials. Please check inputs.";
-            alert(msg);
+            alert(e.response?.data?.detail || 'Failed to save credentials.');
         } finally {
             setSaving(false);
         }
     };
 
     return (
-        <motion.div 
+        <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
             className="relative w-full max-w-2xl bg-card border border-border rounded-[3rem] p-8 md:p-10 shadow-2xl space-y-6 overflow-hidden max-h-[90vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
         >
             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent pointer-events-none" />
-            
+
             <div className="flex items-center justify-between relative z-10">
                 <div className="flex items-center gap-4">
                     <div className="p-4 bg-primary text-primary-foreground rounded-2xl">
@@ -465,18 +658,23 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                         <p className="text-sm text-muted-foreground">Configure your private CRM application.</p>
                     </div>
                 </div>
-                <div className="flex bg-secondary/50 p-1 rounded-2xl border border-border/50">
-                    <button 
-                        onClick={() => setTab('sync')}
-                        className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${tab === 'sync' ? 'bg-background shadow-lg text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                    >
-                        Sync
-                    </button>
-                    <button 
-                        onClick={() => setTab('provision')}
-                        className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${tab === 'provision' ? 'bg-background shadow-lg text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-                    >
-                        Provisioning
+                <div className="flex items-center gap-3">
+                    <div className="flex bg-secondary/50 p-1 rounded-2xl border border-border/50">
+                        <button
+                            onClick={() => setTab('sync')}
+                            className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${tab === 'sync' ? 'bg-background shadow-lg text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                        >
+                            Sync
+                        </button>
+                        <button
+                            onClick={() => setTab('provision')}
+                            className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${tab === 'provision' ? 'bg-background shadow-lg text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                        >
+                            Provisioning
+                        </button>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-secondary rounded-xl transition-colors">
+                        <X className="w-5 h-5 text-muted-foreground" />
                     </button>
                 </div>
             </div>
@@ -484,13 +682,14 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
             <div className="relative z-10">
                 {tab === 'sync' ? (
                     <div className="space-y-6">
+                        {/* Force sync */}
                         <div className="p-6 bg-secondary/30 rounded-[2rem] border border-border/50 space-y-4">
                             <div className="flex items-center justify-between">
                                 <div className="space-y-1">
                                     <h4 className="text-lg font-black italic uppercase tracking-tighter text-primary">Force Sync</h4>
                                     <p className="text-xs text-muted-foreground font-medium">Trigger an immediate data refresh from the source API.</p>
                                 </div>
-                                <button 
+                                <button
                                     onClick={() => {
                                         handleManualImport(integration.id);
                                         onClose();
@@ -503,28 +702,51 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                             </div>
                         </div>
 
+                        {/* Frequency */}
                         <div className="space-y-2">
                             <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground px-2">Sync Frequency</label>
-                            <select className="w-full h-14 px-5 bg-secondary/50 border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary/20 appearance-none font-bold">
-                                <option>Every 60 minutes (Default)</option>
-                                <option>Every 4 hours</option>
-                                <option>Daily at Midnight</option>
-                                <option>Manual Only</option>
+                            <select
+                                className="w-full h-14 px-5 bg-secondary/50 border border-border rounded-2xl outline-none focus:ring-2 focus:ring-primary/20 appearance-none font-bold"
+                                value={frequency}
+                                onChange={(e) => setFrequency(Number(e.target.value))}
+                            >
+                                {FREQUENCY_OPTIONS.map(opt => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
                             </select>
                         </div>
 
+                        {/* Sync Objects */}
                         <div className="space-y-4">
                             <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground px-2">Sync Objects</label>
-                            <div className="grid grid-cols-2 gap-3">
-                                {(integration.id === 'hubspot' ? ['Contacts', 'Companies', 'Deals', 'Tasks'] : ['Leads', 'Contacts', 'Opportunities', 'Accounts']).map(obj => (
-                                    <div key={obj} className="flex items-center gap-3 p-4 bg-secondary/30 rounded-2xl border border-border/50 hover:border-primary/20 transition-colors cursor-pointer group">
-                                        <div className="w-5 h-5 rounded border-2 border-primary/50 bg-transparent flex items-center justify-center group-hover:bg-primary/10">
-                                            <CheckCircle2 className="w-3 h-3 text-primary opacity-100" />
-                                        </div>
-                                        <span className="text-sm font-bold">{obj}</span>
-                                    </div>
-                                ))}
-                            </div>
+                            {loadingSettings ? (
+                                <div className="h-12 flex items-center px-2 text-sm text-muted-foreground">Loading...</div>
+                            ) : (
+                                <div className="grid grid-cols-2 gap-3">
+                                    {availableObjects.map(obj => {
+                                        const checked = selectedObjects.includes(obj);
+                                        return (
+                                            <button
+                                                key={obj}
+                                                type="button"
+                                                onClick={() => toggleObject(obj)}
+                                                className={`flex items-center gap-3 p-4 rounded-2xl border transition-colors text-left ${
+                                                    checked
+                                                        ? 'bg-primary/10 border-primary/40'
+                                                        : 'bg-secondary/30 border-border/50 hover:border-primary/20'
+                                                }`}
+                                            >
+                                                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                                    checked ? 'border-primary bg-primary' : 'border-muted-foreground/40 bg-transparent'
+                                                }`}>
+                                                    {checked && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
+                                                </div>
+                                                <span className="text-sm font-bold capitalize">{obj}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                     </div>
                 ) : (
@@ -532,7 +754,7 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                         <div className="bg-primary/5 border border-primary/20 p-5 rounded-[2rem] flex items-start gap-3">
                             <AlertCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                             <p className="text-xs text-muted-foreground leading-relaxed">
-                                Provide your <strong>{integration.name} Developer App</strong> credentials below. 
+                                Provide your <strong>{integration.name} Developer App</strong> credentials below.
                                 This allows Vantage AI to connect directly to your instance using your preferred application settings.
                             </p>
                         </div>
@@ -540,8 +762,8 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                         <div className="space-y-4">
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground px-2">Client ID</label>
-                                <input 
-                                    type="text" 
+                                <input
+                                    type="text"
                                     className="w-full h-14 px-5 bg-secondary/30 border border-border rounded-2xl outline-none focus:border-primary font-bold transition-all"
                                     placeholder="Enter your application client_id"
                                     value={clientId}
@@ -550,8 +772,8 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                             </div>
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground px-2">Client Secret</label>
-                                <input 
-                                    type="password" 
+                                <input
+                                    type="password"
                                     className="w-full h-14 px-5 bg-secondary/30 border border-border rounded-2xl outline-none focus:border-primary font-bold transition-all"
                                     placeholder="••••••••••••••••"
                                     value={clientSecret}
@@ -560,8 +782,8 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                             </div>
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground px-2">Redirect URI (Optional)</label>
-                                <input 
-                                    type="text" 
+                                <input
+                                    type="text"
                                     className="w-full h-14 px-5 bg-secondary/30 border border-border rounded-2xl outline-none focus:border-primary font-bold transition-all"
                                     placeholder="https://your-domain.com/callback"
                                     value={redirectUri}
@@ -571,7 +793,7 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                             </div>
                         </div>
 
-                        <button 
+                        <button
                             onClick={handleSaveCredentials}
                             disabled={saving}
                             className="w-full h-16 bg-primary text-primary-foreground font-black rounded-3xl shadow-lg shadow-primary/20 hover:opacity-90 active:scale-95 transition-all"
@@ -582,22 +804,28 @@ function ConfigModal({ integration, onClose, onSuccess, handleManualImport, sync
                 )}
             </div>
 
+            {/* Footer */}
             <div className="flex gap-4 pt-4 relative z-10">
-                <button 
+                <button
                     onClick={onClose}
                     className="flex-1 h-16 bg-secondary text-foreground font-black rounded-3xl hover:bg-secondary/80 transition-all border border-border/50"
                 >
-                    Close
+                    Cancel
                 </button>
                 {tab === 'sync' && (
-                    <button 
-                        onClick={() => {
-                            onSuccess();
-                            onClose();
-                        }}
-                        className="flex-1 h-16 bg-primary text-primary-foreground font-black rounded-3xl shadow-lg shadow-primary/20 hover:opacity-90 transition-all"
+                    <button
+                        onClick={handleSaveSyncSettings}
+                        disabled={savingSync || selectedObjects.length === 0}
+                        className="flex-1 h-16 bg-primary text-primary-foreground font-black rounded-3xl shadow-lg shadow-primary/20 hover:opacity-90 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
                     >
-                        Save Settings
+                        {savingSync ? (
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                            <>
+                                <Save className="w-5 h-5" />
+                                Save Settings
+                            </>
+                        )}
                     </button>
                 )}
             </div>
