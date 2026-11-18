@@ -39,11 +39,14 @@ interface CrossSynthesis {
 export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [activeTab, setActiveTab] = useSessionStorage<AnalyticsTab>('advanced_analytics_activeTab', 'forecast');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [forecastData, setForecastData] = useSessionStorage<any[]>('advanced_analytics_forecastData', []);
-  const [forecastEngine, setForecastEngine] = useSessionStorage<string>('advanced_analytics_forecastEngine', '');
-  const [anomalyData, setAnomalyData] = useSessionStorage<any[]>('advanced_analytics_anomalyData', []);
-  const [correlationData, setCorrelationData] = useSessionStorage<any[][]>('advanced_analytics_correlationData', []);
-  const [correlationColumns, setCorrelationColumns] = useSessionStorage<string[]>('advanced_analytics_correlationColumns', []);
+  // Results use plain useState — they must NOT persist across logouts because
+  // sessionStorage survives a re-login in the same tab and would show another
+  // account's data.
+  const [forecastData, setForecastData] = useState<any[]>([]);
+  const [forecastEngine, setForecastEngine] = useState<string>('');
+  const [anomalyData, setAnomalyData] = useState<any[]>([]);
+  const [correlationData, setCorrelationData] = useState<any[][]>([]);
+  const [correlationColumns, setCorrelationColumns] = useState<string[]>([]);
 
   // Forecast configuration
   const [forecastConfig, setForecastConfig] = useSessionStorage('advanced_analytics_forecastConfig', {
@@ -63,7 +66,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     mvColumns: [] as string[],  // selected columns for multivariate mode
   });
   // Full anomaly API response (needed for multivariate meta: pairs, feature_cols)
-  const [anomalyResult, setAnomalyResult] = useSessionStorage<any>('advanced_analytics_anomalyResult', null);
+  const [anomalyResult, setAnomalyResult] = useState<any>(null);
 
   // Correlation configuration
   const [correlationConfig, setCorrelationConfig] = useSessionStorage('advanced_analytics_correlationConfig', {
@@ -79,14 +82,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
     yColumn: '',
     nClusters: 3,
   });
-  const [clusterData, setClusterData] = useSessionStorage<any>('advanced_analytics_clusterData', null);
+  const [clusterData, setClusterData] = useState<any>(null);
   const [clusterColumns, setClusterColumns] = useState<string[]>([]);
 
   // Regression
   const [regressionConfig, setRegressionConfig] = useSessionStorage('advanced_analytics_regressionConfig', {
     table: '', targetColumn: '', featureColumns: [] as string[], testSize: 0.2,
   });
-  const [regressionResult, setRegressionResult] = useSessionStorage<any>('advanced_analytics_regressionResult', null);
+  const [regressionResult, setRegressionResult] = useState<any>(null);
   const [regressionColumns, setRegressionColumns] = useState<string[]>([]);
   const [regressionStats, setRegressionStats] = useState<Record<string, any>>({});
 
@@ -94,7 +97,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [classConfig, setClassConfig] = useSessionStorage('advanced_analytics_classConfig', {
     table: '', targetColumn: '', featureColumns: [] as string[], testSize: 0.2, maxDepth: '' as string,
   });
-  const [classResult, setClassResult] = useSessionStorage<any>('advanced_analytics_classResult', null);
+  const [classResult, setClassResult] = useState<any>(null);
   const [classColumns, setClassColumns] = useState<string[]>([]);
   const [classStats, setClassStats] = useState<Record<string, any>>({});
 
@@ -102,7 +105,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [pcaConfig, setPcaConfig] = useSessionStorage('advanced_analytics_pcaConfig', {
     table: '', columns: [] as string[], nComponents: 2,
   });
-  const [pcaResult, setPcaResult] = useSessionStorage<any>('advanced_analytics_pcaResult', null);
+  const [pcaResult, setPcaResult] = useState<any>(null);
   const [pcaColumns, setPcaColumns] = useState<string[]>([]);
   const [pcaStats, setPcaStats] = useState<Record<string, any>>({});
 
@@ -110,15 +113,15 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
   const [hypoConfig, setHypoConfig] = useSessionStorage('advanced_analytics_hypoConfig', {
     table: '', column1: '', column2: '', testType: 'ttest_ind', alpha: 0.05, popmean: 0,
   });
-  const [hypoResult, setHypoResult] = useSessionStorage<any>('advanced_analytics_hypoResult', null);
+  const [hypoResult, setHypoResult] = useState<any>(null);
   const [hypoColumns, setHypoColumns] = useState<string[]>([]);
   const [hypoStats, setHypoStats] = useState<Record<string, any>>({});
 
   // Cross-Analytical Intelligence
-  const [crossPhase, setCrossPhase] = useSessionStorage<CrossPhase>('advanced_analytics_crossPhase', 'selector');
-  const [crossSelected, setCrossSelected] = useSessionStorage<string[]>('advanced_analytics_crossSelected', []);
-  const [crossHypotheses, setCrossHypotheses] = useSessionStorage<CrossHypothesis[]>('advanced_analytics_crossHypotheses', []);
-  const [crossSynthesis, setCrossSynthesis] = useSessionStorage<CrossSynthesis | null>('advanced_analytics_crossSynthesis', null);
+  const [crossPhase, setCrossPhase] = useState<CrossPhase>('selector');
+  const [crossSelected, setCrossSelected] = useState<string[]>([]);
+  const [crossHypotheses, setCrossHypotheses] = useState<CrossHypothesis[]>([]);
+  const [crossSynthesis, setCrossSynthesis] = useState<CrossSynthesis | null>(null);
   const [crossError, setCrossError] = useState('');
 
   // AI insights
@@ -350,16 +353,22 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
       if (resp.tables && resp.tables.length > 0) {
         setTables(resp.tables);
         const first = resp.tables[0];
-        // Auto-select the first real table if the config is empty or stale
-        setForecastConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
-        setAnomalyConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
-        setCorrelationConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
-        setClusterConfig((prev: any) => (!prev.table || prev.table === 'sales') ? { ...prev, table: first } : prev);
+        const valid = (t: string) => t && resp.tables.includes(t);
+        // Reset to first table when stored value is empty, the demo default, or
+        // belongs to a different account (table doesn't exist in this DB).
+        setForecastConfig((prev: any)     => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setAnomalyConfig((prev: any)      => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setCorrelationConfig((prev: any)  => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setClusterConfig((prev: any)      => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setRegressionConfig((prev: any)   => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setClassConfig((prev: any)        => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setPcaConfig((prev: any)          => (!valid(prev.table)) ? { ...prev, table: first } : prev);
+        setHypoConfig((prev: any)         => (!valid(prev.table)) ? { ...prev, table: first } : prev);
       }
     } catch (err) {
       console.error('Failed to fetch tables:', err);
     }
-  }, [setForecastConfig, setAnomalyConfig, setCorrelationConfig, setClusterConfig]);
+  }, [setForecastConfig, setAnomalyConfig, setCorrelationConfig, setClusterConfig, setRegressionConfig, setClassConfig, setPcaConfig, setHypoConfig]);
 
   const handleRunForecast = useCallback(async () => {
     if (!forecastConfig.table || !forecastConfig.dateColumn || !forecastConfig.valueColumn) return;
@@ -807,6 +816,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                   onChange={(e) => setForecastConfig({ ...forecastConfig, table: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
+                  <option value="">— select a table —</option>
                   {tables.map((t) => (
                     <option key={t} value={t}>{t}</option>
                   ))}
@@ -1011,6 +1021,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <select value={anomalyConfig.table}
                   onChange={e => setAnomalyConfig({ ...anomalyConfig, table: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  <option value="">— select a table —</option>
                   {tables.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
@@ -1313,9 +1324,14 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 </label>
                 <select
                   value={correlationConfig.table}
-                  onChange={(e) => setCorrelationConfig({ ...correlationConfig, table: e.target.value })}
+                  onChange={(e) => {
+                    setCorrelationConfig({ ...correlationConfig, table: e.target.value, columns: [] });
+                    setCorrelationData([]);
+                    setCorrelationColumns([]);
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
+                  <option value="">— select a table —</option>
                   {tables.map((t) => (
                     <option key={t} value={t}>{t}</option>
                   ))}
@@ -1324,25 +1340,42 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Columns (comma-separated)
+                  Variables to correlate
+                  {correlationConfig.columns.length > 0 && (
+                    <span className="ml-2 text-xs text-purple-600 font-normal">{correlationConfig.columns.length} selected</span>
+                  )}
                 </label>
-                <div className="flex flex-wrap gap-2">
-                  {correlationColumnsList.map(c => (
-                    <label key={c} className="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={correlationConfig.columns.includes(c)}
-                        onChange={(e) => {
-                          const newCols = e.target.checked
-                            ? [...correlationConfig.columns, c]
-                            : correlationConfig.columns.filter(col => col !== c);
-                          setCorrelationConfig({ ...correlationConfig, columns: newCols });
-                        }}
-                      />
-                      <span className="text-sm">{c}</span>
-                    </label>
-                  ))}
-                </div>
+                {!correlationConfig.table ? (
+                  <p className="text-xs text-gray-400 italic">Select a table above to load its columns.</p>
+                ) : correlationColumnsList.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">Loading columns…</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {correlationColumnsList.map(c => (
+                      <label key={c} className="flex items-center gap-2 p-2 border rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={correlationConfig.columns.includes(c)}
+                          onChange={(e) => {
+                            const newCols = e.target.checked
+                              ? [...correlationConfig.columns, c]
+                              : correlationConfig.columns.filter((col: string) => col !== c);
+                            setCorrelationConfig({ ...correlationConfig, columns: newCols });
+                          }}
+                        />
+                        <span className="text-sm">{c}</span>
+                      </label>
+                    ))}
+                    <button
+                      onClick={() => setCorrelationConfig({ ...correlationConfig, columns: correlationColumnsList })}
+                      className="text-xs text-purple-600 hover:underline px-2 py-1"
+                    >Select all</button>
+                    <button
+                      onClick={() => setCorrelationConfig({ ...correlationConfig, columns: [] })}
+                      className="text-xs text-gray-400 hover:underline px-2 py-1"
+                    >Clear</button>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1575,6 +1608,7 @@ export function AdvancedAnalytics({ }: AdvancedAnalyticsProps) {
                 <select value={clusterConfig.table}
                   onChange={e => setClusterConfig((p: any) => ({ ...p, table: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                  <option value="">— select a table —</option>
                   {tables.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
