@@ -193,10 +193,25 @@ class InsightEngine:
                     f'AND "{column}" IS NOT NULL'
                 )
             else:
-                sql = (
-                    f'SELECT AVG("{column}") AS val FROM "{table}" '
-                    f'WHERE "{column}" IS NOT NULL'
-                )
+                # No date column: use the last 20% of rows as a "recent" proxy.
+                if self._is_postgres():
+                    sql = (
+                        f'SELECT AVG("{column}") AS val FROM ('
+                        f'  SELECT "{column}" FROM "{table}" '
+                        f'  WHERE "{column}" IS NOT NULL '
+                        f'  ORDER BY ctid DESC '
+                        f'  LIMIT (SELECT GREATEST(1, FLOOR(COUNT(*) * 0.2)) FROM "{table}")'
+                        f') sub'
+                    )
+                else:
+                    sql = (
+                        f'SELECT AVG("{column}") AS val FROM ('
+                        f'  SELECT "{column}" FROM "{table}" '
+                        f'  WHERE "{column}" IS NOT NULL '
+                        f'  ORDER BY rowid DESC '
+                        f'  LIMIT (SELECT MAX(1, CAST(COUNT(*) * 0.2 AS INTEGER)) FROM "{table}")'
+                        f') sub'
+                    )
             result = self.db.execute_query(sql, allow_modifications=False)
 
             if result and result[0].get("val") is not None:
@@ -210,7 +225,13 @@ class InsightEngine:
     def _get_baseline_value(
         self, table: str, column: str, date_col: Optional[str]
     ) -> Optional[float]:
-        """Rolling N-day average (excluding last 24 h) as baseline."""
+        """Rolling N-day average (excluding last 24 h) as baseline.
+
+        When no date column exists we use the bottom 80 % of rows (by rowid /
+        ctid) as the historical baseline and the top 20 % as "recent".  This
+        avoids the degenerate case where both queries return the full-table
+        average and the change_pct is always 0.
+        """
         try:
             if date_col:
                 if self._is_postgres():
@@ -226,10 +247,26 @@ class InsightEngine:
                     f'AND "{column}" IS NOT NULL'
                 )
             else:
-                sql = (
-                    f'SELECT AVG("{column}") AS val FROM "{table}" '
-                    f'WHERE "{column}" IS NOT NULL'
-                )
+                # No date column: use the first 80% of rows as "historical" baseline.
+                # _get_recent_value (no date_col) uses the last 20% via OFFSET.
+                if self._is_postgres():
+                    sql = (
+                        f'SELECT AVG("{column}") AS val FROM ('
+                        f'  SELECT "{column}" FROM "{table}" '
+                        f'  WHERE "{column}" IS NOT NULL '
+                        f'  ORDER BY ctid '
+                        f'  LIMIT (SELECT FLOOR(COUNT(*) * 0.8) FROM "{table}")'
+                        f') sub'
+                    )
+                else:
+                    sql = (
+                        f'SELECT AVG("{column}") AS val FROM ('
+                        f'  SELECT "{column}" FROM "{table}" '
+                        f'  WHERE "{column}" IS NOT NULL '
+                        f'  ORDER BY rowid '
+                        f'  LIMIT (SELECT CAST(COUNT(*) * 0.8 AS INTEGER) FROM "{table}")'
+                        f') sub'
+                    )
             result = self.db.execute_query(sql, allow_modifications=False)
             if result and result[0].get("val") is not None:
                 return float(result[0]["val"])
@@ -309,28 +346,16 @@ class InsightEngine:
                         "created_at":    datetime.utcnow().isoformat(),
                     })
 
-                    # Trim to max_stored per org
-                    dialect = engine.dialect.name
-                    if dialect == "postgresql":
-                        trim_sql = text("""
-                            DELETE FROM org_insights
-                            WHERE org_id = :org_id AND id NOT IN (
-                                SELECT id FROM org_insights
-                                WHERE org_id = :org_id
-                                ORDER BY created_at DESC
-                                LIMIT :max_stored
-                            )
-                        """)
-                    else:
-                        trim_sql = text("""
-                            DELETE FROM org_insights
-                            WHERE org_id = :org_id AND id NOT IN (
-                                SELECT id FROM org_insights
-                                WHERE org_id = :org_id
-                                ORDER BY created_at DESC
-                                LIMIT :max_stored
-                            )
-                        """)
+                    # Trim to max_stored per org (same SQL works for both dialects)
+                    trim_sql = text("""
+                        DELETE FROM org_insights
+                        WHERE org_id = :org_id AND id NOT IN (
+                            SELECT id FROM org_insights
+                            WHERE org_id = :org_id
+                            ORDER BY created_at DESC
+                            LIMIT :max_stored
+                        )
+                    """)
                     conn.execute(trim_sql, {
                         "org_id":     self.org_id,
                         "max_stored": self.max_stored,
@@ -484,7 +509,7 @@ class InsightScheduler:
                     engine = self.engine_factory(org_id)
                     if engine:
                         try:
-                            await asyncio.get_event_loop().run_in_executor(
+                            await asyncio.get_running_loop().run_in_executor(
                                 None, engine.run_watchdog
                             )
                         finally:
