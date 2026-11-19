@@ -58,39 +58,54 @@ def ensure_insight_tables():
     if dialect == "postgresql":
         ddl = """
             CREATE TABLE IF NOT EXISTS org_insights (
-                id          TEXT PRIMARY KEY,
-                org_id      INTEGER NOT NULL,
-                metric_table  TEXT,
-                metric_column TEXT,
-                change_pct  DOUBLE PRECISION,
-                period      TEXT,
-                headline    TEXT,
-                explanation TEXT,
-                likely_causes TEXT,
-                severity    TEXT DEFAULT 'medium',
-                seen        INTEGER DEFAULT 0,
-                created_at  TEXT
+                id                 TEXT PRIMARY KEY,
+                org_id             INTEGER NOT NULL,
+                metric_table       TEXT,
+                metric_column      TEXT,
+                change_pct         DOUBLE PRECISION,
+                period             TEXT,
+                headline           TEXT,
+                explanation        TEXT,
+                likely_causes      TEXT,
+                recommended_action TEXT,
+                severity           TEXT DEFAULT 'medium',
+                seen               INTEGER DEFAULT 0,
+                created_at         TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
+            CREATE INDEX IF NOT EXISTS ix_org_insights_metric ON org_insights (org_id, metric_table, metric_column);
         """
     else:
         ddl = """
             CREATE TABLE IF NOT EXISTS org_insights (
-                id          TEXT PRIMARY KEY,
-                org_id      INTEGER NOT NULL,
-                metric_table  TEXT,
-                metric_column TEXT,
-                change_pct  REAL,
-                period      TEXT,
-                headline    TEXT,
-                explanation TEXT,
-                likely_causes TEXT,
-                severity    TEXT DEFAULT 'medium',
-                seen        INTEGER DEFAULT 0,
-                created_at  TEXT
+                id                 TEXT PRIMARY KEY,
+                org_id             INTEGER NOT NULL,
+                metric_table       TEXT,
+                metric_column      TEXT,
+                change_pct         REAL,
+                period             TEXT,
+                headline           TEXT,
+                explanation        TEXT,
+                likely_causes      TEXT,
+                recommended_action TEXT,
+                severity           TEXT DEFAULT 'medium',
+                seen               INTEGER DEFAULT 0,
+                created_at         TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
+            CREATE INDEX IF NOT EXISTS ix_org_insights_metric ON org_insights (org_id, metric_table, metric_column);
         """
+
+    # Migrate existing installs: add columns that may be absent in older schema
+    with engine.connect() as conn:
+        with conn.begin():
+            for col, col_type in [("recommended_action", "TEXT")]:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE org_insights ADD COLUMN {col} {col_type}"
+                    ))
+                except Exception:
+                    pass  # Column already exists
 
     with engine.connect() as conn:
         with conn.begin():
@@ -317,6 +332,29 @@ class InsightEngine:
 
     # ── Storage (SQLAlchemy) ──────────────────────────────────────────────────
 
+    def _has_recent_duplicate(self, table: str, column: str, hours: int = 24) -> bool:
+        """Return True if an unseen insight for this metric was stored in the last N hours."""
+        engine = _get_admin_engine()
+        dialect = engine.dialect.name
+        try:
+            with engine.connect() as conn:
+                if dialect == "postgresql":
+                    cutoff_expr = f"CURRENT_TIMESTAMP - INTERVAL '{hours} hours'"
+                else:
+                    cutoff_expr = f"datetime('now', '-{hours} hours')"
+                row = conn.execute(text(f"""
+                    SELECT 1 FROM org_insights
+                    WHERE org_id       = :org_id
+                      AND metric_table  = :table
+                      AND metric_column = :column
+                      AND seen          = 0
+                      AND created_at   >= {cutoff_expr}
+                    LIMIT 1
+                """), {"org_id": self.org_id, "table": table, "column": column}).fetchone()
+                return row is not None
+        except Exception:
+            return False
+
     def _store_insight(self, metric: dict, change_pct: float, explanation: dict):
         insight_id = str(uuid.uuid4())
         engine     = _get_admin_engine()
@@ -327,23 +365,24 @@ class InsightEngine:
                         INSERT INTO org_insights
                             (id, org_id, metric_table, metric_column, change_pct,
                              period, headline, explanation, likely_causes,
-                             severity, seen, created_at)
+                             recommended_action, severity, seen, created_at)
                         VALUES
                             (:id, :org_id, :metric_table, :metric_column, :change_pct,
                              :period, :headline, :explanation, :likely_causes,
-                             :severity, 0, :created_at)
+                             :recommended_action, :severity, 0, :created_at)
                     """), {
-                        "id":            insight_id,
-                        "org_id":        self.org_id,
-                        "metric_table":  metric["table"],
-                        "metric_column": metric["column"],
-                        "change_pct":    round(change_pct, 2),
-                        "period":        f"Last 24h vs {self.lookback_days}-day avg",
-                        "headline":      explanation.get("headline", ""),
-                        "explanation":   explanation.get("explanation", ""),
-                        "likely_causes": json.dumps(explanation.get("likely_causes", [])),
-                        "severity":      explanation.get("severity", "medium"),
-                        "created_at":    datetime.utcnow().isoformat(),
+                        "id":                 insight_id,
+                        "org_id":             self.org_id,
+                        "metric_table":       metric["table"],
+                        "metric_column":      metric["column"],
+                        "change_pct":         round(change_pct, 2),
+                        "period":             f"Last 24h vs {self.lookback_days}-day avg",
+                        "headline":           explanation.get("headline", ""),
+                        "explanation":        explanation.get("explanation", ""),
+                        "likely_causes":      json.dumps(explanation.get("likely_causes", [])),
+                        "recommended_action": explanation.get("recommended_action", ""),
+                        "severity":           explanation.get("severity", "medium"),
+                        "created_at":         datetime.utcnow().isoformat(),
                     })
 
                     # Trim to max_stored per org (same SQL works for both dialects)
@@ -367,13 +406,56 @@ class InsightEngine:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    # Maximum KPI columns to scan per run (prevents runaway LLM calls on large schemas)
+    MAX_METRICS_PER_RUN = 15
+    # Auto-expire insights older than this many days
+    EXPIRY_DAYS = 30
+
+    def _expire_old_insights(self):
+        """Delete insights older than EXPIRY_DAYS for this org."""
+        engine = _get_admin_engine()
+        dialect = engine.dialect.name
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    if dialect == "postgresql":
+                        cutoff = f"CURRENT_TIMESTAMP - INTERVAL '{self.EXPIRY_DAYS} days'"
+                    else:
+                        cutoff = f"datetime('now', '-{self.EXPIRY_DAYS} days')"
+                    conn.execute(text(f"""
+                        DELETE FROM org_insights
+                        WHERE org_id = :org_id AND created_at < {cutoff}
+                    """), {"org_id": self.org_id})
+        except Exception as exc:
+            logger.warning(f"[InsightEngine] Expiry sweep failed for org {self.org_id}: {exc}")
+
     def run_watchdog(self):
         """Discover KPIs, compare vs baseline, explain anomalies, store results."""
         logger.info(f"[InsightEngine] Running watchdog for org {self.org_id}")
+
+        # Clean up stale insights first
+        self._expire_old_insights()
+
         metrics = self._discover_key_metrics()
+
+        # Cap total metrics per run to avoid runaway LLM costs on large schemas
+        if len(metrics) > self.MAX_METRICS_PER_RUN:
+            logger.info(
+                f"[InsightEngine] Capping metrics from {len(metrics)} to "
+                f"{self.MAX_METRICS_PER_RUN} for org {self.org_id}"
+            )
+            metrics = metrics[:self.MAX_METRICS_PER_RUN]
 
         for metric in metrics:
             try:
+                # Skip if an unseen insight for this metric was stored in the last 24 h
+                if self._has_recent_duplicate(metric["table"], metric["column"]):
+                    logger.debug(
+                        f"[InsightEngine] Skipping duplicate: "
+                        f"{metric['table']}.{metric['column']}"
+                    )
+                    continue
+
                 recent   = self._get_recent_value(
                     metric["table"], metric["column"], metric.get("date_column")
                 )
@@ -399,12 +481,17 @@ class InsightEngine:
                     f"[InsightEngine] Check failed for {metric}: {exc}"
                 )
 
+    _SELECT_COLS = """
+        id, metric_table, metric_column, change_pct, period,
+        headline, explanation, likely_causes, recommended_action,
+        severity, seen, created_at
+    """
+
     def _fetch_insights(self, where_extra: str, params: dict) -> list[dict]:
         engine = _get_admin_engine()
         with engine.connect() as conn:
             rows = conn.execute(text(f"""
-                SELECT id, metric_table, metric_column, change_pct, period,
-                       headline, explanation, likely_causes, severity, seen, created_at
+                SELECT {self._SELECT_COLS}
                 FROM org_insights
                 WHERE org_id = :org_id {where_extra}
                 ORDER BY created_at DESC
@@ -415,12 +502,11 @@ class InsightEngine:
     def get_unseen_insights(self) -> list[dict]:
         return self._fetch_insights("AND seen = 0", {"org_id": self.org_id})
 
-    def get_all_insights(self, limit: int = 20) -> list[dict]:
+    def get_all_insights(self, limit: int = 50) -> list[dict]:
         engine = _get_admin_engine()
         with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT id, metric_table, metric_column, change_pct, period,
-                       headline, explanation, likely_causes, severity, seen, created_at
+            rows = conn.execute(text(f"""
+                SELECT {self._SELECT_COLS}
                 FROM org_insights
                 WHERE org_id = :org_id
                 ORDER BY created_at DESC
@@ -447,8 +533,12 @@ class InsightEngine:
                 )
 
     def _parse_insight(self, row: dict) -> dict:
-        row["likely_causes"] = json.loads(row.get("likely_causes") or "[]")
         import math
+        row["likely_causes"] = json.loads(row.get("likely_causes") or "[]")
+        # Normalise recommended_action: empty string → None so frontend can check truthiness
+        if not row.get("recommended_action"):
+            row["recommended_action"] = None
+        # Guard against NaN/Inf from floating-point edge cases
         if "change_pct" in row and isinstance(row["change_pct"], float):
             if math.isnan(row["change_pct"]) or math.isinf(row["change_pct"]):
                 row["change_pct"] = None

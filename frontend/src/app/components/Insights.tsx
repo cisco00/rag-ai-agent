@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
     Lightbulb, CheckCircle, Clock, AlertTriangle, AlertCircle,
     TrendingUp, TrendingDown, ChevronRight, RefreshCcw, Sparkles,
-    Trash2, Zap, Filter,
+    Trash2, Zap, Filter, ArrowUpDown,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 
@@ -22,12 +22,14 @@ interface Insight {
 }
 
 type SeverityFilter = 'all' | 'unseen' | 'high' | 'medium' | 'low';
+type SortKey = 'date' | 'severity' | 'change';
 
 export function Insights() {
     const [insights, setInsights] = useState<Insight[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isGenerating, setIsGenerating] = useState(false);
     const [filter, setFilter] = useState<SeverityFilter>('all');
+    const [sortKey, setSortKey] = useState<SortKey>('date');
     const [error, setError] = useState<string | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -96,11 +98,24 @@ export function Insights() {
         }
     };
 
-    const filteredInsights = insights.filter(i => {
-        if (filter === 'unseen') return i.seen === 0;
-        if (filter === 'high' || filter === 'medium' || filter === 'low') return i.severity === filter;
-        return true;
-    });
+    const SEVERITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+    const filteredInsights = insights
+        .filter(i => {
+            if (filter === 'unseen') return i.seen === 0;
+            if (filter === 'high' || filter === 'medium' || filter === 'low') return i.severity === filter;
+            return true;
+        })
+        .sort((a, b) => {
+            if (sortKey === 'severity') {
+                return (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3);
+            }
+            if (sortKey === 'change') {
+                return Math.abs(b.change_pct ?? 0) - Math.abs(a.change_pct ?? 0);
+            }
+            // default: date desc
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
 
     const unseenCount = insights.filter(i => i.seen === 0).length;
     const highCount   = insights.filter(i => i.severity === 'high').length;
@@ -188,27 +203,41 @@ export function Insights() {
                 </div>
             )}
 
-            {/* Filters */}
-            <div className="flex flex-wrap gap-2 mb-6">
-                <Filter className="size-4 text-gray-400 self-center mr-1" />
-                {FILTERS.map(f => (
-                    <button
-                        key={f.key}
-                        onClick={() => setFilter(f.key)}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                            filter === f.key
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+            {/* Filters + Sort */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                <div className="flex flex-wrap gap-2">
+                    <Filter className="size-4 text-gray-400 self-center mr-1" />
+                    {FILTERS.map(f => (
+                        <button
+                            key={f.key}
+                            onClick={() => setFilter(f.key)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                                filter === f.key
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                        >
+                            {f.label}
+                            {f.count !== undefined && f.count > 0 && (
+                                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
+                                    filter === f.key ? 'bg-white/20' : 'bg-gray-300/60'
+                                }`}>{f.count}</span>
+                            )}
+                        </button>
+                    ))}
+                </div>
+                <div className="flex items-center gap-2">
+                    <ArrowUpDown className="size-4 text-gray-400" />
+                    <select
+                        value={sortKey}
+                        onChange={e => setSortKey(e.target.value as SortKey)}
+                        className="text-sm font-medium text-gray-600 bg-gray-100 border-0 rounded-lg px-3 py-2 cursor-pointer hover:bg-gray-200 transition-colors outline-none"
                     >
-                        {f.label}
-                        {f.count !== undefined && f.count > 0 && (
-                            <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
-                                filter === f.key ? 'bg-white/20' : 'bg-gray-300/60'
-                            }`}>{f.count}</span>
-                        )}
-                    </button>
-                ))}
+                        <option value="date">Newest first</option>
+                        <option value="severity">Severity</option>
+                        <option value="change">Largest change</option>
+                    </select>
+                </div>
             </div>
 
             {/* Content */}
