@@ -33,6 +33,17 @@ async def get_org_insights(limit: int = 50, org=Depends(get_current_org)):
         raise HTTPException(status_code=500, detail="Failed to fetch insights")
 
 
+@router.get("/insights/unseen-count")
+async def get_unseen_count(org=Depends(get_current_org)):
+    """Return just the number of unseen insights — lightweight for polling."""
+    try:
+        count = _read_only_engine(org.id).get_unseen_count()
+        return {"count": count}
+    except Exception as e:
+        logger.error(f"Failed to get unseen count: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get unseen count")
+
+
 @router.post("/insights/generate")
 async def generate_insights(
     background_tasks: BackgroundTasks,

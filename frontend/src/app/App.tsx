@@ -241,14 +241,12 @@ export default function App() {
       });
   }, [isAuthenticated, user]);
 
-  // Poll unseen insights count every 30s
+  // Poll unseen insights count every 30s — lightweight endpoint, no insight data fetched
   useEffect(() => {
     if (!isAuthenticated) return;
     const fetchCount = () =>
-      api.get<{ insights: any[] }>('/insights?limit=100')
-        .then((data) => {
-          setUnseenCount((data.insights || []).filter((i: any) => i.seen === 0).length);
-        })
+      api.get<{ count: number }>('/insights/unseen-count')
+        .then((data) => setUnseenCount(data.count ?? 0))
         .catch(() => { });
 
     fetchCount();

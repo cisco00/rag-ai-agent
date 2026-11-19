@@ -523,6 +523,15 @@ class InsightEngine:
                     {"id": insight_id, "org_id": self.org_id},
                 )
 
+    def get_unseen_count(self) -> int:
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT COUNT(*) FROM org_insights WHERE org_id = :org_id AND seen = 0"),
+                {"org_id": self.org_id},
+            ).fetchone()
+        return row[0] if row else 0
+
     def mark_all_seen(self):
         engine = _get_admin_engine()
         with engine.connect() as conn:

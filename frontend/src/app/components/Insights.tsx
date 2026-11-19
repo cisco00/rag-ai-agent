@@ -56,11 +56,27 @@ export function Insights() {
         setError(null);
         try {
             await api.post('/insights/generate', {});
-            // Poll after a short delay to pick up newly generated insights
-            setTimeout(() => {
-                fetchInsights();
-                setIsGenerating(false);
-            }, 3000);
+            // Poll with up to 5 retries (every 5s, up to 25s) to pick up new insights.
+            // Watchdog runs can take 10-30s for real databases, so a single 3s delay is too short.
+            let attempts = 0;
+            const previousCount = insights.length;
+            const poll = async () => {
+                attempts++;
+                try {
+                    const data = await api.get<{ insights: Insight[] }>('/insights?limit=50');
+                    const fresh = data.insights || [];
+                    setInsights(fresh);
+                    if (fresh.length > previousCount || attempts >= 5) {
+                        setIsGenerating(false);
+                        return;
+                    }
+                } catch {
+                    // keep polling
+                }
+                if (attempts < 5) setTimeout(poll, 5000);
+                else setIsGenerating(false);
+            };
+            setTimeout(poll, 5000);
         } catch (err: any) {
             const msg = err?.response?.data?.detail || 'Could not start analysis. Check your database connection.';
             setError(msg);
