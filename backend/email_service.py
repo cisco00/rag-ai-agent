@@ -381,6 +381,92 @@ def send_email_with_attachments(
         return False
 
 
+def send_insight_alert_email(
+    to_email:    str,
+    org_name:    str,
+    headline:    str,
+    metric:      str,
+    table_name:  str,
+    change_pct:  float,
+    explanation: str,
+    recommended_action: Optional[str] = None,
+) -> bool:
+    """Sent when a high-severity proactive insight is detected."""
+    direction   = "increased" if change_pct > 0 else "dropped"
+    abs_pct     = abs(change_pct)
+    color_badge = "#dc2626"   # red for high severity
+    dashboard_url = f"{APP_URL}/insights"
+
+    action_block = ""
+    if recommended_action:
+        action_block = f"""
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;
+            padding:16px 20px;margin:16px 0;">
+          <p style="margin:0 0 4px;font-weight:600;color:#92400e;font-size:14px;">
+            Recommended action
+          </p>
+          <p style="margin:0;color:#78350f;font-size:14px;line-height:1.5;">
+            {recommended_action}
+          </p>
+        </div>"""
+
+    html = _base_html(f"High-Severity Insight: {headline}", f"""
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <span style="display:inline-block;padding:4px 12px;background:{color_badge};
+              color:#fff;border-radius:9999px;font-size:12px;font-weight:700;
+              letter-spacing:.5px;">HIGH SEVERITY</span>
+        </div>
+        {_h2(headline)}
+        {_p(f"A significant metric change has been detected in <strong>{org_name}</strong>.")}
+
+        <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+          <tr style="background:#fef2f2;">
+            <td style="padding:12px 16px;border:1px solid #fecaca;
+                border-radius:8px 0 0 8px;color:#991b1b;font-weight:600;">
+              Change
+            </td>
+            <td style="padding:12px 16px;border:1px solid #fecaca;
+                color:#991b1b;font-size:18px;font-weight:700;">
+              {("+" if change_pct > 0 else "")}{change_pct:.1f}% — {metric} {direction}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;
+                color:#64748b;font-size:13px;">Table</td>
+            <td style="padding:12px 16px;border:1px solid #e2e8f0;
+                font-family:monospace;color:#0f172a;">{table_name}</td>
+          </tr>
+          <tr>
+            <td style="padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;
+                color:#64748b;font-size:13px;">Column</td>
+            <td style="padding:12px 16px;border:1px solid #e2e8f0;
+                font-family:monospace;color:#0f172a;">{metric}</td>
+          </tr>
+        </table>
+
+        <div style="background:#f8fafc;border-left:4px solid #dc2626;
+            padding:16px 20px;border-radius:0 10px 10px 0;margin:16px 0;
+            color:#334155;font-size:14px;line-height:1.6;">
+          {explanation}
+        </div>
+
+        {action_block}
+        {_btn("View in Dashboard →", dashboard_url)}
+        {_p('<span style="color:#94a3b8;font-size:13px;">You\'re receiving this because you '
+            'have high-severity insights enabled for your organisation.</span>')}
+    """)
+    text = (
+        f"HIGH SEVERITY INSIGHT — {org_name}\n\n"
+        f"{headline}\n\n"
+        f"Metric:  {metric} ({table_name})\n"
+        f"Change:  {change_pct:+.1f}%  ({direction})\n\n"
+        f"{explanation}\n\n"
+        + (f"Recommended action:\n{recommended_action}\n\n" if recommended_action else "")
+        + f"View in dashboard: {dashboard_url}"
+    )
+    return send_email(to_email, f"🚨 High-Severity Insight: {headline}", html, text)
+
+
 def send_pipeline_completion_email(
     to_email:         str,
     pipeline_name:    str,

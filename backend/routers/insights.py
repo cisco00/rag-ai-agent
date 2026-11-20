@@ -3,6 +3,7 @@ routers/insights.py — Proactive insights and recommendations.
 """
 
 import logging
+from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 
 from dependencies import get_current_org, get_org_connection_string
@@ -59,13 +60,18 @@ async def generate_insights(
 
     def _run():
         from main import AnalyticsAgent
-        from insight_engine import InsightEngine
+        from insight_engine import InsightEngine, get_org_threshold
         db_manager = DatabaseManager(connection_string=conn_str)
         agent = AnalyticsAgent(
             connection_string=conn_str,
             observability_tags=[f"org:{org.id}"]
         )
-        engine = InsightEngine(db_manager=db_manager, agent=agent, org_id=org.id)
+        engine = InsightEngine(
+            db_manager=db_manager,
+            agent=agent,
+            org_id=org.id,
+            threshold_pct=get_org_threshold(org.id),
+        )
         try:
             engine.run_watchdog()
         finally:
@@ -123,3 +129,93 @@ async def delete_insight(insight_id: str, org=Depends(get_current_org)):
     except Exception as e:
         logger.error(f"Failed to delete insight {insight_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete insight")
+
+
+# ── Suppression ────────────────────────────────────────────────────────────────
+
+@router.post("/insights/{insight_id}/suppress")
+async def suppress_insight_metric(insight_id: str, org=Depends(get_current_org)):
+    """Suppress future insights for the metric referenced by this insight."""
+    try:
+        from insight_engine import InsightEngine, _get_admin_engine
+        from sqlalchemy import text as sa_text
+
+        # Look up the table+column for this insight
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa_text(
+                    "SELECT metric_table, metric_column FROM org_insights "
+                    "WHERE id = :id AND org_id = :org_id"
+                ),
+                {"id": insight_id, "org_id": org.id},
+            ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Insight not found")
+
+        ie = _read_only_engine(org.id)
+        ie.suppress_metric(row["metric_table"], row["metric_column"])
+        return {
+            "status": "success",
+            "suppressed": {
+                "table":  row["metric_table"],
+                "column": row["metric_column"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to suppress metric for insight {insight_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to suppress metric")
+
+
+@router.get("/insights/suppressions")
+async def get_suppressions(org=Depends(get_current_org)):
+    """List all suppressed metrics for this org."""
+    try:
+        return {"suppressions": _read_only_engine(org.id).get_suppressions()}
+    except Exception as e:
+        logger.error(f"Failed to get suppressions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get suppressions")
+
+
+@router.delete("/insights/suppressions/{metric_table}/{metric_column}")
+async def unsuppress_metric(
+    metric_table: str,
+    metric_column: str,
+    org=Depends(get_current_org),
+):
+    """Remove a suppression so a metric can generate insights again."""
+    try:
+        _read_only_engine(org.id).unsuppress_metric(metric_table, metric_column)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to unsuppress {metric_table}.{metric_column}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unsuppress metric")
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+@router.get("/insights/settings")
+async def get_insight_settings(org=Depends(get_current_org)):
+    """Return insight settings (threshold, etc.) for this org."""
+    try:
+        return _read_only_engine(org.id).get_settings()
+    except Exception as e:
+        logger.error(f"Failed to get insight settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get insight settings")
+
+
+@router.post("/insights/settings")
+async def save_insight_settings(
+    request: Dict[str, Any],
+    org=Depends(get_current_org),
+):
+    """Persist insight settings for this org."""
+    try:
+        threshold_pct = float(request.get("threshold_pct", 10.0))
+        _read_only_engine(org.id).save_settings(threshold_pct)
+        return {"status": "success", "threshold_pct": threshold_pct}
+    except Exception as e:
+        logger.error(f"Failed to save insight settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save settings")

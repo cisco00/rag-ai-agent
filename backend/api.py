@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI):
     await start_job_queue()
     
     # Initialize the InsightScheduler (Fix #9)
-    def make_insight_engine(org_id: int):
+    def make_insight_engine(org_id: int, threshold_pct: float = 10.0):
         try:
             from main import AnalyticsAgent
             from insight_engine import InsightEngine
@@ -190,7 +190,12 @@ async def lifespan(app: FastAPI):
 
             db_manager = DatabaseManager(connection_string=conn_str)
             agent      = AnalyticsAgent(connection_string=conn_str, observability_tags=[f"org:{org_id}"])
-            return InsightEngine(db_manager=db_manager, agent=agent, org_id=org_id)
+            return InsightEngine(
+                db_manager=db_manager,
+                agent=agent,
+                org_id=org_id,
+                threshold_pct=threshold_pct,
+            )
         except Exception as exc:
             logger.warning(f"[Insights] Could not create engine for org {org_id}: {exc}")
             return None

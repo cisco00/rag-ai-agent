@@ -48,7 +48,7 @@ DATE_KEYWORDS = [
 
 def ensure_insight_tables():
     """
-    Create org_insights table in the admin DB if it doesn't exist.
+    Create org_insights and org_insight_suppressions tables in the admin DB.
     Uses SQLAlchemy so it works for both SQLite and PostgreSQL.
     Call from lifespan startup in api.py.
     """
@@ -56,7 +56,7 @@ def ensure_insight_tables():
     dialect = engine.dialect.name
 
     if dialect == "postgresql":
-        ddl = """
+        insights_ddl = """
             CREATE TABLE IF NOT EXISTS org_insights (
                 id                 TEXT PRIMARY KEY,
                 org_id             INTEGER NOT NULL,
@@ -70,13 +70,29 @@ def ensure_insight_tables():
                 recommended_action TEXT,
                 severity           TEXT DEFAULT 'medium',
                 seen               INTEGER DEFAULT 0,
+                notification_sent  INTEGER DEFAULT 0,
                 created_at         TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
             CREATE INDEX IF NOT EXISTS ix_org_insights_metric ON org_insights (org_id, metric_table, metric_column);
         """
+        suppressions_ddl = """
+            CREATE TABLE IF NOT EXISTS org_insight_suppressions (
+                id             SERIAL PRIMARY KEY,
+                org_id         INTEGER NOT NULL,
+                metric_table   TEXT NOT NULL,
+                metric_column  TEXT NOT NULL,
+                created_at     TEXT,
+                UNIQUE (org_id, metric_table, metric_column)
+            );
+            CREATE INDEX IF NOT EXISTS ix_suppressions_org ON org_insight_suppressions (org_id);
+        """
+        # Add insight_threshold_pct to organizations if it doesn't exist
+        threshold_migration = """
+            ALTER TABLE organizations ADD COLUMN IF NOT EXISTS insight_threshold_pct DOUBLE PRECISION DEFAULT 10.0;
+        """
     else:
-        ddl = """
+        insights_ddl = """
             CREATE TABLE IF NOT EXISTS org_insights (
                 id                 TEXT PRIMARY KEY,
                 org_id             INTEGER NOT NULL,
@@ -90,16 +106,32 @@ def ensure_insight_tables():
                 recommended_action TEXT,
                 severity           TEXT DEFAULT 'medium',
                 seen               INTEGER DEFAULT 0,
+                notification_sent  INTEGER DEFAULT 0,
                 created_at         TEXT
             );
             CREATE INDEX IF NOT EXISTS ix_org_insights_org_id ON org_insights (org_id);
             CREATE INDEX IF NOT EXISTS ix_org_insights_metric ON org_insights (org_id, metric_table, metric_column);
         """
+        suppressions_ddl = """
+            CREATE TABLE IF NOT EXISTS org_insight_suppressions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id         INTEGER NOT NULL,
+                metric_table   TEXT NOT NULL,
+                metric_column  TEXT NOT NULL,
+                created_at     TEXT,
+                UNIQUE (org_id, metric_table, metric_column)
+            );
+            CREATE INDEX IF NOT EXISTS ix_suppressions_org ON org_insight_suppressions (org_id);
+        """
+        threshold_migration = None  # SQLite handled below with try/except
 
     # Migrate existing installs: add columns that may be absent in older schema
     with engine.connect() as conn:
         with conn.begin():
-            for col, col_type in [("recommended_action", "TEXT")]:
+            for col, col_type in [
+                ("recommended_action", "TEXT"),
+                ("notification_sent", "INTEGER DEFAULT 0"),
+            ]:
                 try:
                     conn.execute(text(
                         f"ALTER TABLE org_insights ADD COLUMN {col} {col_type}"
@@ -107,9 +139,23 @@ def ensure_insight_tables():
                 except Exception:
                     pass  # Column already exists
 
+            # Add insight_threshold_pct to organizations (SQLite — try/except)
+            if dialect != "postgresql":
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE organizations ADD COLUMN insight_threshold_pct REAL DEFAULT 10.0"
+                    ))
+                except Exception:
+                    pass
+
+    # Create/update tables
+    all_ddl = insights_ddl + suppressions_ddl
+    if threshold_migration:
+        all_ddl += threshold_migration
+
     with engine.connect() as conn:
         with conn.begin():
-            for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
+            for stmt in [s.strip() for s in all_ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
 
 
@@ -355,9 +401,42 @@ class InsightEngine:
         except Exception:
             return False
 
+    def _get_org_admin_email(self) -> Optional[str]:
+        """
+        Return an email address for the org's owner/admin to send alerts to.
+        Preference order: organizations.email → oldest owner in users table → oldest admin.
+        """
+        engine = _get_admin_engine()
+        try:
+            with engine.connect() as conn:
+                # 1. Check org-level contact email
+                row = conn.execute(
+                    text("SELECT email FROM organizations WHERE id = :org_id"),
+                    {"org_id": self.org_id},
+                ).mappings().first()
+                if row and row["email"]:
+                    return row["email"]
+
+                # 2. Fall back to oldest owner in the users table
+                row = conn.execute(
+                    text(
+                        "SELECT email FROM users "
+                        "WHERE org_id = :org_id AND is_active = 1 "
+                        "AND role IN ('owner', 'admin') "
+                        "ORDER BY created_at ASC LIMIT 1"
+                    ),
+                    {"org_id": self.org_id},
+                ).mappings().first()
+                if row:
+                    return row["email"]
+        except Exception as exc:
+            logger.debug(f"[InsightEngine] Could not get org admin email: {exc}")
+        return None
+
     def _store_insight(self, metric: dict, change_pct: float, explanation: dict):
         insight_id = str(uuid.uuid4())
         engine     = _get_admin_engine()
+        severity   = explanation.get("severity", "medium")
         try:
             with engine.connect() as conn:
                 with conn.begin():
@@ -365,11 +444,11 @@ class InsightEngine:
                         INSERT INTO org_insights
                             (id, org_id, metric_table, metric_column, change_pct,
                              period, headline, explanation, likely_causes,
-                             recommended_action, severity, seen, created_at)
+                             recommended_action, severity, seen, notification_sent, created_at)
                         VALUES
                             (:id, :org_id, :metric_table, :metric_column, :change_pct,
                              :period, :headline, :explanation, :likely_causes,
-                             :recommended_action, :severity, 0, :created_at)
+                             :recommended_action, :severity, 0, 0, :created_at)
                     """), {
                         "id":                 insight_id,
                         "org_id":             self.org_id,
@@ -381,7 +460,7 @@ class InsightEngine:
                         "explanation":        explanation.get("explanation", ""),
                         "likely_causes":      json.dumps(explanation.get("likely_causes", [])),
                         "recommended_action": explanation.get("recommended_action", ""),
-                        "severity":           explanation.get("severity", "medium"),
+                        "severity":           severity,
                         "created_at":         datetime.utcnow().isoformat(),
                     })
 
@@ -399,10 +478,137 @@ class InsightEngine:
                         "org_id":     self.org_id,
                         "max_stored": self.max_stored,
                     })
+
+            # Send email alert for high-severity insights
+            if severity == "high":
+                self._send_insight_alert(insight_id, metric, change_pct, explanation)
+
         except Exception as exc:
             logger.error(
                 f"[InsightEngine] Failed to store insight for org {self.org_id}: {exc}"
             )
+
+    def _send_insight_alert(
+        self,
+        insight_id: str,
+        metric: dict,
+        change_pct: float,
+        explanation: dict,
+    ):
+        """Email the org admin when a high-severity insight is stored."""
+        try:
+            admin_email = self._get_org_admin_email()
+            if not admin_email:
+                logger.debug(
+                    f"[InsightEngine] No admin email for org {self.org_id} — skipping alert"
+                )
+                return
+
+            from email_service import send_insight_alert_email
+            engine = _get_admin_engine()
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT name FROM organizations WHERE id = :org_id"),
+                    {"org_id": self.org_id},
+                ).mappings().first()
+            org_name = row["name"] if row else f"Org {self.org_id}"
+
+            sent = send_insight_alert_email(
+                to_email=admin_email,
+                org_name=org_name,
+                headline=explanation.get("headline", ""),
+                metric=metric["column"],
+                table_name=metric["table"],
+                change_pct=change_pct,
+                explanation=explanation.get("explanation", ""),
+                recommended_action=explanation.get("recommended_action"),
+            )
+
+            if sent:
+                # Mark notification as sent so we don't re-send if the row survives
+                admin_engine = _get_admin_engine()
+                with admin_engine.connect() as conn:
+                    with conn.begin():
+                        conn.execute(
+                            text(
+                                "UPDATE org_insights SET notification_sent = 1 "
+                                "WHERE id = :id AND org_id = :org_id"
+                            ),
+                            {"id": insight_id, "org_id": self.org_id},
+                        )
+                logger.info(
+                    f"[InsightEngine] Alert email sent → {admin_email} for insight {insight_id}"
+                )
+        except Exception as exc:
+            logger.warning(f"[InsightEngine] Alert email failed: {exc}")
+
+    # ── Suppression ───────────────────────────────────────────────────────────────
+
+    def _get_suppressed_metrics(self) -> set:
+        """Return set of (table, column) tuples suppressed for this org."""
+        engine = _get_admin_engine()
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT metric_table, metric_column "
+                        "FROM org_insight_suppressions WHERE org_id = :org_id"
+                    ),
+                    {"org_id": self.org_id},
+                ).fetchall()
+            return {(r[0], r[1]) for r in rows}
+        except Exception:
+            return set()
+
+    def suppress_metric(self, table: str, column: str):
+        """Prevent this table.column from generating future insights."""
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            with conn.begin():
+                try:
+                    conn.execute(
+                        text(
+                            "INSERT INTO org_insight_suppressions "
+                            "(org_id, metric_table, metric_column, created_at) "
+                            "VALUES (:org_id, :table, :column, :ts)"
+                        ),
+                        {
+                            "org_id": self.org_id,
+                            "table":  table,
+                            "column": column,
+                            "ts":     datetime.utcnow().isoformat(),
+                        },
+                    )
+                except Exception:
+                    pass  # Already suppressed — UNIQUE constraint violation is fine
+
+    def unsuppress_metric(self, table: str, column: str):
+        """Re-enable insights for this table.column."""
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(
+                    text(
+                        "DELETE FROM org_insight_suppressions "
+                        "WHERE org_id = :org_id AND metric_table = :table "
+                        "AND metric_column = :column"
+                    ),
+                    {"org_id": self.org_id, "table": table, "column": column},
+                )
+
+    def get_suppressions(self) -> list[dict]:
+        """Return list of suppressed metrics for this org."""
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT metric_table, metric_column, created_at "
+                    "FROM org_insight_suppressions WHERE org_id = :org_id "
+                    "ORDER BY created_at DESC"
+                ),
+                {"org_id": self.org_id},
+            ).mappings().all()
+        return [dict(r) for r in rows]
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -446,8 +652,19 @@ class InsightEngine:
             )
             metrics = metrics[:self.MAX_METRICS_PER_RUN]
 
+        # Load suppressed metrics once — avoids repeated DB hits in the loop
+        suppressed = self._get_suppressed_metrics()
+
         for metric in metrics:
             try:
+                # Skip suppressed table.column pairs
+                if (metric["table"], metric["column"]) in suppressed:
+                    logger.debug(
+                        f"[InsightEngine] Skipping suppressed metric: "
+                        f"{metric['table']}.{metric['column']}"
+                    )
+                    continue
+
                 # Skip if an unseen insight for this metric was stored in the last 24 h
                 if self._has_recent_duplicate(metric["table"], metric["column"]):
                     logger.debug(
@@ -553,6 +770,60 @@ class InsightEngine:
                 row["change_pct"] = None
         return row
 
+    # ── Threshold settings ────────────────────────────────────────────────────
+
+    def get_settings(self) -> dict:
+        """Return current insight settings for this org."""
+        engine = _get_admin_engine()
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT insight_threshold_pct FROM organizations WHERE id = :org_id"
+                    ),
+                    {"org_id": self.org_id},
+                ).mappings().first()
+            threshold = float(row["insight_threshold_pct"]) if row and row["insight_threshold_pct"] is not None else 10.0
+        except Exception:
+            threshold = self.threshold_pct
+        return {"threshold_pct": threshold}
+
+    def save_settings(self, threshold_pct: float):
+        """Persist insight threshold for this org and update the in-memory value."""
+        # Clamp to a sensible range
+        threshold_pct = max(1.0, min(threshold_pct, 100.0))
+        engine = _get_admin_engine()
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(
+                    text(
+                        "UPDATE organizations SET insight_threshold_pct = :t WHERE id = :org_id"
+                    ),
+                    {"t": threshold_pct, "org_id": self.org_id},
+                )
+        self.threshold_pct = threshold_pct
+
+
+def get_org_threshold(org_id: int) -> float:
+    """
+    Read insight_threshold_pct for an org, returning the default if not set.
+    Used by InsightScheduler to build the engine with per-org settings.
+    """
+    engine = _get_admin_engine()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT insight_threshold_pct FROM organizations WHERE id = :org_id"
+                ),
+                {"org_id": org_id},
+            ).mappings().first()
+        if row and row["insight_threshold_pct"] is not None:
+            return float(row["insight_threshold_pct"])
+    except Exception:
+        pass
+    return 10.0
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # InsightScheduler — background asyncio loop for all orgs
@@ -605,7 +876,9 @@ class InsightScheduler:
                     break
                 org_id = row["id"]
                 try:
-                    engine = self.engine_factory(org_id)
+                    # Pass per-org threshold so each org's setting is respected
+                    threshold = get_org_threshold(org_id)
+                    engine = self.engine_factory(org_id, threshold_pct=threshold)
                     if engine:
                         try:
                             await asyncio.get_running_loop().run_in_executor(
