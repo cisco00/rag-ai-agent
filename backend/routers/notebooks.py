@@ -22,6 +22,14 @@ from dependencies import get_current_org, get_org_connection_string
 from auth import get_current_user
 from models import admin_engine
 
+# Optional LLM for AI SQL generation
+try:
+    from config import get_config
+    from llm_client import get_llm_client
+    HAS_LLM = True
+except ImportError:
+    HAS_LLM = False
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -121,6 +129,10 @@ class NotebookUpdateRequest(_BM):
 
 class RunCellRequest(_BM):
     sql: str
+
+class AiSqlRequest(_BM):
+    prompt: str
+    schema_hint: Optional[str] = None  # optional table/column context
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -257,3 +269,54 @@ async def run_cell(
 
     viz = _suggest_viz(result["columns"], result["data"])
     return {**result, "visualization": viz}
+
+
+@router.post("/notebooks/generate-sql")
+async def generate_sql(
+    body: AiSqlRequest,
+    org=Depends(get_current_org),
+    user=Depends(get_current_user),
+):
+    """Generate SQL from a natural-language prompt using the configured LLM."""
+    if not HAS_LLM:
+        raise HTTPException(503, "LLM client not available.")
+
+    try:
+        cfg = get_config()
+        client = get_llm_client(cfg.model_provider, cfg)
+    except Exception as exc:
+        raise HTTPException(503, f"LLM not configured: {exc}")
+
+    schema_section = ""
+    if body.schema_hint:
+        schema_section = f"\n\nAvailable tables / columns:\n{body.schema_hint}"
+
+    system_msg = (
+        "You are a SQL expert. The user will describe what they want to query. "
+        "Return ONLY the raw SQL query — no markdown fences, no explanation, no commentary. "
+        "Write clean, readable SQL. Use standard SQL syntax compatible with both "
+        "SQLite and PostgreSQL unless context suggests otherwise."
+        + schema_section
+    )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user",   "content": body.prompt},
+    ]
+
+    try:
+        resp = client.chat_completion(
+            model=cfg.model_name,
+            messages=messages,
+            max_tokens=512,
+        )
+        sql = resp.choices[0].message.content.strip()
+        # Strip any accidental markdown fences
+        if sql.startswith("```"):
+            sql = "\n".join(
+                line for line in sql.splitlines()
+                if not line.strip().startswith("```")
+            ).strip()
+        return {"sql": sql}
+    except Exception as exc:
+        raise HTTPException(502, f"LLM error: {exc}")
