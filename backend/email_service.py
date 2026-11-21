@@ -399,16 +399,24 @@ def send_insight_alert_email(
 
     action_block = ""
     if recommended_action:
-        action_block = f"""
-        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;
-            padding:16px 20px;margin:16px 0;">
-          <p style="margin:0 0 4px;font-weight:600;color:#92400e;font-size:14px;">
-            Recommended action
-          </p>
-          <p style="margin:0;color:#78350f;font-size:14px;line-height:1.5;">
-            {recommended_action}
-          </p>
-        </div>"""
+        action_block = (
+            '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;'
+            'padding:16px 20px;margin:16px 0;">'
+            '<p style="margin:0 0 4px;font-weight:600;color:#92400e;font-size:14px;">'
+            "Recommended action"
+            "</p>"
+            f'<p style="margin:0;color:#78350f;font-size:14px;line-height:1.5;">'
+            f"{recommended_action}"
+            "</p></div>"
+        )
+
+    sign = "+" if change_pct > 0 else ""
+    detected_p  = _p(f"A significant metric change has been detected in <strong>{org_name}</strong>.")
+    footer_note = _p(
+        '<span style="color:#94a3b8;font-size:13px;">'
+        "You're receiving this because you have high-severity insights "
+        "enabled for your organisation.</span>"
+    )
 
     html = _base_html(f"High-Severity Insight: {headline}", f"""
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
@@ -417,7 +425,7 @@ def send_insight_alert_email(
               letter-spacing:.5px;">HIGH SEVERITY</span>
         </div>
         {_h2(headline)}
-        {_p(f"A significant metric change has been detected in <strong>{org_name}</strong>.")}
+        {detected_p}
 
         <table style="width:100%;border-collapse:collapse;margin:20px 0;">
           <tr style="background:#fef2f2;">
@@ -427,7 +435,7 @@ def send_insight_alert_email(
             </td>
             <td style="padding:12px 16px;border:1px solid #fecaca;
                 color:#991b1b;font-size:18px;font-weight:700;">
-              {("+" if change_pct > 0 else "")}{change_pct:.1f}% — {metric} {direction}
+              {sign}{change_pct:.1f}% — {metric} {direction}
             </td>
           </tr>
           <tr>
@@ -451,9 +459,8 @@ def send_insight_alert_email(
         </div>
 
         {action_block}
-        {_btn("View in Dashboard →", dashboard_url)}
-        {_p('<span style="color:#94a3b8;font-size:13px;">You\'re receiving this because you '
-            'have high-severity insights enabled for your organisation.</span>')}
+        {_btn("View in Dashboard", dashboard_url)}
+        {footer_note}
     """)
     text = (
         f"HIGH SEVERITY INSIGHT — {org_name}\n\n"
