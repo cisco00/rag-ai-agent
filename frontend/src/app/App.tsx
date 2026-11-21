@@ -72,7 +72,7 @@ function isTokenExpiredOrExpiring(token: string | null): boolean {
 type View = 'dashboard' | 'database' | 'management' | 'import' | 'query' | 'reports' |
   'scheduled' | 'transform' | 'analytics' | 'streaming' | 'settings' | 'branding' |
   'insights' | 'alerts' | 'boards' | 'profiler' | 'about' | 'admin' | 'integrations' | 'billing' |
-  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality' | 'notebook' | 'data-access' | 'business-profile';
+  'history' | 'templates' | 'schema' | 'sheets' | 'security' | 'permissions' | 'audit' | 'sso' | 'cloud-storage' | 'catalog' | 'quality' | 'notebook' | 'data-access' | 'business-profile' | 'setup';
 
 // What unauthenticated visitors see
 type PublicScreen = 'landing' | 'auth' | 'about';
@@ -544,6 +544,14 @@ export default function App() {
               existingKey={apiKey}
               isSettingsMode={true}
               user={user}
+            />
+          )}
+          {currentView === 'setup' && (
+            <SetupWizard
+              onComplete={() => {
+                setCurrentView('dashboard');
+                window.location.reload();
+              }}
             />
           )}
           {currentView === 'security' && (

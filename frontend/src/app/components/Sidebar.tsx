@@ -32,6 +32,7 @@ import {
   X,
   NotebookPen,
   Lock,
+  Cpu,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -97,6 +98,7 @@ export function Sidebar({
   };
 
   const toolsItems = [
+    { id: 'setup', label: 'LLM / AI Key', icon: Cpu, hide: !hasPerm('MANAGE_ORG') },
     { id: 'database', label: 'Connect DB', icon: Database, hide: !hasPerm('MANAGE_ORG') },
     { id: 'import', label: 'Import File', icon: FileUp, hide: !hasPerm('WRITE_DATA') },
     { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') && !hasPerm('MUTATE_TABLES') },
