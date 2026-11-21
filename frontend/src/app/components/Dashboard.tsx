@@ -52,7 +52,7 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
     const fetchDashboardData = async () => {
       try {
         const [historyRes, insightsRes, dashboardsRes, alertsRes] = await Promise.all([
-          api.get<{ history: any[] }>('/analytics/history?limit=10'),
+          api.get<{ history: any[]; total?: number }>('/analytics/history?limit=10'),
           api.get<{ insights: any[] }>('/insights?limit=3').catch(() => ({ insights: [] })),
           api.get<{ dashboards: any[] }>('/dashboards').catch(() => ({ dashboards: [] })),
           api.get<{ alerts: any[] }>('/alerts').catch(() => ({ alerts: [] })),

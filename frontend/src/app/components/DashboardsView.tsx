@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, Plus, Trash2, Share2, ExternalLink, RefreshCw,
   X, Pin, Globe, EyeOff, FileText, Users, Maximize2, Minimize2,
   GripVertical, TrendingUp, CheckCircle2, Menu, PanelLeftClose,
-  Code2, Copy, Check, History, Sparkles,
+  Code2, Copy, Check, History, Sparkles, Timer, Search,
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { ChartDisplay } from './ChartDisplay';
@@ -21,7 +21,17 @@ interface Card {
   title?: string; query_text?: string; response_text?: string;
   visualization?: any; card_type: string;
   layout_x: number; layout_y: number; layout_w: number; layout_h: number;
+  refresh_minutes?: number | null;
 }
+
+const REFRESH_OPTIONS = [
+  { label: 'Off',    value: null },
+  { label: '1 min',  value: 1 },
+  { label: '5 min',  value: 5 },
+  { label: '15 min', value: 15 },
+  { label: '30 min', value: 30 },
+  { label: '1 hour', value: 60 },
+];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -79,8 +89,10 @@ export function DashboardsView({
   const [form, setForm] = useState({
     name: '', description: '', is_shared: false, role_id: user?.role || 'analyst',
   });
-  const [confirmDeleteId, setConfirmDeleteId]     = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId]         = useState<number | null>(null);
   const [confirmRemoveCardId, setConfirmRemoveCardId] = useState<number | null>(null);
+  const [sidebarSearch, setSidebarSearch]             = useState('');
+  const [savingRefresh, setSavingRefresh]             = useState<number | null>(null);
 
   // Per-card refresh state
   const [refreshingCards, setRefreshingCards] = useState<Set<number>>(new Set());
@@ -309,6 +321,38 @@ export function DashboardsView({
 
   const handleDragEnd = () => { setDragId(null); setDragOverId(null); dragCounter.current = 0; };
 
+  // ── Auto-refresh interval ────────────────────────────────────────────────────
+
+  const handleSetRefresh = useCallback(async (card: Card, minutes: number | null) => {
+    if (!selected) return;
+    setSavingRefresh(card.id);
+    try {
+      await api.patch(`/dashboards/${selected.id}/cards/${card.id}`, { refresh_minutes: minutes });
+      setCards(prev => prev.map(c => c.id === card.id ? { ...c, refresh_minutes: minutes } : c));
+    } catch (e) { console.error(e); }
+    finally { setSavingRefresh(null); }
+  }, [selected]);
+
+  // Fire auto-refresh for all cards that have refresh_minutes set
+  useEffect(() => {
+    if (!selected || cards.length === 0) return;
+    const autoCards = cards.filter(c => c.refresh_minutes && c.refresh_minutes > 0);
+    if (autoCards.length === 0) return;
+
+    // Find shortest interval among active cards
+    const minInterval = Math.min(...autoCards.map(c => c.refresh_minutes!)) * 60 * 1000;
+
+    const timer = setInterval(async () => {
+      for (const card of autoCards) {
+        if (!card.refresh_minutes) continue;
+        await refreshOneCard(card.id);
+      }
+      if (selected) fetchCards(selected.id);
+    }, minInterval);
+
+    return () => clearInterval(timer);
+  }, [selected?.id, cards.map(c => `${c.id}:${c.refresh_minutes}`).join(',')]); // eslint-disable-line
+
   // ── Embed helpers ────────────────────────────────────────────────────────────
 
   const openEmbedCard = async (card: Card) => {
@@ -454,11 +498,28 @@ export function DashboardsView({
           </div>
         )}
 
+        {/* Search */}
+        {dashboards.length > 4 && (
+          <div className="px-3 py-2 border-b border-gray-100">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-gray-400" />
+              <input
+                value={sidebarSearch}
+                onChange={e => setSidebarSearch(e.target.value)}
+                placeholder="Search dashboards…"
+                className="w-full pl-8 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
+          </div>
+        )}
+
         <nav className="flex-1 overflow-y-auto p-2 space-y-1">
           {dashboards.length === 0 && (
             <p className="text-xs text-gray-400 text-center py-6">No dashboards yet</p>
           )}
-          {dashboards.map(d => (
+          {dashboards.filter(d =>
+            !sidebarSearch || d.name.toLowerCase().includes(sidebarSearch.toLowerCase())
+          ).map(d => (
             <button
               key={d.id}
               onClick={() => { fetchCards(d.id); setSidebarOpen(false); }}
@@ -711,6 +772,22 @@ export function DashboardsView({
                               <Code2 className="size-4 sm:size-3.5" />
                             </button>
                           )}
+                          {/* Auto-refresh interval — desktop only */}
+                          {hasManageDashboards && (
+                            <div className="hidden sm:flex items-center relative" title="Auto-refresh interval">
+                              <Timer className={`absolute left-1.5 size-3 pointer-events-none ${card.refresh_minutes ? 'text-blue-500' : 'text-gray-400'}`} />
+                              <select
+                                value={card.refresh_minutes ?? ''}
+                                disabled={savingRefresh === card.id}
+                                onChange={e => handleSetRefresh(card, e.target.value ? Number(e.target.value) : null)}
+                                className="pl-5 pr-1 py-1 text-[10px] bg-transparent border border-gray-200 rounded-lg text-gray-500 hover:border-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-400 cursor-pointer appearance-none disabled:opacity-50"
+                              >
+                                {REFRESH_OPTIONS.map(o => (
+                                  <option key={String(o.value)} value={o.value ?? ''}>{o.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                           {/* Expand / Collapse — desktop only */}
                           {hasManageDashboards && (
                             <button
@@ -785,12 +862,28 @@ export function DashboardsView({
                         </div>
                       )}
 
-                      {/* Footer: original query */}
+                      {/* Refresh badge for cards with no query footer */}
+                      {!card.query_text && card.refresh_minutes && (
+                        <div className="px-4 py-1.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+                          <span className="flex items-center gap-1 text-[10px] text-blue-500 font-medium">
+                            <Timer className="size-3" />
+                            auto {card.refresh_minutes >= 60 ? '1h' : `${card.refresh_minutes}m`}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Footer: original query + refresh badge */}
                       {card.query_text && (
-                        <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
+                        <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2">
                           <p className="text-xs text-gray-400 truncate">
                             <span className="font-medium">Q:</span> {card.query_text}
                           </p>
+                          {card.refresh_minutes && (
+                            <span className="shrink-0 flex items-center gap-1 text-[10px] text-blue-500 font-medium">
+                              <Timer className="size-3" />
+                              {card.refresh_minutes >= 60 ? '1h' : `${card.refresh_minutes}m`}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

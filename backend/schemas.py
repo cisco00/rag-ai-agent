@@ -272,6 +272,7 @@ class CardRequest(BaseModel):
     layout_y: int = 0
     layout_w: int = 6
     layout_h: int = 4
+    refresh_minutes: Optional[int] = None
 
 class CardLayoutItem(BaseModel):
     id: int
