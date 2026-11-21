@@ -79,7 +79,8 @@ export function DashboardsView({
   const [form, setForm] = useState({
     name: '', description: '', is_shared: false, role_id: user?.role || 'analyst',
   });
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId]     = useState<number | null>(null);
+  const [confirmRemoveCardId, setConfirmRemoveCardId] = useState<number | null>(null);
 
   // Per-card refresh state
   const [refreshingCards, setRefreshingCards] = useState<Set<number>>(new Set());
@@ -164,7 +165,11 @@ export function DashboardsView({
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Delete this dashboard and all its cards?')) return;
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDeleteDashboard = async (id: number) => {
+    setConfirmDeleteId(null);
     try {
       await api.delete(`/dashboards/${id}`);
       fetchDashboards();
@@ -176,10 +181,8 @@ export function DashboardsView({
     try {
       if (isPublic) {
         await api.post(`/dashboards/${id}/unpublish`);
-        setShareUrl(null);
       } else {
-        const r = await api.post<{ share_url: string }>(`/dashboards/${id}/publish`);
-        setShareUrl(r.share_url);
+        await api.post<{ share_url: string }>(`/dashboards/${id}/publish`);
       }
       fetchDashboards();
       if (selected?.id === id) fetchCards(id);
@@ -234,8 +237,13 @@ export function DashboardsView({
     } catch (e) { console.error(e); }
   };
 
-  const handleRemoveCard = async (cardId: number) => {
-    if (!selected || !confirm('Remove this card?')) return;
+  const handleRemoveCard = (cardId: number) => {
+    setConfirmRemoveCardId(cardId);
+  };
+
+  const confirmRemoveCard = async (cardId: number) => {
+    setConfirmRemoveCardId(null);
+    if (!selected) return;
     try {
       await api.delete(`/dashboards/${selected.id}/cards/${cardId}`);
       setCards(prev => prev.filter(c => c.id !== cardId));
@@ -338,6 +346,16 @@ export function DashboardsView({
   const embedSnippet = embedUrl
     ? `<iframe\n  src="${embedUrl}"\n  width="800"\n  height="500"\n  frameborder="0"\n  allowtransparency="true"\n></iframe>`
     : '';
+
+  // ── Derived share URL (non-ephemeral — computed from selected dashboard data) ─
+  const shareUrl = selected?.is_public && selected?.share_token
+    ? (() => {
+        const base = (window as any).__VANTAGE_API_URL__?.replace('/api', '') ||
+          (import.meta as any).env?.VITE_APP_URL ||
+          window.location.origin;
+        return `${base}/dashboards/shared/${selected.share_token}`;
+      })()
+    : null;
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -454,13 +472,26 @@ export function DashboardsView({
                   {d.is_shared ? <Users className="size-3 text-blue-600" title="Shared with role" /> : null}
                   {d.is_public ? <Globe className="size-3 text-green-600" title="Publicly shared" /> : null}
                   {hasManageDashboards && d.created_by === user?.id && (
-                    <button
-                      onClick={e => { e.stopPropagation(); handleDelete(d.id); }}
-                      className="p-0.5 text-red-500 hover:bg-red-50 rounded"
-                      title="Delete dashboard"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                    confirmDeleteId === d.id ? (
+                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => confirmDeleteDashboard(d.id)}
+                          className="px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded"
+                        >Yes</button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded"
+                        >No</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={e => { e.stopPropagation(); handleDelete(d.id); }}
+                        className="p-0.5 text-red-500 hover:bg-red-50 rounded"
+                        title="Delete dashboard"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )
                   )}
                 </div>
               </div>
@@ -579,24 +610,19 @@ export function DashboardsView({
               </div>
             </div>
 
-            {/* Share URL banner */}
+            {/* Share URL banner — always visible when dashboard is public */}
             {shareUrl && (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Share2 className="size-4 text-green-600" />
-                  <span className="text-sm text-green-800 font-medium">Dashboard published!</span>
-                  <a
-                    href={shareUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm text-blue-600 underline flex items-center gap-1"
-                  >
-                    {shareUrl}<ExternalLink className="size-3" />
-                  </a>
-                </div>
-                <button onClick={() => setShareUrl(null)}>
-                  <X className="size-4 text-gray-400" />
-                </button>
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3 flex items-center gap-2 flex-wrap">
+                <Share2 className="size-4 text-green-600 shrink-0" />
+                <span className="text-sm text-green-800 font-medium">Public link:</span>
+                <a
+                  href={shareUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-blue-600 underline flex items-center gap-1 truncate"
+                >
+                  {shareUrl}<ExternalLink className="size-3 shrink-0" />
+                </a>
               </div>
             )}
 
@@ -699,13 +725,26 @@ export function DashboardsView({
                           )}
                           {/* Remove */}
                           {hasManageDashboards && selected.created_by === user?.id && (
-                            <button
-                              onClick={() => handleRemoveCard(card.id)}
-                              title="Remove card"
-                              className="p-2 sm:p-1.5 rounded-lg transition-colors text-red-400 hover:bg-red-50 min-w-[36px] min-h-[36px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-                            >
-                              <X className="size-4 sm:size-3.5" />
-                            </button>
+                            confirmRemoveCardId === card.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => confirmRemoveCard(card.id)}
+                                  className="px-2 py-1 text-[10px] font-bold bg-red-500 text-white rounded-lg"
+                                >Yes</button>
+                                <button
+                                  onClick={() => setConfirmRemoveCardId(null)}
+                                  className="px-2 py-1 text-[10px] bg-gray-100 text-gray-600 rounded-lg"
+                                >No</button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleRemoveCard(card.id)}
+                                title="Remove card"
+                                className="p-2 sm:p-1.5 rounded-lg transition-colors text-red-400 hover:bg-red-50 min-w-[36px] min-h-[36px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+                              >
+                                <X className="size-4 sm:size-3.5" />
+                              </button>
+                            )
                           )}
                         </div>
                       </div>

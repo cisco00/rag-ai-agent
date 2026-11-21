@@ -8,6 +8,18 @@ interface DashboardProps {
   isConfigured?: boolean;
 }
 
+function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
   const [stats, setStats] = useState([
     { label: 'Total Queries', value: '0', change: '+0', icon: MessageSquare, color: 'blue' },
@@ -46,21 +58,21 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
           api.get<{ alerts: any[] }>('/alerts').catch(() => ({ alerts: [] })),
         ]);
 
-        const historyLength = historyRes?.history?.length || 0;
+        const totalQueries = historyRes?.total ?? historyRes?.history?.length ?? 0;
         const dashboardsCount = dashboardsRes?.dashboards?.length || 0;
         const activeAlertsCount = (alertsRes?.alerts || []).filter((a: any) => a.is_active).length;
         const insightsCount = insightsRes?.insights?.length || 0;
 
         setStats([
-          { label: 'Total Queries', value: historyLength.toString(), change: `+${historyLength}`, icon: MessageSquare, color: 'blue' },
-          { label: 'Dashboards', value: dashboardsCount.toString(), change: `+${dashboardsCount}`, icon: LayoutGrid, color: 'purple' },
-          { label: 'Active Alerts', value: activeAlertsCount.toString(), change: `+${activeAlertsCount}`, icon: Bell, color: 'orange' },
-          { label: 'Insights Detected', value: insightsCount.toString(), change: `+${insightsCount}`, icon: Lightbulb, color: 'yellow' },
+          { label: 'Total Queries', value: totalQueries.toLocaleString(), change: '', icon: MessageSquare, color: 'blue' },
+          { label: 'Dashboards', value: dashboardsCount.toString(), change: '', icon: LayoutGrid, color: 'purple' },
+          { label: 'Active Alerts', value: activeAlertsCount.toString(), change: '', icon: Bell, color: 'orange' },
+          { label: 'Insights Detected', value: insightsCount.toString(), change: '', icon: Lightbulb, color: 'yellow' },
         ]);
 
         const formattedQueries = (historyRes?.history || []).map((h: any) => ({
           query: h.query,
-          time: new Date(h.created_at).toLocaleDateString(),
+          time: formatRelativeTime(h.created_at),
           status: 'success',
         }));
 
@@ -113,7 +125,7 @@ export function Dashboard({ onNavigate, isConfigured }: DashboardProps) {
                 <div className={`p-3 rounded-lg ${colorClasses}`}>
                   <Icon className="size-6" />
                 </div>
-                <span className="text-sm font-medium text-green-600">{stat.change}</span>
+                {stat.change && <span className="text-sm font-medium text-green-600">{stat.change}</span>}
               </div>
               <div className="text-2xl font-bold text-gray-900 mb-1">{stat.value}</div>
               <div className="text-sm text-gray-600">{stat.label}</div>

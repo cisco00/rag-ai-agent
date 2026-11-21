@@ -435,8 +435,8 @@ def reorder_cards(dashboard_id: int, org_id: int, layout: list[dict]):
                     SET layout_x=:x, layout_y=:y, layout_w=:w, layout_h=:h, updated_at=:now
                     WHERE id=:id AND org_id=:org_id AND dashboard_id=:did
                 """), {
-                    "x": item.get("x", 0), "y": item.get("y", 0),
-                    "w": item.get("w", 6), "h": item.get("h", 4),
+                    "x": item.get("layout_x", 0), "y": item.get("layout_y", 0),
+                    "w": item.get("layout_w", 6), "h": item.get("layout_h", 4),
                     "now": now, "id": item["id"],
                     "org_id": org_id, "did": dashboard_id,
                 })
