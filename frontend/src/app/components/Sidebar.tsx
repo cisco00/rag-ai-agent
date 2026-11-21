@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '../../lib/api';
 import {
   LayoutDashboard,
@@ -32,6 +33,8 @@ import {
   X,
   NotebookPen,
   Lock,
+  ChevronRight,
+  FolderOpen,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -74,6 +77,10 @@ export function Sidebar({
 }: SidebarProps) {
   const primaryColor = branding.primary_color || '#2563eb';
 
+  const [dataManagerOpen, setDataManagerOpen] = useState(
+    ['management', 'transform', 'profiler', 'quality', 'permissions', 'catalog'].includes(currentView)
+  );
+
   const navItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'insights', label: 'Insights', icon: Lightbulb, badge: unseenInsights > 0 ? unseenInsights : undefined },
@@ -82,9 +89,19 @@ export function Sidebar({
     { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
     { id: 'notebook', label: 'Notebook', icon: NotebookPen, disabled: !isConfigured },
     { id: 'schema', label: 'Schema Diagram', icon: Network, disabled: !isConfigured },
+  ];
+
+  // Items nested inside the collapsible Data Manager group
+  const dataManagerItems = [
+    { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') && !hasPerm('MUTATE_TABLES') },
+    { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
     { id: 'profiler', label: 'Data Profiler', icon: BarChart2, disabled: !isConfigured },
     { id: 'quality', label: 'Data Quality', icon: ShieldCheck, disabled: !isConfigured },
-  ];
+    { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, disabled: !isConfigured, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'catalog', label: 'Data Catalog', icon: BookOpen, disabled: !isConfigured, hide: !hasPerm('MANAGE_ORG') },
+  ].filter(item => !item.hide);
+
+  const dataManagerActive = dataManagerItems.some(i => i.id === currentView);
 
   const hasPerm = (perm: string) => {
     if (Array.isArray(user?.permissions) && user.permissions.includes(perm)) return true;
@@ -99,8 +116,6 @@ export function Sidebar({
   const toolsItems = [
     { id: 'database', label: 'Connect DB', icon: Database, hide: !hasPerm('MANAGE_ORG') },
     { id: 'import', label: 'Import File', icon: FileUp, hide: !hasPerm('WRITE_DATA') },
-    { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') && !hasPerm('MUTATE_TABLES') },
-    { id: 'transform', label: 'AI Transform', icon: Wand2, disabled: !isConfigured, hide: !hasPerm('MUTATE_TABLES') },
     { id: 'analytics', label: 'Advanced Analytics', icon: TrendingUp, disabled: !isConfigured, hide: !hasPerm('VIEW_ADVANCED') },
     { id: 'streaming', label: 'Live Streams', icon: Activity, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') },
     { id: 'sheets', label: 'Sheets Sync', icon: FileSpreadsheet, disabled: !isConfigured, title: 'Sync query results to Google Sheets' },
@@ -112,9 +127,7 @@ export function Sidebar({
     { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
     { id: 'business-profile', label: 'Business Profile', icon: Lightbulb, hide: !hasPerm('MANAGE_ORG') },
-    { id: 'catalog', label: 'Data Catalog', icon: BookOpen, disabled: !isConfigured, hide: !hasPerm('MANAGE_ORG') },
     { id: 'data-access', label: 'Access Requests', icon: Lock, hide: !hasPerm('MANAGE_ORG') },
-    { id: 'permissions', label: 'Data Permissions', icon: ShieldAlert, hide: !hasPerm('MANAGE_ORG') },
     { id: 'audit', label: 'Audit Trail', icon: ClipboardList, hide: !hasPerm('MANAGE_ORG') },
     { id: 'sso', label: 'SSO / SAML', icon: KeyRound, hide: !hasPerm('MANAGE_ORG') },
     { id: 'cloud-storage', label: 'Cloud Storage', icon: CloudUpload, hide: !hasPerm('MANAGE_ORG') },
@@ -192,6 +205,58 @@ export function Sidebar({
             ))}
           </nav>
         </div>
+
+        {/* ── Data Manager collapsible group ── */}
+        {dataManagerItems.length > 0 && (
+          <div>
+            <h2 className="px-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Data</h2>
+            <nav className="px-3 space-y-1">
+              {/* Group header / toggle */}
+              <button
+                onClick={() => setDataManagerOpen(o => !o)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all relative group ${
+                  dataManagerActive
+                    ? 'bg-blue-600/10 text-white font-semibold'
+                    : 'hover:bg-slate-800/50 hover:text-white'
+                }`}
+              >
+                {dataManagerActive && <div className="absolute left-0 w-1 h-6 bg-blue-500 rounded-r-full" />}
+                <FolderOpen size={20} className={dataManagerActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                <span className="text-[13px] flex-1 text-left">Data Manager</span>
+                <ChevronRight
+                  size={14}
+                  className={`text-slate-500 transition-transform duration-200 ${dataManagerOpen ? 'rotate-90' : ''}`}
+                />
+              </button>
+
+              {/* Nested items */}
+              {dataManagerOpen && (
+                <div className="ml-3 pl-3 border-l border-slate-700/50 space-y-0.5 mt-0.5">
+                  {dataManagerItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => !item.disabled && onNavigate(item.id)}
+                      disabled={item.disabled}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all relative group ${
+                        currentView === item.id
+                          ? 'bg-blue-600/10 text-white font-semibold'
+                          : item.disabled
+                            ? 'opacity-40 cursor-not-allowed'
+                            : 'hover:bg-slate-800/50 hover:text-white'
+                      }`}
+                    >
+                      {currentView === item.id && (
+                        <div className="absolute left-0 w-1 h-5 bg-blue-500 rounded-r-full" />
+                      )}
+                      <item.icon size={16} className={currentView === item.id ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                      <span className="text-[12px]">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </nav>
+          </div>
+        )}
 
         {/* Tools Section */}
         <div>
