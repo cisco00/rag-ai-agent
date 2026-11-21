@@ -94,6 +94,20 @@ export function DashboardsView({
   const [sidebarSearch, setSidebarSearch]             = useState('');
   const [savingRefresh, setSavingRefresh]             = useState<number | null>(null);
 
+  // Inline card title editing
+  const [editingTitle, setEditingTitle] = useState<{ id: number; value: string } | null>(null);
+
+  // Add Note card modal
+  const [showAddNote, setShowAddNote]   = useState(false);
+  const [noteForm, setNoteForm]         = useState({ title: '', content: '' });
+  const [savingNote, setSavingNote]     = useState(false);
+
+  // Scheduled reports modal
+  const [showSchedule, setShowSchedule]   = useState(false);
+  const [scheduleForm, setScheduleForm]   = useState({ query: '', frequency: 'weekly', recipients: '' });
+  const [scheduledReports, setScheduledReports] = useState<any[]>([]);
+  const [savingSchedule, setSavingSchedule]     = useState(false);
+
   // Per-card refresh state
   const [refreshingCards, setRefreshingCards] = useState<Set<number>>(new Set());
   const [refreshAllProgress, setRefreshAllProgress] = useState<{ done: number; total: number } | null>(null);
@@ -161,6 +175,7 @@ export function DashboardsView({
   };
 
   useEffect(() => { fetchDashboards(); }, []);
+  useEffect(() => { if (showSchedule) fetchScheduledReports(); }, [showSchedule]);
 
   // ── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -259,6 +274,67 @@ export function DashboardsView({
     try {
       await api.delete(`/dashboards/${selected.id}/cards/${cardId}`);
       setCards(prev => prev.filter(c => c.id !== cardId));
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Inline title editing ─────────────────────────────────────────────────────
+
+  const saveTitle = async (cardId: number, value: string) => {
+    setEditingTitle(null);
+    if (!selected || !value.trim()) return;
+    try {
+      await api.patch(`/dashboards/${selected.id}/cards/${cardId}`, { title: value.trim() });
+      setCards(prev => prev.map((c: Card) => c.id === cardId ? { ...c, title: value.trim() } : c));
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Add Note card ─────────────────────────────────────────────────────────────
+
+  const handleAddNote = async () => {
+    if (!selected || !noteForm.title.trim()) return;
+    setSavingNote(true);
+    try {
+      await api.post(`/dashboards/${selected.id}/cards`, {
+        title: noteForm.title.trim(),
+        response_text: noteForm.content.trim(),
+        card_type: 'text',
+        query_text: '',
+        layout_x: 0,
+        layout_y: cards.length,
+        layout_w: 12,
+        layout_h: 2,
+      });
+      setShowAddNote(false);
+      setNoteForm({ title: '', content: '' });
+      fetchCards(selected.id);
+    } catch (e) { console.error(e); }
+    finally { setSavingNote(false); }
+  };
+
+  // ── Scheduled reports ─────────────────────────────────────────────────────────
+
+  const fetchScheduledReports = async () => {
+    try {
+      const data = await api.get<any[]>('/scheduled-reports');
+      setScheduledReports(Array.isArray(data) ? data : []);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!scheduleForm.query.trim() || !scheduleForm.recipients.trim()) return;
+    setSavingSchedule(true);
+    try {
+      await api.post('/scheduled-reports', scheduleForm);
+      setScheduleForm({ query: '', frequency: 'weekly', recipients: '' });
+      fetchScheduledReports();
+    } catch (e) { console.error(e); }
+    finally { setSavingSchedule(false); }
+  };
+
+  const handleDeleteSchedule = async (id: number) => {
+    try {
+      await api.delete(`/scheduled-reports/${id}`);
+      setScheduledReports(prev => prev.filter((r: any) => r.id !== id));
     } catch (e) { console.error(e); }
   };
 
@@ -616,6 +692,28 @@ export function DashboardsView({
                   <Sparkles className="size-3.5" />
                   <span className="hidden sm:inline">AI Builder</span>
                 </button>
+                {/* Add Note */}
+                {hasManageDashboards && selected.created_by === user?.id && (
+                  <button
+                    onClick={() => setShowAddNote(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium hover:bg-amber-100 transition-colors"
+                    title="Add a text note card"
+                  >
+                    <FileText className="size-3.5" />
+                    <span className="hidden sm:inline">Add Note</span>
+                  </button>
+                )}
+                {/* Schedule Report */}
+                {hasManageDashboards && (
+                  <button
+                    onClick={() => setShowSchedule(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                    title="Schedule email report"
+                  >
+                    <Timer className="size-3.5" />
+                    <span className="hidden sm:inline">Schedule</span>
+                  </button>
+                )}
                 {/* Refresh All */}
                 <button
                   onClick={handleRefreshAll}
@@ -701,9 +799,10 @@ export function DashboardsView({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 items-start">
                 {cards.map(card => {
+                  const isNote   = card.card_type === 'text';
                   const viz      = parseViz(card.visualization);
-                  const hasChart = isValidViz(viz);
-                  const kpi      = !hasChart ? detectKPI(card.response_text) : null;
+                  const hasChart = !isNote && isValidViz(viz);
+                  const kpi      = !hasChart && !isNote ? detectKPI(card.response_text) : null;
                   const isWide   = card.layout_w > 6;
                   const isRefreshing = refreshingCards.has(card.id);
                   const isRefreshed  = refreshedCards.has(card.id);
@@ -720,9 +819,10 @@ export function DashboardsView({
                       onDrop={e => handleDrop(e, card.id)}
                       onDragEnd={handleDragEnd}
                       className={[
-                        'bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col transition-all duration-200',
+                        'rounded-2xl border shadow-sm overflow-hidden flex flex-col transition-all duration-200',
+                        isNote ? 'bg-amber-50/60 border-l-4 border-l-amber-300' : 'bg-white',
                         isWide ? 'md:col-span-2' : '',
-                        isDragOver ? 'border-blue-400 shadow-md ring-2 ring-blue-200 scale-[1.01]' : 'border-gray-200',
+                        isDragOver ? 'border-blue-400 shadow-md ring-2 ring-blue-200 scale-[1.01]' : (isNote ? 'border-amber-200' : 'border-gray-200'),
                         dragId === card.id ? 'opacity-40' : 'opacity-100',
                       ].join(' ')}
                     >
@@ -738,9 +838,27 @@ export function DashboardsView({
                             : kpi
                               ? <TrendingUp className="size-3.5 text-emerald-500 shrink-0" />
                               : <FileText className="size-3.5 text-gray-400 shrink-0" />}
-                          <h3 className="font-semibold text-gray-800 text-sm truncate">
-                            {card.title || card.query_text || 'Untitled Card'}
-                          </h3>
+                          {hasManageDashboards && editingTitle?.id === card.id ? (
+                            <input
+                              autoFocus
+                              value={editingTitle.value}
+                              onChange={e => setEditingTitle({ id: card.id, value: e.target.value })}
+                              onBlur={() => saveTitle(card.id, editingTitle.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveTitle(card.id, editingTitle.value);
+                                if (e.key === 'Escape') setEditingTitle(null);
+                              }}
+                              className="font-semibold text-gray-800 text-sm bg-white border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-blue-400 min-w-0 flex-1"
+                            />
+                          ) : (
+                            <h3
+                              className={`font-semibold text-gray-800 text-sm truncate ${hasManageDashboards ? 'cursor-text hover:text-blue-600' : ''}`}
+                              title={hasManageDashboards ? 'Click to rename' : undefined}
+                              onClick={() => hasManageDashboards && setEditingTitle({ id: card.id, value: card.title || card.query_text || '' })}
+                            >
+                              {card.title || card.query_text || 'Untitled Card'}
+                            </h3>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
@@ -826,8 +944,21 @@ export function DashboardsView({
                         </div>
                       </div>
 
+                      {/* Note / text card */}
+                      {isNote && (
+                        <div className="px-5 py-4 flex-1 bg-amber-50/40">
+                          {card.response_text ? (
+                            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                              {card.response_text}
+                            </p>
+                          ) : (
+                            <p className="text-xs italic text-gray-400">Empty note — click the title to rename.</p>
+                          )}
+                        </div>
+                      )}
+
                       {/* KPI tile */}
-                      {kpi && (
+                      {!isNote && kpi && (
                         <div className="flex flex-col items-center justify-center py-8 px-6 flex-1 bg-gradient-to-b from-white to-gray-50">
                           <span className="text-5xl font-black text-gray-900 tracking-tight leading-none">
                             {kpi.value}
@@ -839,14 +970,14 @@ export function DashboardsView({
                       )}
 
                       {/* Chart */}
-                      {hasChart && (
+                      {!isNote && hasChart && (
                         <div className="px-4 pt-4">
                           <ChartDisplay visualization={viz} />
                         </div>
                       )}
 
-                      {/* Analysis text (only when it's not a KPI) */}
-                      {card.response_text && !kpi && (
+                      {/* Analysis text (only when it's not a KPI and not a note) */}
+                      {!isNote && card.response_text && !kpi && (
                         <div className={`px-5 py-4 flex-1 ${hasChart ? 'border-t border-gray-100 mt-3' : ''}`}>
                           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Analysis</p>
                           <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
@@ -856,7 +987,7 @@ export function DashboardsView({
                       )}
 
                       {/* Empty state */}
-                      {!card.response_text && !hasChart && !kpi && (
+                      {!isNote && !card.response_text && !hasChart && !kpi && (
                         <div className="px-5 py-8 text-center text-gray-400">
                           <p className="text-xs italic">No content — click Refresh to re-run the query.</p>
                         </div>
@@ -1029,6 +1160,150 @@ export function DashboardsView({
             if (selected?.id === dashId) fetchCards(dashId);
           }}
         />
+      )}
+
+      {/* ── Add Note modal ── */}
+      {showAddNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowAddNote(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="size-5 text-amber-500" />
+                <h3 className="font-bold text-gray-900">Add Note Card</h3>
+              </div>
+              <button onClick={() => setShowAddNote(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 block">Title</label>
+                <input
+                  autoFocus
+                  value={noteForm.title}
+                  onChange={e => setNoteForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. Key Takeaways"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 block">Content</label>
+                <textarea
+                  rows={5}
+                  value={noteForm.content}
+                  onChange={e => setNoteForm(f => ({ ...f, content: e.target.value }))}
+                  placeholder="Write your note here…"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={handleAddNote}
+                disabled={savingNote || !noteForm.title.trim()}
+                className="flex-1 py-2 bg-amber-500 text-white rounded-lg text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 transition-colors"
+              >
+                {savingNote ? 'Adding…' : 'Add Note'}
+              </button>
+              <button
+                onClick={() => setShowAddNote(false)}
+                className="flex-1 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Schedule Report modal ── */}
+      {showSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowSchedule(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Timer className="size-5 text-blue-600" />
+                <h3 className="font-bold text-gray-900">Scheduled Email Reports</h3>
+              </div>
+              <button onClick={() => setShowSchedule(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg">
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* New schedule form */}
+            <div className="space-y-3 bg-gray-50 rounded-xl p-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">New Report</p>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Query / description to include</label>
+                <textarea
+                  rows={2}
+                  value={scheduleForm.query}
+                  onChange={e => setScheduleForm(f => ({ ...f, query: e.target.value }))}
+                  placeholder="e.g. Weekly revenue summary with top 5 products"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none resize-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Frequency</label>
+                  <select
+                    value={scheduleForm.frequency}
+                    onChange={e => setScheduleForm(f => ({ ...f, frequency: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Recipients (comma-separated)</label>
+                  <input
+                    value={scheduleForm.recipients}
+                    onChange={e => setScheduleForm(f => ({ ...f, recipients: e.target.value }))}
+                    placeholder="alice@co.com, bob@co.com"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <button
+                onClick={handleSaveSchedule}
+                disabled={savingSchedule || !scheduleForm.query.trim() || !scheduleForm.recipients.trim()}
+                className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {savingSchedule ? 'Scheduling…' : 'Schedule Report'}
+              </button>
+            </div>
+
+            {/* Existing schedules */}
+            {scheduledReports.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Active Schedules</p>
+                {scheduledReports.map((r: any) => (
+                  <div key={r.id} className="flex items-start justify-between gap-2 p-3 bg-white border border-gray-200 rounded-xl">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{r.query}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {r.frequency} · {r.recipients}
+                      </p>
+                      <p className="text-xs text-gray-300 mt-0.5">
+                        Next: {new Date(r.next_run_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteSchedule(r.id)}
+                      className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg shrink-0"
+                      title="Delete schedule"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
