@@ -80,16 +80,26 @@ export function Sidebar({
   const [dataManagerOpen, setDataManagerOpen] = useState(
     ['management', 'transform', 'profiler', 'quality', 'permissions', 'catalog'].includes(currentView)
   );
+  const [queryGroupOpen, setQueryGroupOpen] = useState(
+    ['query', 'history', 'templates'].includes(currentView)
+  );
 
   const navItems = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'insights', label: 'Insights', icon: Lightbulb, badge: unseenInsights > 0 ? unseenInsights : undefined },
     { id: 'boards', label: 'Dashboards', icon: LayoutGrid, disabled: !isConfigured },
     { id: 'alerts', label: 'Alerts', icon: Bell, disabled: !isConfigured, badge: unseenAlerts > 0 ? unseenAlerts : undefined },
-    { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
     { id: 'notebook', label: 'Notebook', icon: NotebookPen, disabled: !isConfigured },
     { id: 'schema', label: 'Schema Diagram', icon: Network, disabled: !isConfigured },
   ];
+
+  const queryGroupItems = [
+    { id: 'query', label: 'AI Query', icon: MessageSquare, disabled: !isConfigured },
+    { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
+    { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
+  ];
+
+  const queryGroupActive = queryGroupItems.some(i => i.id === currentView);
 
   // Items nested inside the collapsible Data Manager group
   const dataManagerItems = [
@@ -123,8 +133,6 @@ export function Sidebar({
   ].filter(item => !item.hide);
 
   const adminItems = [
-    { id: 'history', label: 'Query History', icon: History, disabled: !isConfigured },
-    { id: 'templates', label: 'Query Templates', icon: BookMarked, disabled: !isConfigured },
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
     { id: 'business-profile', label: 'Business Profile', icon: Lightbulb, hide: !hasPerm('MANAGE_ORG') },
     { id: 'data-access', label: 'Access Requests', icon: Lock, hide: !hasPerm('MANAGE_ORG') },
@@ -203,6 +211,54 @@ export function Sidebar({
                 )}
               </button>
             ))}
+          </nav>
+        </div>
+
+        {/* ── Query collapsible group ── */}
+        <div>
+          <h2 className="px-6 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Query</h2>
+          <nav className="px-3 space-y-1">
+            <button
+              onClick={() => setQueryGroupOpen(o => !o)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all relative group ${
+                queryGroupActive
+                  ? 'bg-blue-600/10 text-white font-semibold'
+                  : 'hover:bg-slate-800/50 hover:text-white'
+              }`}
+            >
+              {queryGroupActive && <div className="absolute left-0 w-1 h-6 bg-blue-500 rounded-r-full" />}
+              <MessageSquare size={20} className={queryGroupActive ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
+              <span className="text-[13px] flex-1 text-left">AI Query</span>
+              <ChevronRight
+                size={14}
+                className={`text-slate-500 transition-transform duration-200 ${queryGroupOpen ? 'rotate-90' : ''}`}
+              />
+            </button>
+
+            {queryGroupOpen && (
+              <div className="ml-3 pl-3 border-l border-slate-700/50 space-y-0.5 mt-0.5">
+                {queryGroupItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => !item.disabled && onNavigate(item.id)}
+                    disabled={item.disabled}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all relative group ${
+                      currentView === item.id
+                        ? 'bg-blue-600/10 text-white font-semibold'
+                        : item.disabled
+                          ? 'opacity-40 cursor-not-allowed'
+                          : 'hover:bg-slate-800/50 hover:text-white'
+                    }`}
+                  >
+                    {currentView === item.id && (
+                      <div className="absolute left-0 w-1 h-5 bg-blue-500 rounded-r-full" />
+                    )}
+                    <item.icon size={16} className={currentView === item.id ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                    <span className="text-[12px]">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </nav>
         </div>
 
