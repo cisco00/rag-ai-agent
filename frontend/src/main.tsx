@@ -1,14 +1,14 @@
 
   import { createRoot } from "react-dom/client";
-  import React from "react";
+  import { Component, type ReactNode } from "react";
   import App from "./app/App.tsx";
   import "./styles/index.css";
 
-  class ErrorBoundary extends React.Component<
-    { children: React.ReactNode },
+  class ErrorBoundary extends Component<
+    { children: ReactNode },
     { error: Error | null }
   > {
-    constructor(props: any) {
+    constructor(props: { children: ReactNode }) {
       super(props);
       this.state = { error: null };
     }
@@ -37,4 +37,3 @@
       <App />
     </ErrorBoundary>
   );
-  

@@ -19,4 +19,23 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+
+  build: {
+    /**
+     * recharts and its d3 internals ship as mixed ESM/CJS with circular
+     * references.  Telling Rollup's commonjs plugin to process them
+     * (transformMixedEsModules: true) prevents the TDZ "Cannot access 'X'
+     * before initialization" crash that otherwise fires via React Scheduler's
+     * MessagePort callback in production builds.
+     *
+     * We intentionally do NOT use manualChunks here: splitting React into its
+     * own chunk creates a circular chunk dependency (vendor ↔ react-core)
+     * that causes React to be undefined when vendor modules call
+     * React.forwardRef at init time.  Rollup's default single-chunk output
+     * resolves module order correctly.
+     */
+    commonjsOptions: {
+      transformMixedEsModules: true,
+    },
+  },
 })
