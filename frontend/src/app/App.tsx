@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { Menu, Loader2 } from 'lucide-react';
-import { LangfuseWeb } from 'langfuse';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { DatabaseConfig } from './components/DatabaseConfig';
@@ -48,10 +47,6 @@ import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
 
-const langfuse = new LangfuseWeb({
-  publicKey: import.meta.env.VITE_LANGFUSE_PUBLIC_KEY || "pk-lf-vantage-dev",
-  baseUrl: import.meta.env.VITE_LANGFUSE_HOST || "http://localhost:3000",
-});
 
 /** Decode JWT payload without verifying signature (client-side only) */
 function decodeJwtPayload(token: string): any {
