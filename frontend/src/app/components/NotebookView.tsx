@@ -19,7 +19,6 @@ import {
   X, CheckCircle2, AlertCircle, FileText, Code2, BarChart2,
   Table2, Save, PenLine, Eye, Pencil, Copy, Check,
   Download, Pin, Sparkles, ChevronsUpDown, Search, LayoutGrid,
-  CopyIcon,
 } from 'lucide-react';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -258,7 +257,7 @@ function SqlCell({
             <ChevronDown className="size-3.5" />
           </button>
           <button onClick={onDuplicate} title="Duplicate cell" className="p-1 text-gray-400 hover:text-gray-600">
-            <CopyIcon className="size-3.5" />
+            <Copy className="size-3.5" />
           </button>
           <button onClick={copySQL} title="Copy SQL" className="p-1 text-gray-400 hover:text-gray-600">
             {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
@@ -479,7 +478,7 @@ function MarkdownCell({
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button onClick={onMoveUp} disabled={isFirst} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30"><ChevronUp className="size-3.5" /></button>
           <button onClick={onMoveDown} disabled={isLast} className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30"><ChevronDown className="size-3.5" /></button>
-          <button onClick={onDuplicate} title="Duplicate" className="p-1 text-gray-400 hover:text-gray-600"><CopyIcon className="size-3.5" /></button>
+          <button onClick={onDuplicate} title="Duplicate" className="p-1 text-gray-400 hover:text-gray-600"><Copy className="size-3.5" /></button>
           <button onClick={onToggleView} className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-600 hover:bg-amber-100 transition-colors">
             {isPreview ? <><Pencil className="size-3" />Edit</> : <><Eye className="size-3" />Preview</>}
           </button>
