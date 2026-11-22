@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Menu, Loader2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
@@ -40,7 +40,9 @@ import { SSOConfig } from './components/SSOConfig';
 import { CloudStorageSettings } from './components/CloudStorageSettings';
 import { SharedDashboard } from './components/SharedDashboard';
 import { DataQualityMonitor } from './components/DataQualityMonitor';
-import { NotebookView } from './components/NotebookView';
+const NotebookView = lazy(() =>
+  import('./components/NotebookView').then(m => ({ default: m.NotebookView }))
+);
 import { DataAccessManager } from './components/DataAccessManager';
 import { BusinessProfileSetup } from './components/BusinessProfileSetup';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
@@ -566,7 +568,11 @@ export default function App() {
           {currentView === 'integrations' && (!desktop || !license || license.hasFeature('integrations') ? <Integrations /> : <FeatureLockedMessage feature="Integrations" />)}
           {currentView === 'billing' && <UsageAnalytics />}
           {currentView === 'quality' && <DataQualityMonitor apiKey={apiKey!} />}
-          {currentView === 'notebook' && <NotebookView apiKey={apiKey!} />}
+          {currentView === 'notebook' && (
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center"><Loader2 className="size-8 animate-spin text-indigo-400" /></div>}>
+              <NotebookView apiKey={apiKey!} />
+            </Suspense>
+          )}
           {currentView === 'data-access' && <DataAccessManager />}
           {currentView === 'business-profile' && (
             <BusinessProfileSetup inline onSaved={() => {}} />
