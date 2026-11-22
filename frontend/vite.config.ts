@@ -14,6 +14,15 @@ export default defineConfig({
     alias: {
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
+      /**
+       * Force recharts to use its CommonJS build (lib/) instead of the ESM
+       * build (es6/).  recharts' ESM modules have circular dependencies that
+       * cause Rollup to emit code where a `const` is accessed before its
+       * initializer runs (TDZ: "Cannot access 'X' before initialization").
+       * The CJS build uses require() so @rollup/plugin-commonjs can resolve
+       * the circular refs safely using partial module objects — no TDZ.
+       */
+      'recharts': path.resolve(__dirname, 'node_modules/recharts/lib/index.js'),
     },
   },
 
@@ -21,20 +30,10 @@ export default defineConfig({
   assetsInclude: ['**/*.svg', '**/*.csv'],
 
   build: {
-    /**
-     * recharts and its d3 internals ship as mixed ESM/CJS with circular
-     * references.  Telling Rollup's commonjs plugin to process them
-     * (transformMixedEsModules: true) prevents the TDZ "Cannot access 'X'
-     * before initialization" crash that otherwise fires via React Scheduler's
-     * MessagePort callback in production builds.
-     *
-     * We intentionally do NOT use manualChunks here: splitting React into its
-     * own chunk creates a circular chunk dependency (vendor ↔ react-core)
-     * that causes React to be undefined when vendor modules call
-     * React.forwardRef at init time.  Rollup's default single-chunk output
-     * resolves module order correctly.
-     */
     commonjsOptions: {
+      // Required so the commonjs plugin also processes recharts' CJS build
+      // and the d3 packages it requires (which may also be CJS).
+      include: [/recharts/, /node_modules/],
       transformMixedEsModules: true,
     },
   },
