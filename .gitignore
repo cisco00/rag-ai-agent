@@ -57,3 +57,4 @@ email_out.txt
 **/*_override.tf
 **/*_override.tf.json
 frontend/.prebundle/
+frontend/dist-plain/
