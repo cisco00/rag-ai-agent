@@ -286,6 +286,48 @@ def _run_join_preview(conn_str: str, req: JoinPreviewRequest) -> dict:
         engine.dispose()
 
 
+# ── Row counts ────────────────────────────────────────────────────────────────
+
+def _get_row_counts(conn_str: str) -> dict:
+    """
+    Return row count for each table via COUNT(*).
+    Caps at 100 tables; returns -1 for any table that fails.
+    """
+    from sqlalchemy import create_engine, text, inspect as sa_inspect
+
+    engine = create_engine(conn_str)
+    try:
+        insp = sa_inspect(engine)
+        tables = insp.get_table_names()
+        counts: dict[str, int] = {}
+        with engine.connect() as conn:
+            for table in tables[:100]:
+                try:
+                    result = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"'))
+                    counts[table] = int(result.scalar() or 0)
+                except Exception:
+                    counts[table] = -1
+        return counts
+    finally:
+        engine.dispose()
+
+
+@router.get("/schema/row-counts")
+async def get_row_counts(org=Depends(get_current_org)):
+    """
+    Return { table_name: row_count } for every table.
+    count = -1 means the count query failed for that table.
+    """
+    conn_str = get_org_connection_string(org)
+    if not conn_str:
+        raise HTTPException(status_code=400, detail="No database configured.")
+
+    try:
+        return await run_in_threadpool(_get_row_counts, conn_str)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/schema/join-preview")
 async def join_preview(request: JoinPreviewRequest, org=Depends(get_current_org)):
     """
