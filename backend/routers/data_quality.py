@@ -18,7 +18,7 @@ from sqlalchemy.ext.declarative import declarative_base
 
 from dependencies import get_current_org, get_org_connection_string
 from auth import get_current_user
-from models import get_db
+from models import get_db, admin_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -138,8 +138,7 @@ async def take_snapshot(
 
     with get_db() as db:
         from sqlalchemy import inspect as sa_inspect
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
+        _ensure_table(admin_engine)
 
         # Fetch the most recent previous snapshot for drift comparison
         prev_snap = (
@@ -177,8 +176,7 @@ async def snapshot_history(
 ):
     """Return up to *limit* snapshots (newest first) for trend charts."""
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
+        _ensure_table(admin_engine)
 
         rows = (
             db.query(DQSnapshot)
@@ -218,8 +216,7 @@ async def monitored_tables(
 ):
     """List all tables that have at least one snapshot, with latest snapshot time."""
     with get_db() as db:
-        engine = db.bind or db.get_bind()
-        _ensure_table(engine)
+        _ensure_table(admin_engine)
 
         from sqlalchemy import func
         rows = (
