@@ -101,6 +101,17 @@ export function Sidebar({
 
   const queryGroupActive = queryGroupItems.some(i => i.id === currentView);
 
+  // hasPerm must be declared BEFORE any array that calls it — `const` is TDZ.
+  const hasPerm = (perm: string) => {
+    if (Array.isArray(user?.permissions) && user.permissions.includes(perm)) return true;
+    // Fallback for missing permissions in older session data
+    if (user?.role === 'business_owner') return true; // Owners have all perms
+    if (perm === 'MANAGE_USERS' && user?.role === 'admin') return true;
+    if (perm === 'WRITE_DATA' && user?.role === 'admin') return true;
+    if (perm === 'MUTATE_TABLES' && (user?.role === 'admin' || user?.role === 'editor')) return true;
+    return false;
+  };
+
   // Items nested inside the collapsible Data Manager group
   const dataManagerItems = [
     { id: 'management', label: 'Data Manager', icon: Box, disabled: !isConfigured, hide: !hasPerm('WRITE_DATA') && !hasPerm('MUTATE_TABLES') },
@@ -112,16 +123,6 @@ export function Sidebar({
   ].filter(item => !item.hide);
 
   const dataManagerActive = dataManagerItems.some(i => i.id === currentView);
-
-  const hasPerm = (perm: string) => {
-    if (Array.isArray(user?.permissions) && user.permissions.includes(perm)) return true;
-    // Fallback for missing permissions in older session data
-    if (user?.role === 'business_owner') return true; // Owners have all perms
-    if (perm === 'MANAGE_USERS' && user?.role === 'admin') return true;
-    if (perm === 'WRITE_DATA' && user?.role === 'admin') return true;
-    if (perm === 'MUTATE_TABLES' && (user?.role === 'admin' || user?.role === 'editor')) return true;
-    return false;
-  };
 
   const toolsItems = [
     { id: 'database', label: 'Connect DB', icon: Database, hide: !hasPerm('MANAGE_ORG') },
