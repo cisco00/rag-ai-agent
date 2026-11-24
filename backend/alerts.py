@@ -543,5 +543,17 @@ async def evaluate_all_alerts():
                         delivered=(delivery_error is None),
                         delivery_error=delivery_error,
                     )
+                    # In-app notification
+                    try:
+                        from routers.notifications import create_notification
+                        create_notification(
+                            org_id=org_id,
+                            title=f"⚠️ Alert: {rule['name']}",
+                            type="alert",
+                            message=msg,
+                            link="/alerts",
+                        )
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.error(f"[Alerts] Evaluation error for rule {rule['id']}: {exc}")

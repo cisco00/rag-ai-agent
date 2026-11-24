@@ -45,6 +45,7 @@ const NotebookView = lazy(() =>
 );
 import { DataAccessManager } from './components/DataAccessManager';
 import { BusinessProfileSetup } from './components/BusinessProfileSetup';
+import NotificationCenter from './components/NotificationCenter';
 import { api, clearSession, getApiKey, getAccessToken, isDesktopMode } from '../lib/api';
 import { secureStorage } from '../lib/secureStorage';
 import { getLicenseManager, type LicenseManager } from '../lib/license';
@@ -415,7 +416,13 @@ export default function App() {
               <span className="font-bold text-gray-900 truncate max-w-[150px]">{branding.org_name}</span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {apiKey && (
+              <NotificationCenter
+                apiKey={apiKey}
+                onNavigate={(view) => setCurrentView(view as View)}
+              />
+            )}
             {unseenCount > 0 && (
               <div className="size-2 bg-blue-600 rounded-full animate-pulse" />
             )}
@@ -424,6 +431,16 @@ export default function App() {
             </div>
           </div>
         </header>
+
+        {/* Desktop notification bell — hidden on mobile (mobile header has its own) */}
+        {apiKey && (
+          <div className="hidden lg:flex items-center justify-end px-4 py-2 border-b border-gray-100 bg-white shrink-0">
+            <NotificationCenter
+              apiKey={apiKey}
+              onNavigate={(view) => setCurrentView(view as View)}
+            />
+          </div>
+        )}
 
         {/* Update notification banner (superuser only — web + desktop) */}
         <UpdateBanner user={user} desktop={desktop} />

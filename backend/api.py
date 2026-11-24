@@ -65,6 +65,7 @@ from routers import data_access as data_access_router
 from routers import analytics_interpret as analytics_interpret_router
 from routers import business_profile as business_profile_router
 from routers import cross_analysis as cross_analysis_router
+from routers import notifications as notifications_router
 
 load_dotenv()
 
@@ -576,6 +577,7 @@ app.include_router(data_access_router.router,                        tags=["Data
 app.include_router(analytics_interpret_router.router,                tags=["Analytics Interpretation"])
 app.include_router(business_profile_router.router,                   tags=["Business Profile"])
 app.include_router(cross_analysis_router.router,                     tags=["Cross-Analytical Intelligence"])
+app.include_router(notifications_router.router,                      tags=["Notifications"])
 
 
 @app.get("/")

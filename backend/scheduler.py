@@ -180,7 +180,21 @@ def execute_scheduled_report(report_id: int):
                 
                 db.commit()
                 logger.info(f"Report {report_id} executed successfully. Next run: {report.next_run_at}")
-                
+
+                # In-app notification
+                try:
+                    from routers.notifications import create_notification
+                    freq_label = report.frequency.title()
+                    create_notification(
+                        org_id=org.id,
+                        title=f"📊 {freq_label} report ready",
+                        type="report",
+                        message=f"Query: {report.query[:120]}{'…' if len(report.query) > 120 else ''}",
+                        link="/reports",
+                    )
+                except Exception:
+                    pass
+
                 # Schedule the next run
                 schedule_job_for_report(report.id, report.next_run_at)
 

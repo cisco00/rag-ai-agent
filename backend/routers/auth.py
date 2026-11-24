@@ -22,11 +22,11 @@ from fastapi.concurrency import run_in_threadpool
 
 import auth as auth_module
 from models import (
-    get_org_by_api_key, create_org, update_org_db
+    get_org_by_api_key, get_org_by_id, create_org, update_org_db
 )
 from database import DatabaseManager
 from dependencies import get_current_org, FILE_DB_CACHE, FILE_DB_CACHE_LOCK, require_permission, limiter
-from email_service import send_welcome_email
+from email_service import send_welcome_email, send_invite_email
 from schemas import (
     RegisterRequest, ConfigRequest, LoginRequest, RegisterUserRequest,
     AcceptInviteRequest, InviteRequest, ForgotPasswordRequest, ResetPasswordRequest,
@@ -278,7 +278,7 @@ async def reset_password_route(request: Request, payload: ResetPasswordRequest):
 @router.post("/invite")
 async def invite_user_route(request: InviteRequest,
                             user: dict = Depends(require_permission("MANAGE_USERS"))):
-    """Generate an invitation token for a new team member."""
+    """Generate an invitation token and send an invitation email to the new team member."""
     try:
         token = auth_module.create_invite(
             org_id=user["org_id"],
@@ -286,6 +286,38 @@ async def invite_user_route(request: InviteRequest,
             role=request.role,
             invited_by=user["id"],
         )
+
+        # Send invitation email (best-effort: don't fail the invite if email fails)
+        try:
+            from email_service import APP_URL
+            invite_url = f"{APP_URL}/accept-invite?token={token}"
+            org = get_org_by_id(user["org_id"])
+            org_name = org.name if org else "Vantage AI"
+            invited_by_name = user.get("display_name") or user.get("email") or None
+            send_invite_email(
+                to_email=request.email,
+                org_name=org_name,
+                role=request.role,
+                invite_url=invite_url,
+                invited_by=invited_by_name,
+            )
+        except Exception as email_err:
+            logger.warning(f"Invite created but email failed: {email_err}")
+
+        # In-app notification for the inviter
+        try:
+            from routers.notifications import create_notification
+            create_notification(
+                org_id=user["org_id"],
+                title=f"✉️ Invitation sent to {request.email}",
+                type="invite",
+                message=f"Role: {request.role.replace('_', ' ').title()}",
+                link="/settings",
+                user_id=user["id"],
+            )
+        except Exception:
+            pass
+
         return {"token": token, "email": request.email, "role": request.role}
     except Exception as e:
         logger.error(f"Invite failed: {e}")
