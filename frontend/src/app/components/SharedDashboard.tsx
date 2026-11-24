@@ -83,7 +83,7 @@ function PublicCard({ card }: { card: Card }) {
   const isWide = card.layout_w > 6;
 
   return (
-    <div className={`bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col ${isWide ? 'col-span-2' : 'col-span-1'}`}>
+    <div className={`bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col ${isWide ? 'sm:col-span-2' : 'col-span-1'}`}>
       {/* Card header */}
       <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2">
         {validViz ? (
@@ -102,14 +102,14 @@ function PublicCard({ card }: { card: Card }) {
       </div>
 
       {/* Card content */}
-      <div className="flex-1 p-4">
+      <div className="flex-1 p-3 md:p-4">
         {kpi ? (
           <div className="flex flex-col items-center justify-center h-full min-h-[80px] py-4">
-            <div className="text-4xl font-black text-slate-900 tracking-tight">{kpi.value}</div>
-            {kpi.label && <div className="text-sm text-slate-500 mt-1.5">{kpi.label}</div>}
+            <div className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight">{kpi.value}</div>
+            {kpi.label && <div className="text-xs md:text-sm text-slate-500 mt-1.5 text-center">{kpi.label}</div>}
           </div>
         ) : validViz ? (
-          <div className="h-64">
+          <div className="h-48 md:h-64">
             <ChartDisplay visualization={viz} />
           </div>
         ) : card.response_text ? (
@@ -186,44 +186,44 @@ export function SharedDashboard({ token }: SharedDashboardProps) {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Top bar */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-50 rounded-xl">
+      <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-start md:items-center gap-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <div className="p-2 bg-blue-50 rounded-xl shrink-0">
             <LayoutDashboard className="size-5 text-blue-600" />
           </div>
-          <div>
-            <h1 className="font-black text-slate-900 text-lg leading-tight">
+          <div className="min-w-0">
+            <h1 className="font-black text-slate-900 text-base md:text-lg leading-tight truncate">
               {dashboard?.name}
             </h1>
             {dashboard?.description && (
-              <p className="text-xs text-slate-500 mt-0.5">{dashboard.description}</p>
+              <p className="text-xs text-slate-500 mt-0.5 truncate">{dashboard.description}</p>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-slate-400">
-          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full font-medium border border-emerald-200">
+        <div className="flex items-center gap-2 text-xs text-slate-400 shrink-0">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full font-medium border border-emerald-200 whitespace-nowrap">
             <Globe className="size-3" />
-            Public dashboard
+            Public
           </span>
           {dashboard?.updated_at && (
-            <span className="hidden sm:flex items-center gap-1.5">
+            <span className="hidden sm:flex items-center gap-1.5 whitespace-nowrap">
               <Calendar className="size-3" />
-              Updated {formatDate(dashboard.updated_at)}
+              {formatDate(dashboard.updated_at)}
             </span>
           )}
         </div>
       </header>
 
       {/* Cards grid */}
-      <main className="max-w-7xl mx-auto p-6">
+      <main className="max-w-7xl mx-auto p-3 md:p-6">
         {cards.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-slate-400 gap-3">
             <LayoutDashboard className="size-12 opacity-30" />
             <p className="text-sm">This dashboard has no cards yet.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
             {cards.map(card => (
               <PublicCard key={card.id} card={card} />
             ))}

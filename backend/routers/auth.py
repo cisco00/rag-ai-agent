@@ -350,6 +350,46 @@ async def accept_invite_route(request: AcceptInviteRequest, response: Response):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── API Key Management ────────────────────────────────────────────────────────
+
+@router.get("/api-key")
+async def get_api_key_route(org=Depends(get_current_org), user=Depends(require_permission("MANAGE_ORG"))):
+    """Return the organization's current API key."""
+    return {
+        "api_key": org.api_key,
+        "org_name": org.name,
+    }
+
+
+@router.post("/api-key/regenerate")
+async def regenerate_api_key_route(org=Depends(get_current_org), user=Depends(require_permission("MANAGE_ORG"))):
+    """
+    Generate a new API key for the organization.
+    The old key is immediately invalidated — all integrations using it must be updated.
+    """
+    import secrets
+    from sqlalchemy import text as sa_text
+    from models import admin_engine
+
+    new_key = secrets.token_urlsafe(32)
+    try:
+        with admin_engine.connect() as conn:
+            with conn.begin():
+                result = conn.execute(
+                    sa_text("UPDATE organizations SET api_key = :new_key WHERE id = :org_id"),
+                    {"new_key": new_key, "org_id": org.id},
+                )
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Organization not found.")
+        logger.info(f"API key regenerated for org {org.id} by user {user.get('id')}")
+        return {"api_key": new_key, "org_name": org.name, "message": "API key regenerated successfully."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to regenerate API key: {e}")
+        raise HTTPException(status_code=500, detail="Failed to regenerate API key.")
+
+
 @router.delete("/invite/{email}")
 async def revoke_invite_route(email: str, user: dict = Depends(require_permission("MANAGE_USERS"))):
     """Revoke a pending invitation for a specific email."""
