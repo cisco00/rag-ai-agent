@@ -66,6 +66,7 @@ from routers import analytics_interpret as analytics_interpret_router
 from routers import business_profile as business_profile_router
 from routers import cross_analysis as cross_analysis_router
 from routers import notifications as notifications_router
+from routers import stream_sources as stream_sources_router
 
 load_dotenv()
 
@@ -578,6 +579,7 @@ app.include_router(analytics_interpret_router.router,                tags=["Anal
 app.include_router(business_profile_router.router,                   tags=["Business Profile"])
 app.include_router(cross_analysis_router.router,                     tags=["Cross-Analytical Intelligence"])
 app.include_router(notifications_router.router,                      tags=["Notifications"])
+app.include_router(stream_sources_router.router, prefix="/stream-sources", tags=["Stream Sources"])
 
 
 @app.get("/")
@@ -703,6 +705,131 @@ async def websocket_endpoint(websocket: WebSocket, table_name: str, api_key: Opt
             pass
     finally:
         ping_task.cancel()
+
+
+# ── WebSocket: Push-based Event Stream (Kafka / CDC) ─────────────────────────
+# Unlike the poll-based handler above, this endpoint makes NO periodic queries.
+# It opens an AIOKafkaConsumer and forwards each message the broker pushes to it
+# immediately — zero extra latency, no wasted round-trips to the DB.
+#
+# CDC (Debezium) messages carry an envelope  {before, after, op, source, ...}.
+# We normalise them so the frontend receives the same flat-row format used by
+# the poll-based endpoint.
+@app.websocket("/ws/stream-events/{source_id}")
+async def event_stream_websocket(
+    websocket: WebSocket,
+    source_id: int,
+    api_key: Optional[str] = None,
+):
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    if not api_key:
+        await websocket.close(code=4003, reason="Missing api_key")
+        return
+    org = get_org_by_api_key(api_key)
+    if not org:
+        await websocket.close(code=4003, reason="Invalid api_key")
+        return
+
+    # ── Resolve source config ─────────────────────────────────────────────────
+    try:
+        from routers.stream_sources import get_stream_source_config, _apply_kafka_security
+        source = get_stream_source_config(org.id, source_id)
+    except HTTPException as exc:
+        await websocket.close(code=4004, reason=exc.detail)
+        return
+
+    details     = source["connection_details"]
+    source_type = source["source_type"]   # 'kafka' or 'cdc_kafka'
+    bootstrap   = details.get("bootstrap_servers", "localhost:9092")
+    topic       = details.get("topic", "")
+    group_id    = details.get("group_id", f"vantage-ai-{org.id}-{source_id}")
+
+    # ── Check aiokafka availability before accepting ───────────────────────────
+    try:
+        from aiokafka import AIOKafkaConsumer
+    except ImportError:
+        await websocket.close(
+            code=4500,
+            reason="aiokafka not installed — add it to requirements.txt",
+        )
+        return
+
+    await websocket.accept()
+
+    # ── Ping task ─────────────────────────────────────────────────────────────
+    async def _ping_loop():
+        try:
+            while True:
+                await asyncio.sleep(20)
+                await websocket.send_text(json.dumps({"_ping": True}))
+        except Exception:
+            pass
+
+    ping_task = asyncio.create_task(_ping_loop())
+
+    consumer = None
+    try:
+        consumer_kwargs: dict = {
+            "bootstrap_servers": bootstrap,
+            "group_id": group_id,
+            # Start from the latest offset so the client only sees new events.
+            # Set auto_offset_reset='earliest' to replay from the beginning.
+            "auto_offset_reset": details.get("auto_offset_reset", "latest"),
+            "enable_auto_commit": True,
+        }
+        _apply_kafka_security(consumer_kwargs, details)
+
+        consumer = AIOKafkaConsumer(topic, **consumer_kwargs)
+        await consumer.start()
+
+        # Notify the frontend that the connection is live
+        await websocket.send_text(json.dumps({
+            "_connected": True,
+            "source": source["name"],
+            "type": source_type,
+            "topic": topic,
+        }))
+
+        async for msg in consumer:
+            # Decode message value — most Kafka producers write JSON
+            try:
+                raw = json.loads(msg.value)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raw = {"_raw": msg.value.decode("utf-8", errors="replace")}
+
+            # ── CDC normalisation (Debezium envelope) ─────────────────────────
+            # Debezium wraps changes in {op, before, after, source, ...}.
+            # We flatten the 'after' payload (or 'before' for deletes) so the
+            # frontend gets the same flat dict it expects from the poll endpoint.
+            if source_type == "cdc_kafka" and isinstance(raw, dict):
+                op = raw.get("op", "")            # c=create, u=update, d=delete, r=read
+                payload = raw.get("after") or raw.get("before") or raw
+                if isinstance(payload, dict):
+                    payload["_cdc_op"] = op
+                    payload["_cdc_source"] = raw.get("source", {}).get("table", "")
+                    raw = payload
+
+            raw.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+
+            await websocket.send_text(json.dumps(raw, default=str))
+
+    except WebSocketDisconnect:
+        logger.info(f"Event stream WS disconnected: source_id={source_id}")
+    except Exception as exc:
+        logger.error(f"Event stream WS error (source_id={source_id}): {exc}")
+        try:
+            await websocket.send_text(json.dumps({"_error": str(exc)}))
+            await websocket.close()
+        except Exception:
+            pass
+    finally:
+        ping_task.cancel()
+        if consumer is not None:
+            try:
+                await consumer.stop()
+            except Exception:
+                pass
+
 
 # ── SPA Static Files ──────────────────────────────────────────────────────────
 # Fix #14: The catch-all is GET-only. Registering it with POST/PUT/DELETE/OPTIONS
