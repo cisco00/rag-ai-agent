@@ -501,9 +501,39 @@ function ForgotPasswordForm({ setActiveTab, setError, setSuccess, isLoading, set
     );
 }
 
+function PasswordStrengthBar({ password }: { password: string }) {
+    const hasLength  = password.length >= 8;
+    const hasSpecial = /[\d\W]/.test(password);
+    const strength   = [hasLength, hasSpecial].filter(Boolean).length; // 0-2
+    const bars       = [0, 1];
+    const color      = strength === 0 ? 'bg-slate-200' : strength === 1 ? 'bg-amber-400' : 'bg-emerald-500';
+    if (!password) return null;
+    return (
+        <div className="mt-1.5 space-y-1">
+            <div className="flex gap-1.5">
+                {bars.map(i => (
+                    <div key={i} className={`h-1 flex-1 rounded-full transition-colors duration-300 ${i < strength ? color : 'bg-slate-200'}`} />
+                ))}
+            </div>
+            <ul className="text-[11px] space-y-0.5">
+                <li className={hasLength  ? 'text-emerald-600' : 'text-slate-400'}>
+                    {hasLength  ? '✓' : '·'} At least 8 characters
+                </li>
+                <li className={hasSpecial ? 'text-emerald-600' : 'text-slate-400'}>
+                    {hasSpecial ? '✓' : '·'} At least one digit or special character
+                </li>
+            </ul>
+        </div>
+    );
+}
+
 function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoading, setIsLoading }: any) {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+
+    const hasLength  = password.length >= 8;
+    const hasSpecial = /[\d\W]/.test(password);
+    const meetsRules = hasLength && hasSpecial;
 
     const handleReset = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -511,8 +541,16 @@ function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoadin
             setError('Password is required.');
             return;
         }
+        if (!meetsRules) {
+            setError('Password must be at least 8 characters and contain a digit or special character.');
+            return;
+        }
         if (password !== confirmPassword) {
             setError('Passwords do not match.');
+            return;
+        }
+        if (!token) {
+            setError('Reset link is invalid or missing. Please request a new one.');
             return;
         }
 
@@ -521,10 +559,10 @@ function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoadin
 
         try {
             await api.post<any>('/auth/reset-password', { token, password });
-            setSuccess("Password reset successfully! Please login with your new password.");
+            setSuccess("Password reset successfully! Please log in with your new password.");
             setActiveTab('login');
         } catch (err: any) {
-            setError(err.message || 'Reset failed');
+            setError(err.message || 'Reset failed. The link may have expired — please request a new one.');
         } finally {
             setIsLoading(false);
         }
@@ -533,15 +571,18 @@ function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoadin
     return (
         <form onSubmit={handleReset} className="space-y-6">
             <div className="space-y-4">
-                <InputField
-                    id="reset-password"
-                    icon={Lock}
-                    label="New Password"
-                    type="password"
-                    value={password}
-                    onChange={(e: any) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                />
+                <div>
+                    <InputField
+                        id="reset-password"
+                        icon={Lock}
+                        label="New Password"
+                        type="password"
+                        value={password}
+                        onChange={(e: any) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                    />
+                    <PasswordStrengthBar password={password} />
+                </div>
                 <InputField
                     id="confirm-password"
                     icon={Lock}
@@ -555,11 +596,21 @@ function ResetPasswordForm({ token, setActiveTab, setError, setSuccess, isLoadin
 
             <button
                 type="submit"
-                disabled={isLoading || !password.trim() || password !== confirmPassword}
-                className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98]"
+                disabled={isLoading || !meetsRules || password !== confirmPassword}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98]"
             >
-                {isLoading ? 'RESETTING...' : 'RESET PASSWORD'}
+                {isLoading ? 'RESETTING...' : 'SET NEW PASSWORD'}
             </button>
+
+            <div className="text-center">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('forgot')}
+                    className="text-xs font-bold text-slate-400 hover:text-blue-600 transition-colors uppercase tracking-widest"
+                >
+                    Request a new link
+                </button>
+            </div>
         </form>
     );
 }
@@ -1040,6 +1091,10 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
                             </div>
                         ) : activeTab === 'forgot' ? (
                             <div key="forgot" className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                                <div className="mb-6 text-center space-y-1">
+                                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">Forgot password?</h2>
+                                    <p className="text-slate-500 text-sm">Enter your email and we'll send a reset link.</p>
+                                </div>
                                 <ForgotPasswordForm
                                     setActiveTab={setActiveTab}
                                     setError={setError}
@@ -1050,6 +1105,10 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
                             </div>
                         ) : activeTab === 'reset' ? (
                             <div key="reset" className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                                <div className="mb-6 text-center space-y-1">
+                                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">Set new password</h2>
+                                    <p className="text-slate-500 text-sm">Choose a strong password for your account.</p>
+                                </div>
                                 <ResetPasswordForm
                                     token={resetToken}
                                     setActiveTab={setActiveTab}

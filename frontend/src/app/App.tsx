@@ -165,10 +165,10 @@ export default function App() {
     return () => { cancelled = true; };
   }, [desktop]);
 
-  // Check for invite_token on load and route to AuthPage if necessary
+  // Check for invite_token / reset_token on load and route to AuthPage if necessary
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('invite_token')) {
+    if (params.get('invite_token') || params.get('reset_token')) {
       setPublicScreen('auth');
     }
   }, []);
