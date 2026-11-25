@@ -23,6 +23,7 @@ interface Integration {
     icon: string;
     description: string;
     status: 'ready' | 'beta' | 'coming_soon';
+    credentials_configured: boolean;
 }
 
 interface ConnectedSource {
@@ -42,6 +43,7 @@ export function Integrations() {
     const [searchQuery, setSearchQuery] = useState('');
     const [connecting, setConnecting] = useState<string | null>(null);
     const [configIntegration, setConfigIntegration] = useState<Integration | null>(null);
+    const [configInitialTab, setConfigInitialTab] = useState<'sync' | 'provision'>('sync');
     const [menuOpen, setMenuOpen] = useState<string | null>(null);
     const [disconnectConfirm, setDisconnectConfirm] = useState<Integration | null>(null);
     const [disconnecting, setDisconnecting] = useState<string | null>(null);
@@ -85,24 +87,24 @@ export function Integrations() {
         setTimeout(() => setSuccess(null), 4000);
     };
 
-    const handleConnect = async (provider: string) => {
+    const openProvision = (integration: Integration) => {
+        setConfigInitialTab('provision');
+        setConfigIntegration(integration);
+    };
+
+    const handleConnect = async (integration: Integration) => {
+        const provider = integration.id;
+
+        // If credentials aren't configured yet, send user to provisioning tab first
+        if (!integration.credentials_configured) {
+            openProvision(integration);
+            return;
+        }
+
         try {
             setConnecting(provider);
 
-            // Try mock-link first (dev mode)
-            try {
-                const mockRes = await api.post<any>(`/integrations/${provider}/mock-link`);
-                if (mockRes.status === 'success') {
-                    showSuccess(`${provider.charAt(0).toUpperCase() + provider.slice(1)} connected successfully.`);
-                    loadData();
-                    setConnecting(null);
-                    return;
-                }
-            } catch (e) {
-                // Not in mock mode — fall through to OAuth
-            }
-
-            // Popup-based OAuth Flow
+            // Real OAuth popup flow
             const res = await api.get<{ url: string }>(`/integrations/${provider}/auth-url`);
 
             const width = 600;
@@ -133,9 +135,16 @@ export function Integrations() {
                 }
             }, 1000);
 
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            setError(`Could not initiate ${provider} connection.`);
+            const detail = err?.response?.data?.detail || err?.message || '';
+            // If the error says credentials are missing, open the provisioning modal
+            if (detail.toLowerCase().includes('client id') || detail.toLowerCase().includes('not configured')) {
+                setError('OAuth credentials are not configured. Enter your app credentials first.');
+                openProvision(integration);
+            } else {
+                setError(`Could not initiate ${provider} connection. ${detail}`);
+            }
             setConnecting(null);
         }
     };
@@ -301,7 +310,7 @@ export function Integrations() {
                             whileHover={{ y: -5 }}
                             className={`group relative overflow-hidden rounded-[2.5rem] border transition-all duration-500 shadow-sm hover:shadow-2xl hover:shadow-primary/10 ${
                                 active ? 'bg-primary/[0.04] border-primary/20' : 'bg-card border-border/50 hover:border-primary/40'
-                            }`}
+                            } ${!active && !integration.credentials_configured ? 'border-dashed' : ''}`}
                         >
                             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
@@ -415,25 +424,47 @@ export function Integrations() {
                                         </div>
                                     </div>
                                 ) : (
-                                    <motion.button
-                                        whileTap={{ scale: 0.98 }}
-                                        onClick={() => handleConnect(integration.id)}
-                                        disabled={connecting === integration.id}
-                                        className={`w-full flex h-16 items-center justify-center gap-3 ${brandColor} ${brandHover} text-white font-black rounded-[1.5rem] transition-all group/btn relative overflow-hidden shadow-xl disabled:opacity-75`}
-                                    >
-                                        <div className="absolute inset-0 bg-white/10 translate-x-[-100%] group-hover/btn:translate-x-0 transition-transform duration-500" />
-                                        <div className="relative flex items-center gap-3">
-                                            {connecting === integration.id ? (
-                                                <RefreshCw className="w-5 h-5 animate-spin" />
-                                            ) : (
-                                                <LinkIcon className="w-5 h-5 group-hover/btn:rotate-12 transition-transform duration-300" />
+                                    <div className="space-y-3">
+                                        {!integration.credentials_configured && (
+                                            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
+                                                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                                    OAuth credentials required. Enter your <strong>{integration.name} Developer App</strong> credentials first.
+                                                </p>
+                                            </div>
+                                        )}
+                                        <motion.button
+                                            whileTap={{ scale: 0.98 }}
+                                            onClick={() => handleConnect(integration)}
+                                            disabled={connecting === integration.id}
+                                            className={`w-full flex h-16 items-center justify-center gap-3 ${
+                                                integration.credentials_configured ? `${brandColor} ${brandHover}` : 'bg-secondary hover:bg-secondary/80 border border-border/50'
+                                            } ${integration.credentials_configured ? 'text-white' : 'text-foreground'} font-black rounded-[1.5rem] transition-all group/btn relative overflow-hidden shadow-xl disabled:opacity-75`}
+                                        >
+                                            {integration.credentials_configured && (
+                                                <div className="absolute inset-0 bg-white/10 translate-x-[-100%] group-hover/btn:translate-x-0 transition-transform duration-500" />
                                             )}
-                                            <span>
-                                                {connecting === integration.id ? 'Starting Login...' : `Login with ${integration.name}`}
-                                            </span>
-                                            {!connecting && <ArrowRight className="w-5 h-5 ml-1 group-hover/btn:translate-x-2 transition-transform duration-300" />}
-                                        </div>
-                                    </motion.button>
+                                            <div className="relative flex items-center gap-3">
+                                                {connecting === integration.id ? (
+                                                    <RefreshCw className="w-5 h-5 animate-spin" />
+                                                ) : integration.credentials_configured ? (
+                                                    <LinkIcon className="w-5 h-5 group-hover/btn:rotate-12 transition-transform duration-300" />
+                                                ) : (
+                                                    <Settings className="w-5 h-5" />
+                                                )}
+                                                <span>
+                                                    {connecting === integration.id
+                                                        ? 'Opening Login…'
+                                                        : integration.credentials_configured
+                                                            ? `Login with ${integration.name}`
+                                                            : 'Configure App Credentials'}
+                                                </span>
+                                                {!connecting && integration.credentials_configured && (
+                                                    <ArrowRight className="w-5 h-5 ml-1 group-hover/btn:translate-x-2 transition-transform duration-300" />
+                                                )}
+                                            </div>
+                                        </motion.button>
+                                    </div>
                                 )}
                             </div>
                         </motion.div>
@@ -475,10 +506,11 @@ export function Integrations() {
                         />
                         <ConfigModal
                             integration={configIntegration}
-                            onClose={() => setConfigIntegration(null)}
+                            onClose={() => { setConfigIntegration(null); loadData(); }}
                             onSuccess={(msg: string) => showSuccess(msg)}
                             handleManualImport={handleManualImport}
                             syncing={syncing}
+                            initialTab={configInitialTab}
                         />
                     </div>
                 )}
@@ -555,8 +587,8 @@ const PROVIDER_OBJECTS: Record<string, string[]> = {
     salesforce: ['leads', 'contacts', 'opportunities', 'accounts'],
 };
 
-function ConfigModal({ integration, onClose, onSuccess, handleManualImport, syncing }: any) {
-    const [tab, setTab] = useState<'sync' | 'provision'>('sync');
+function ConfigModal({ integration, onClose, onSuccess, handleManualImport, syncing, initialTab = 'sync' }: any) {
+    const [tab, setTab] = useState<'sync' | 'provision'>(initialTab);
     const [clientId, setClientId] = useState('');
     const [clientSecret, setClientSecret] = useState('');
     const [redirectUri, setRedirectUri] = useState('');

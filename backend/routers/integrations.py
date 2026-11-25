@@ -28,27 +28,41 @@ def decode_state_token(token: str) -> str:
     except JWTError:
         raise ValueError("Invalid or expired state token")
 
-# Mock settings for demonstration
-MOCK_MODE = os.getenv("CRM_MOCK_MODE", "true").lower() == "true"
+# Set CRM_MOCK_MODE=true in env to enable instant one-click connections (dev/demo only).
+# Production deployments use real OAuth — set HUBSPOT_CLIENT_ID / SALESFORCE_CLIENT_ID env vars
+# or let each org enter their own credentials via the Config modal.
+MOCK_MODE = os.getenv("CRM_MOCK_MODE", "false").lower() == "true"
 
 @router.get("/available")
-async def get_available_integrations(user=Depends(require_permission("MANAGE_SYNCS"))):
-    """List supported CRM integrations."""
+async def get_available_integrations(org=Depends(get_current_org), user=Depends(require_permission("MANAGE_SYNCS"))):
+    """List supported CRM integrations with credential availability info."""
     logger.info("Fetching available integrations...")
+
+    def has_credentials(provider: str) -> bool:
+        """True if this org can initiate OAuth right now (system env or org credentials saved)."""
+        if MOCK_MODE:
+            return True
+        cred = get_integration_credential(org.id, provider)
+        if cred and cred.client_id:
+            return True
+        return bool(os.getenv(f"{provider.upper()}_CLIENT_ID"))
+
     return [
         {
             "id": "salesforce",
             "name": "Salesforce",
             "icon": "cloud",
             "description": "Sync Leads, Contacts, and Opportunities.",
-            "status": "ready"
+            "status": "ready",
+            "credentials_configured": has_credentials("salesforce"),
         },
         {
             "id": "hubspot",
             "name": "HubSpot",
             "icon": "sprout",
             "description": "Sync Contacts, Companies, and Deals.",
-            "status": "ready"
+            "status": "ready",
+            "credentials_configured": has_credentials("hubspot"),
         }
     ]
 
