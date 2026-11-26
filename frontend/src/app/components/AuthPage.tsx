@@ -252,7 +252,7 @@ function SSOLoginButton() {
     );
 }
 
-function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading }: RegisterFormProps) {
+function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess }: RegisterFormProps & { onLoginSuccess?: any }) {
     const [orgName, setOrgName] = useState('');
     const [regEmail, setRegEmail] = useState('');
     const [regPassword, setRegPassword] = useState('');
@@ -274,8 +274,9 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
             });
 
             const apiKey = orgRes.api_key;
-            setNewApiKey(apiKey);
+            // Store silently — users never need to see or manage the org key
             secureStorage.setItem('vantage_api_key', apiKey);
+            setNewApiKey(apiKey);
 
             const authRes = await api.post<any>('/auth/register-first-user', {
                 email: regEmail,
@@ -287,7 +288,12 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
             secureStorage.setItem('vantage_refresh_token', authRes.refresh_token);
             localStorage.setItem('vantage_user', JSON.stringify(authRes.user || authRes));
 
-            setStep(2); // Success step
+            // Skip the key-display step — go straight into the app
+            if (onLoginSuccess) {
+                onLoginSuccess(apiKey, authRes.access_token, authRes.refresh_token, authRes.user || authRes);
+            } else {
+                setStep(2);
+            }
         } catch (err: any) {
             setError(err.message || 'Registration failed.');
         } finally {
@@ -1077,6 +1083,7 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
                                     setError={setError}
                                     isLoading={isLoading}
                                     setIsLoading={setIsLoading}
+                                    onLoginSuccess={onLoginSuccess}
                                 />
                             </div>
                         ) : activeTab === 'login' ? (

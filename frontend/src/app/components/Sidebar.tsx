@@ -135,7 +135,7 @@ export function Sidebar({
 
   const adminItems = [
     { id: 'security', label: 'Security & 2FA', icon: ShieldCheck },
-    { id: 'api-keys', label: 'API Keys', icon: KeyRound, hide: !hasPerm('MANAGE_ORG') },
+    { id: 'api-keys', label: 'API Keys', icon: KeyRound, hide: true }, // accessible via /api-keys directly; hidden from nav
     { id: 'business-profile', label: 'Business Profile', icon: Lightbulb, hide: !hasPerm('MANAGE_ORG') },
     { id: 'data-access', label: 'Access Requests', icon: Lock, hide: !hasPerm('MANAGE_ORG') },
     { id: 'audit', label: 'Audit Trail', icon: ClipboardList, hide: !hasPerm('MANAGE_ORG') },
