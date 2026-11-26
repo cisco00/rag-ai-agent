@@ -67,6 +67,7 @@ from routers import business_profile as business_profile_router
 from routers import cross_analysis as cross_analysis_router
 from routers import notifications as notifications_router
 from routers import stream_sources as stream_sources_router
+from routers import workspaces as workspaces_router
 
 load_dotenv()
 
@@ -580,6 +581,7 @@ app.include_router(business_profile_router.router,                   tags=["Busi
 app.include_router(cross_analysis_router.router,                     tags=["Cross-Analytical Intelligence"])
 app.include_router(notifications_router.router,                      tags=["Notifications"])
 app.include_router(stream_sources_router.router, prefix="/stream-sources", tags=["Stream Sources"])
+app.include_router(workspaces_router.router,     prefix="/workspaces",     tags=["Workspaces"])
 
 
 @app.get("/")
@@ -854,6 +856,7 @@ async def serve_spa(request: Request, full_path: str):
     if any(full_path.startswith(p) for p in [
         "auth", "data", "integrations", "analytics", "branding", "sessions",
         "transformations", "alerts", "dashboards", "insights", "org_context", "admin",
+        "workspaces", "stream-sources",
         "docs", "redoc", "openapi.json",
     ]):
         return JSONResponse(status_code=404, content={"detail": f"Route '{full_path}' not found in API."})

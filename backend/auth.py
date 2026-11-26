@@ -82,25 +82,74 @@ def _clear_auth_cookies(response: Response) -> None:
 # ─── Schema creation ──────────────────────────────────────────────────────────
 
 def ensure_auth_tables():
-    """Create users, refresh_tokens, and invite_tokens tables on startup."""
+    """Create users, refresh_tokens, invite_tokens, workspaces, and membership tables on startup."""
     dialect = admin_engine.dialect.name
     if dialect == "postgresql":
         ddl = """
             CREATE TABLE IF NOT EXISTS users (
                 id            SERIAL PRIMARY KEY,
-                org_id        INTEGER NOT NULL,
-                email         TEXT NOT NULL,
+                org_id        INTEGER,
+                email         TEXT NOT NULL UNIQUE,
                 display_name  TEXT,
                 password_hash TEXT NOT NULL,
                 role          TEXT NOT NULL DEFAULT 'analyst',
                 is_active     INTEGER NOT NULL DEFAULT 1,
                 is_superuser  INTEGER NOT NULL DEFAULT 0,
+                email_verified INTEGER NOT NULL DEFAULT 0,
                 last_login_at TEXT,
-                created_at    TEXT NOT NULL,
-                UNIQUE (org_id, email)
+                created_at    TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_users_org_id ON users (org_id);
             CREATE INDEX IF NOT EXISTS ix_users_email  ON users (email);
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id              SERIAL PRIMARY KEY,
+                type            TEXT NOT NULL DEFAULT 'personal',
+                name            TEXT NOT NULL,
+                owner_user_id   INTEGER,
+                organization_id INTEGER,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_workspaces_owner ON workspaces (owner_user_id);
+            CREATE INDEX IF NOT EXISTS ix_workspaces_org   ON workspaces (organization_id);
+
+            CREATE TABLE IF NOT EXISTS workspace_memberships (
+                id           SERIAL PRIMARY KEY,
+                workspace_id INTEGER NOT NULL,
+                user_id      INTEGER NOT NULL,
+                role         TEXT NOT NULL DEFAULT 'member',
+                status       TEXT NOT NULL DEFAULT 'active',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                UNIQUE (workspace_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_wm_workspace ON workspace_memberships (workspace_id);
+            CREATE INDEX IF NOT EXISTS ix_wm_user      ON workspace_memberships (user_id);
+
+            CREATE TABLE IF NOT EXISTS org_memberships (
+                id         SERIAL PRIMARY KEY,
+                org_id     INTEGER NOT NULL,
+                user_id    INTEGER NOT NULL,
+                role       TEXT NOT NULL DEFAULT 'employee',
+                status     TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (org_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_om_org    ON org_memberships (org_id);
+            CREATE INDEX IF NOT EXISTS ix_om_user   ON org_memberships (user_id);
+
+            CREATE TABLE IF NOT EXISTS domain_verification_records (
+                id         SERIAL PRIMARY KEY,
+                org_id     INTEGER NOT NULL,
+                domain     TEXT NOT NULL,
+                token      TEXT NOT NULL,
+                verified   INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE (org_id, domain)
+            );
 
             CREATE TABLE IF NOT EXISTS refresh_tokens (
                 id         SERIAL PRIMARY KEY,
@@ -146,16 +195,59 @@ def ensure_auth_tables():
         ddl = """
             CREATE TABLE IF NOT EXISTS users (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                org_id        INTEGER NOT NULL,
-                email         TEXT NOT NULL,
+                org_id        INTEGER,
+                email         TEXT NOT NULL UNIQUE,
                 display_name  TEXT,
                 password_hash TEXT NOT NULL,
                 role          TEXT NOT NULL DEFAULT 'analyst',
                 is_active     INTEGER NOT NULL DEFAULT 1,
                 is_superuser  INTEGER NOT NULL DEFAULT 0,
+                email_verified INTEGER NOT NULL DEFAULT 0,
                 last_login_at TEXT,
-                created_at    TEXT NOT NULL,
-                UNIQUE (org_id, email)
+                created_at    TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                type            TEXT NOT NULL DEFAULT 'personal',
+                name            TEXT NOT NULL,
+                owner_user_id   INTEGER,
+                organization_id INTEGER,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_memberships (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id INTEGER NOT NULL,
+                user_id      INTEGER NOT NULL,
+                role         TEXT NOT NULL DEFAULT 'member',
+                status       TEXT NOT NULL DEFAULT 'active',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                UNIQUE (workspace_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS org_memberships (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id     INTEGER NOT NULL,
+                user_id    INTEGER NOT NULL,
+                role       TEXT NOT NULL DEFAULT 'employee',
+                status     TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (org_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_verification_records (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                org_id     INTEGER NOT NULL,
+                domain     TEXT NOT NULL,
+                token      TEXT NOT NULL,
+                verified   INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE (org_id, domain)
             );
 
             CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -201,29 +293,122 @@ def ensure_auth_tables():
         with conn.begin():
             for stmt in [s.strip() for s in ddl.strip().split(";") if s.strip()]:
                 conn.execute(text(stmt))
-        
+
+        # ── Migrations ────────────────────────────────────────────────────────
         try:
-            # Migration: Add is_superuser column if missing
+            # Migration 1: Add is_superuser column if missing
             if dialect == "postgresql":
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser INTEGER DEFAULT 0"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified INTEGER DEFAULT 0"))
+                # Drop NOT NULL on org_id if it still exists
+                conn.execute(text("ALTER TABLE users ALTER COLUMN org_id DROP NOT NULL"))
             else:
-                # SQLite doesn't support IF NOT EXISTS in ALTER TABLE
+                for col_sql in [
+                    "ALTER TABLE users ADD COLUMN is_superuser INTEGER DEFAULT 0",
+                    "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0",
+                ]:
+                    try:
+                        conn.execute(text(col_sql))
+                    except Exception:
+                        pass
+                # For SQLite: migrate users table to remove NOT NULL on org_id & globalise email uniqueness
                 try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN is_superuser INTEGER DEFAULT 0"))
-                except Exception:
-                    pass
+                    _migrate_users_sqlite(conn)
+                except Exception as mig_err:
+                    logger.warning(f"Users table migration skipped: {mig_err}")
             conn.commit()
 
             # Bootstrap: if no superuser exists, promote the oldest owner.
-            # L-5 fix: use a single atomic UPDATE … WHERE NOT EXISTS to avoid
-            # the race condition where two workers both read super_count == 0
-            # and both attempt the promotion concurrently.
             conn.execute(text("""
                 UPDATE users SET is_superuser = 1
                 WHERE id = (SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1)
                   AND NOT EXISTS (SELECT 1 FROM users WHERE is_superuser = 1)
             """))
             conn.commit()
+        except Exception:
+            pass
+
+        # ── Backfill workspaces for existing users ────────────────────────────
+        try:
+            _backfill_personal_workspaces(conn)
+        except Exception as bf_err:
+            logger.warning(f"Workspace backfill skipped: {bf_err}")
+
+
+def _migrate_users_sqlite(conn):
+    """
+    SQLite-safe migration: rebuild users table so org_id is nullable and
+    email is globally unique (the application already enforces global email
+    uniqueness in create_user, so this just makes the DB constraint match).
+    Only runs when the old schema still has the UNIQUE(org_id, email) constraint.
+    """
+    # Check if the new schema already in place by looking for email_verified
+    cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+    if "email_verified" in cols:
+        return  # already migrated or brand-new DB
+
+    logger.info("Migrating users table: making org_id nullable, globalising email uniqueness")
+    conn.execute(text("ALTER TABLE users RENAME TO _users_pre_migration"))
+    conn.execute(text("""
+        CREATE TABLE users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id        INTEGER,
+            email         TEXT NOT NULL UNIQUE,
+            display_name  TEXT,
+            password_hash TEXT NOT NULL,
+            role          TEXT NOT NULL DEFAULT 'analyst',
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            is_superuser  INTEGER NOT NULL DEFAULT 0,
+            email_verified INTEGER NOT NULL DEFAULT 0,
+            last_login_at TEXT,
+            created_at    TEXT NOT NULL
+        )
+    """))
+    conn.execute(text("""
+        INSERT INTO users (id, org_id, email, display_name, password_hash, role,
+                           is_active, is_superuser, email_verified, last_login_at, created_at)
+        SELECT id, org_id, email, display_name, password_hash, role,
+               is_active, COALESCE(is_superuser, 0), 0, last_login_at, created_at
+        FROM _users_pre_migration
+        ON CONFLICT(email) DO NOTHING
+    """))
+    conn.execute(text("DROP TABLE _users_pre_migration"))
+    conn.commit()
+
+
+def _backfill_personal_workspaces(conn):
+    """Create personal workspaces for any users that don't already have one."""
+    now = datetime.now(timezone.utc).isoformat()
+    users_without_ws = conn.execute(text("""
+        SELECT u.id, u.display_name, u.email FROM users u
+        WHERE u.is_active = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM workspaces w
+              WHERE w.owner_user_id = u.id AND w.type = 'personal'
+          )
+    """)).mappings().all()
+
+    for u in users_without_ws:
+        name = u["display_name"] or u["email"].split("@")[0]
+        try:
+            with conn.begin():
+                result = conn.execute(text("""
+                    INSERT INTO workspaces (type, name, owner_user_id, created_at, updated_at)
+                    VALUES ('personal', :name, :uid, :now, :now)
+                """), {"name": f"{name}'s Workspace", "uid": u["id"], "now": now})
+                # Try to get the workspace id
+                try:
+                    ws_id = result.lastrowid
+                except Exception:
+                    ws_id = conn.execute(text(
+                        "SELECT id FROM workspaces WHERE owner_user_id=:uid AND type='personal'"
+                    ), {"uid": u["id"]}).scalar()
+                if ws_id:
+                    conn.execute(text("""
+                        INSERT OR IGNORE INTO workspace_memberships
+                            (workspace_id, user_id, role, status, created_at, updated_at)
+                        VALUES (:ws, :uid, 'owner', 'active', :now, :now)
+                    """), {"ws": ws_id, "uid": u["id"], "now": now})
         except Exception:
             pass
 
@@ -279,13 +464,20 @@ def validate_password_strength(password: str):
 
 # ─── Token helpers ────────────────────────────────────────────────────────────
 
-def _make_access_token(user_id: int, org_id: int, role: str, is_superuser: int = 0) -> str:
+def _make_access_token(user_id: int, org_id: Optional[int], role: str,
+                        is_superuser: int = 0, workspace_id: Optional[int] = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_TTL)
-    return jwt.encode(
-        {"sub": str(user_id), "org_id": org_id, "role": role, "is_superuser": is_superuser,
-         "exp": expire, "type": "access"},
-        JWT_SECRET, algorithm=JWT_ALGORITHM,
-    )
+    payload = {
+        "sub": str(user_id),
+        "org_id": org_id,
+        "role": role,
+        "is_superuser": is_superuser,
+        "exp": expire,
+        "type": "access",
+    }
+    if workspace_id is not None:
+        payload["workspace_id"] = workspace_id
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def _make_refresh_token() -> tuple[str, str]:
@@ -309,12 +501,442 @@ def decode_access_token(token: str) -> dict:
 
 # ─── User CRUD ────────────────────────────────────────────────────────────────
 
-def create_user(org_id: int, email: str, password: str,
+# ─── Workspace helpers ────────────────────────────────────────────────────────
+
+def create_personal_workspace(user_id: int, display_name: str) -> int:
+    """Create a personal workspace for a user. Returns workspace_id."""
+    now = datetime.now(timezone.utc).isoformat()
+    name = f"{display_name}'s Workspace"
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            try:
+                result = conn.execute(text("""
+                    INSERT INTO workspaces (type, name, owner_user_id, created_at, updated_at)
+                    VALUES ('personal', :name, :uid, :now, :now)
+                    RETURNING id
+                """), {"name": name, "uid": user_id, "now": now})
+                ws_id = result.scalar()
+            except Exception:
+                conn.execute(text("""
+                    INSERT INTO workspaces (type, name, owner_user_id, created_at, updated_at)
+                    VALUES ('personal', :name, :uid, :now, :now)
+                """), {"name": name, "uid": user_id, "now": now})
+                ws_id = conn.execute(text(
+                    "SELECT id FROM workspaces WHERE owner_user_id=:uid AND type='personal'"
+                ), {"uid": user_id}).scalar()
+            conn.execute(text("""
+                INSERT OR IGNORE INTO workspace_memberships
+                    (workspace_id, user_id, role, status, created_at, updated_at)
+                VALUES (:ws, :uid, 'owner', 'active', :now, :now)
+            """), {"ws": ws_id, "uid": user_id, "now": now})
+    return ws_id
+
+
+def get_personal_workspace(user_id: int) -> Optional[dict]:
+    """Return the user's personal workspace."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT * FROM workspaces WHERE owner_user_id=:uid AND type='personal'"
+        ), {"uid": user_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def get_user_workspaces(user_id: int) -> list[dict]:
+    """Return all workspaces the user has active membership in."""
+    with admin_engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT w.id, w.type, w.name, w.owner_user_id, w.organization_id,
+                   wm.role AS member_role, wm.status,
+                   o.name AS org_name
+            FROM workspace_memberships wm
+            JOIN workspaces w ON w.id = wm.workspace_id
+            LEFT JOIN organizations o ON o.id = w.organization_id
+            WHERE wm.user_id = :uid AND wm.status = 'active'
+            ORDER BY w.type DESC, w.created_at ASC
+        """), {"uid": user_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_workspace_by_id(workspace_id: int) -> Optional[dict]:
+    with admin_engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT * FROM workspaces WHERE id=:id"
+        ), {"id": workspace_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def assert_workspace_member(user_id: int, workspace_id: int) -> dict:
+    """Raise 403 if user is not an active member of workspace. Returns membership row."""
+    with admin_engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT wm.*, w.type, w.organization_id FROM workspace_memberships wm
+            JOIN workspaces w ON w.id = wm.workspace_id
+            WHERE wm.workspace_id=:ws AND wm.user_id=:uid AND wm.status='active'
+        """), {"ws": workspace_id, "uid": user_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=403, detail="You do not have access to this workspace.")
+    return dict(row)
+
+
+def create_org_workspace(org_id: int, org_name: str) -> int:
+    """Create an org workspace. Returns workspace_id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            try:
+                result = conn.execute(text("""
+                    INSERT INTO workspaces (type, name, organization_id, created_at, updated_at)
+                    VALUES ('organization', :name, :org_id, :now, :now)
+                    RETURNING id
+                """), {"name": org_name, "org_id": org_id, "now": now})
+                ws_id = result.scalar()
+            except Exception:
+                conn.execute(text("""
+                    INSERT INTO workspaces (type, name, organization_id, created_at, updated_at)
+                    VALUES ('organization', :name, :org_id, :now, :now)
+                """), {"name": org_name, "org_id": org_id, "now": now})
+                ws_id = conn.execute(text(
+                    "SELECT id FROM workspaces WHERE organization_id=:oid AND type='organization'"
+                ), {"oid": org_id}).scalar()
+    return ws_id
+
+
+def add_user_to_org_workspace(user_id: int, org_id: int, role: str = "employee") -> None:
+    """Add a user to the organization's workspace."""
+    now = datetime.now(timezone.utc).isoformat()
+    with admin_engine.connect() as conn:
+        ws = conn.execute(text(
+            "SELECT id FROM workspaces WHERE organization_id=:oid AND type='organization'"
+        ), {"oid": org_id}).mappings().first()
+        if not ws:
+            return
+        ws_id = ws["id"]
+        with conn.begin():
+            conn.execute(text("""
+                INSERT INTO workspace_memberships
+                    (workspace_id, user_id, role, status, created_at, updated_at)
+                VALUES (:ws, :uid, :role, 'active', :now, :now)
+                ON CONFLICT(workspace_id, user_id) DO UPDATE
+                    SET role=excluded.role, status='active', updated_at=excluded.updated_at
+            """), {"ws": ws_id, "uid": user_id, "role": role, "now": now})
+            # Also add org_membership record
+            conn.execute(text("""
+                INSERT INTO org_memberships (org_id, user_id, role, status, created_at, updated_at)
+                VALUES (:oid, :uid, :role, 'active', :now, :now)
+                ON CONFLICT(org_id, user_id) DO UPDATE
+                    SET role=excluded.role, status='active', updated_at=excluded.updated_at
+            """), {"oid": org_id, "uid": user_id, "role": role, "now": now})
+
+
+def remove_user_from_org_workspace(user_id: int, org_id: int) -> None:
+    """Deactivate a user's org workspace membership."""
+    now = datetime.now(timezone.utc).isoformat()
+    with admin_engine.connect() as conn:
+        ws = conn.execute(text(
+            "SELECT id FROM workspaces WHERE organization_id=:oid AND type='organization'"
+        ), {"oid": org_id}).mappings().first()
+        if not ws:
+            return
+        ws_id = ws["id"]
+        with conn.begin():
+            conn.execute(text("""
+                UPDATE workspace_memberships SET status='inactive', updated_at=:now
+                WHERE workspace_id=:ws AND user_id=:uid
+            """), {"ws": ws_id, "uid": user_id, "now": now})
+            conn.execute(text("""
+                UPDATE org_memberships SET status='inactive', updated_at=:now
+                WHERE org_id=:oid AND user_id=:uid
+            """), {"oid": org_id, "uid": user_id, "now": now})
+
+
+# ─── Individual Registration ──────────────────────────────────────────────────
+
+def register_individual(email: str, password: str,
+                         display_name: Optional[str] = None) -> dict:
+    """
+    Register a user as an individual (no org required).
+    Creates a personal workspace automatically.
+    Returns full login payload.
+    """
+    email = email.lower().strip()
+    if get_user_by_email_global(email):
+        raise HTTPException(status_code=400,
+                            detail="An account with this email already exists.")
+    validate_password_strength(password)
+    pw_hash = hash_password(password)
+    name = display_name or email.split("@")[0]
+    now  = datetime.now(timezone.utc).isoformat()
+
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            try:
+                result = conn.execute(text("""
+                    INSERT INTO users
+                        (email, display_name, password_hash, role, is_active, email_verified, created_at)
+                    VALUES (:email, :name, :pw_hash, 'owner', 1, 0, :now)
+                    RETURNING id
+                """), {"email": email, "name": name, "pw_hash": pw_hash, "now": now})
+                user_id = result.scalar()
+            except Exception:
+                conn.execute(text("""
+                    INSERT INTO users
+                        (email, display_name, password_hash, role, is_active, email_verified, created_at)
+                    VALUES (:email, :name, :pw_hash, 'owner', 1, 0, :now)
+                """), {"email": email, "name": name, "pw_hash": pw_hash, "now": now})
+                user_id = conn.execute(
+                    text("SELECT id FROM users WHERE email=:e"), {"e": email}
+                ).scalar()
+
+    # Create personal workspace
+    ws_id = create_personal_workspace(user_id, name)
+    log_activity(user_id, None, "Individual Registration", {"email": email})
+
+    return login_user(email=email, password=password)
+
+
+# ─── Domain Verification ──────────────────────────────────────────────────────
+
+def initiate_domain_verification(org_id: int, domain: str) -> str:
+    """
+    Generate a DNS TXT verification token for the domain.
+    Returns the raw token for the user to publish as: vantage-verify=<token>
+    """
+    domain = domain.lower().strip()
+    token = f"vantage-verify={secrets.token_urlsafe(24)}"
+    now = datetime.now(timezone.utc).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text("""
+                INSERT INTO domain_verification_records
+                    (org_id, domain, token, verified, created_at, expires_at)
+                VALUES (:org_id, :domain, :token, 0, :now, :exp)
+                ON CONFLICT(org_id, domain) DO UPDATE
+                    SET token=excluded.token, verified=0,
+                        created_at=excluded.created_at, expires_at=excluded.expires_at
+            """), {"org_id": org_id, "domain": domain, "token": token,
+                   "now": now, "exp": expires_at})
+    return token
+
+
+def check_domain_verification(org_id: int, domain: str) -> bool:
+    """
+    Check DNS TXT records to verify domain ownership.
+    In production this would do a real DNS lookup; here we also accept
+    an env-override DOMAIN_VERIFY_SKIP=1 for local development.
+    """
+    domain = domain.lower().strip()
+    now = datetime.now(timezone.utc).isoformat()
+
+    with admin_engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT token, expires_at FROM domain_verification_records
+            WHERE org_id=:oid AND domain=:domain
+        """), {"oid": org_id, "domain": domain}).mappings().first()
+
+    if not row or row["expires_at"] < now:
+        raise HTTPException(status_code=400,
+                            detail="Verification record not found or expired. Please re-initiate.")
+
+    expected_token = row["token"]
+
+    # Dev bypass
+    if os.getenv("DOMAIN_VERIFY_SKIP", "0") == "1":
+        verified = True
+    else:
+        verified = _dns_txt_contains(domain, expected_token)
+
+    if verified:
+        with admin_engine.connect() as conn:
+            with conn.begin():
+                conn.execute(text("""
+                    UPDATE domain_verification_records SET verified=1
+                    WHERE org_id=:oid AND domain=:domain
+                """), {"oid": org_id, "domain": domain})
+    return verified
+
+
+def _dns_txt_contains(domain: str, expected: str) -> bool:
+    """Check if the domain's DNS TXT records contain the expected token."""
+    try:
+        import dns.resolver
+        answers = dns.resolver.resolve(domain, "TXT")
+        for rdata in answers:
+            for txt_string in rdata.strings:
+                if expected.encode() in txt_string or expected in txt_string.decode("utf-8", errors="ignore"):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+# ─── Organization Creation (post domain-verification) ────────────────────────
+
+def create_org_with_admin(user_id: int, org_name: str, domain: str) -> dict:
+    """
+    Create a new organization after domain verification is confirmed.
+    Assigns the user as admin, creates org workspace, creates org membership.
+    Returns {org_id, workspace_id, org_name, api_key}
+    """
+    from models import create_org, admin_engine as model_engine
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Verify domain is confirmed
+    with admin_engine.connect() as conn:
+        verified = conn.execute(text("""
+            SELECT 1 FROM domain_verification_records
+            WHERE org_id IS NULL OR org_id = 0  -- will re-check by domain
+        """)).fetchone()
+        # Actually check by domain directly
+        dv = conn.execute(text("""
+            SELECT org_id, verified FROM domain_verification_records
+            WHERE domain=:domain ORDER BY created_at DESC LIMIT 1
+        """), {"domain": domain.lower().strip()}).mappings().first()
+
+    # If we have a pending verification (org_id=0 means initiated before org created)
+    if not dv:
+        raise HTTPException(status_code=400,
+                            detail="Domain verification not initiated. Please verify your domain first.")
+
+    # Check domain isn't taken by another org
+    with admin_engine.connect() as conn:
+        taken = conn.execute(text("""
+            SELECT 1 FROM domain_verification_records dvr
+            JOIN organizations o ON o.id = dvr.org_id
+            WHERE dvr.domain=:domain AND dvr.verified=1
+        """), {"domain": domain.lower().strip()}).fetchone()
+    if taken:
+        raise HTTPException(status_code=409,
+                            detail="An organization with this domain already exists.")
+
+    org = create_org(org_name)
+    org_id = org.id
+
+    # Mark domain as verified for this org
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text("""
+                UPDATE domain_verification_records SET org_id=:oid, verified=1
+                WHERE domain=:domain
+            """), {"oid": org_id, "domain": domain.lower().strip()})
+            # Update user's org_id
+            conn.execute(text("UPDATE users SET org_id=:oid WHERE id=:uid"),
+                         {"oid": org_id, "uid": user_id})
+
+    # Create org workspace
+    ws_id = create_org_workspace(org_id, org_name)
+
+    # Add user to org workspace as admin
+    add_user_to_org_workspace(user_id, org_id, role="admin")
+    with admin_engine.connect() as conn:
+        with conn.begin():
+            conn.execute(text("""
+                UPDATE workspace_memberships SET role='admin'
+                WHERE workspace_id=:ws AND user_id=:uid
+            """), {"ws": ws_id, "uid": user_id})
+
+    log_activity(user_id, org_id, "Organization Created",
+                 {"org_name": org_name, "domain": domain})
+
+    return {
+        "org_id": org_id,
+        "workspace_id": ws_id,
+        "org_name": org_name,
+        "api_key": org.api_key,
+    }
+
+
+# ─── Admin Transfer ───────────────────────────────────────────────────────────
+
+def transfer_admin(org_id: int, current_admin_id: int, new_admin_email: str) -> dict:
+    """
+    Atomically transfer org admin role.
+    Current admin → employee, target user → admin.
+    """
+    new_admin_email = new_admin_email.lower().strip()
+    now = datetime.now(timezone.utc).isoformat()
+
+    with admin_engine.connect() as conn:
+        # Verify current admin
+        current = conn.execute(text(
+            "SELECT email FROM users WHERE id=:uid AND is_active=1"
+        ), {"uid": current_admin_id}).mappings().first()
+        if not current:
+            raise HTTPException(status_code=404, detail="Current admin not found.")
+
+        # Verify org membership
+        cm = conn.execute(text("""
+            SELECT role FROM org_memberships WHERE org_id=:oid AND user_id=:uid AND status='active'
+        """), {"oid": org_id, "uid": current_admin_id}).mappings().first()
+        if not cm or cm["role"] not in ("admin", "owner"):
+            raise HTTPException(status_code=403, detail="You are not the administrator of this organization.")
+
+        # Find target
+        target = conn.execute(text(
+            "SELECT id, email, email_verified FROM users WHERE email=:email AND is_active=1"
+        ), {"email": new_admin_email}).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Target user not found.")
+
+        tm = conn.execute(text("""
+            SELECT role, status FROM org_memberships
+            WHERE org_id=:oid AND user_id=:uid
+        """), {"oid": org_id, "uid": target["id"]}).mappings().first()
+        if not tm or tm["status"] != "active":
+            raise HTTPException(status_code=400,
+                                detail="Target user is not an active member of this organization.")
+
+        ws = conn.execute(text(
+            "SELECT id FROM workspaces WHERE organization_id=:oid AND type='organization'"
+        ), {"oid": org_id}).mappings().first()
+        ws_id = ws["id"] if ws else None
+
+        with conn.begin():
+            # Demote current admin
+            conn.execute(text("""
+                UPDATE org_memberships SET role='employee', updated_at=:now
+                WHERE org_id=:oid AND user_id=:uid
+            """), {"oid": org_id, "uid": current_admin_id, "now": now})
+            if ws_id:
+                conn.execute(text("""
+                    UPDATE workspace_memberships SET role='employee', updated_at=:now
+                    WHERE workspace_id=:ws AND user_id=:uid
+                """), {"ws": ws_id, "uid": current_admin_id, "now": now})
+
+            # Promote new admin
+            conn.execute(text("""
+                UPDATE org_memberships SET role='admin', updated_at=:now
+                WHERE org_id=:oid AND user_id=:uid
+            """), {"oid": org_id, "uid": target["id"], "now": now})
+            if ws_id:
+                conn.execute(text("""
+                    UPDATE workspace_memberships SET role='admin', updated_at=:now
+                    WHERE workspace_id=:ws AND user_id=:uid
+                """), {"ws": ws_id, "uid": target["id"], "now": now})
+
+            # Update org admin_user_id if the column exists
+            try:
+                conn.execute(text(
+                    "UPDATE organizations SET admin_user_id=:uid WHERE id=:oid"
+                ), {"uid": target["id"], "oid": org_id})
+            except Exception:
+                pass
+
+    log_activity(current_admin_id, org_id, "Admin Transfer",
+                 {"from": current["email"], "to": new_admin_email})
+
+    return {"success": True, "new_admin": new_admin_email}
+
+
+# ─── User CRUD ────────────────────────────────────────────────────────────────
+
+def create_user(org_id: Optional[int], email: str, password: str,
                 role: str = "analyst", display_name: Optional[str] = None) -> dict:
     email = email.lower().strip()
     if get_user_by_email_global(email):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="An account with this email already exists. Please use another email to register."
         )
     validate_password_strength(password)
@@ -489,15 +1111,33 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
         logger.warning(f"Login failed: wrong password email_hash={_eh}…")
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-    effective_org_id = user["org_id"]
-    with admin_engine.connect() as conn:
-        org_row = conn.execute(
-            text("SELECT api_key FROM organizations WHERE id = :id"),
-            {"id": effective_org_id},
-        ).mappings().first()
-    api_key = org_row["api_key"] if org_row else None
+    effective_org_id = user.get("org_id")
+    api_key = None
+    if effective_org_id:
+        with admin_engine.connect() as conn:
+            org_row = conn.execute(
+                text("SELECT api_key FROM organizations WHERE id = :id"),
+                {"id": effective_org_id},
+            ).mappings().first()
+        api_key = org_row["api_key"] if org_row else None
 
-    access_token          = _make_access_token(user["id"], effective_org_id, user["role"], user.get("is_superuser", 0))
+    # Determine active workspace (personal first, then first org workspace)
+    workspaces = get_user_workspaces(user["id"])
+    personal_ws = next((w for w in workspaces if w["type"] == "personal"), None)
+    active_workspace = personal_ws or (workspaces[0] if workspaces else None)
+    active_workspace_id = active_workspace["id"] if active_workspace else None
+
+    # Ensure personal workspace exists
+    if not personal_ws:
+        try:
+            ws_id = create_personal_workspace(user["id"], user.get("display_name") or email.split("@")[0])
+            active_workspace_id = ws_id
+            workspaces = get_user_workspaces(user["id"])
+        except Exception:
+            pass
+
+    access_token          = _make_access_token(user["id"], effective_org_id, user["role"],
+                                                user.get("is_superuser", 0), active_workspace_id)
     raw_refresh, ref_hash = _make_refresh_token()
     expires_at            = (datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL)).isoformat()
     now                   = datetime.now(timezone.utc).isoformat()
@@ -517,11 +1157,13 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
     log_activity(user["id"], effective_org_id, "User Logged In", {"email": user["email"]})
 
     return {
-        "access_token":  access_token,
-        "refresh_token": raw_refresh,
-        "api_key":       api_key,
-        "token_type":    "bearer",
-        "expires_in":    ACCESS_TOKEN_TTL * 60,
+        "access_token":       access_token,
+        "refresh_token":      raw_refresh,
+        "api_key":            api_key,
+        "token_type":         "bearer",
+        "expires_in":         ACCESS_TOKEN_TTL * 60,
+        "active_workspace_id": active_workspace_id,
+        "workspaces":         workspaces,
         "user": {
             "id":           user["id"],
             "email":        user["email"],

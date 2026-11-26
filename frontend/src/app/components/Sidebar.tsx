@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
   LayoutDashboard,
   Database,
@@ -57,6 +58,7 @@ interface SidebarProps {
     email: string;
     permissions?: string[];
     is_superuser?: boolean;
+    workspace_id?: number;
   };
   onLogout?: () => void;
   onClose?: () => void;
@@ -388,7 +390,13 @@ export function Sidebar({
       </div>
 
       {/* Footer */}
-      <div className={`border-t border-slate-800 shrink-0 ${collapsed ? 'p-2' : 'p-4 space-y-3'}`}>
+      <div className={`border-t border-slate-800 shrink-0 ${collapsed ? 'p-2 space-y-2' : 'p-4 space-y-3'}`}>
+        {/* Workspace Switcher */}
+        <WorkspaceSwitcher
+          currentWorkspaceId={user?.workspace_id}
+          collapsed={collapsed}
+        />
+
         {user && !collapsed && (
           <div className="bg-slate-800/50 p-3 rounded-2xl flex items-center gap-3 border border-slate-700/50">
             <div className="size-9 bg-slate-700 rounded-xl flex items-center justify-center text-blue-400 shrink-0 border border-slate-600 shadow-inner">

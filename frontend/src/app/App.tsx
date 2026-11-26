@@ -278,13 +278,20 @@ export default function App() {
   }, [isAuthenticated, user?.is_superuser]);
 
   const handleLoginSuccess = (key: string, access: string, refresh: string, userData: any) => {
+    // Merge top-level workspace fields into the user object so components
+    // (e.g. WorkspaceSwitcher) can access them without JWT decoding.
+    const enriched = {
+      ...userData,
+      workspace_id:        userData.workspace_id        ?? userData.active_workspace_id ?? null,
+      active_workspace_id: userData.active_workspace_id ?? userData.workspace_id        ?? null,
+    };
     setApiKey(key);
     setAccessToken(access);
-    setUser(userData);
+    setUser(enriched);
     secureStorage.setItem('vantage_api_key', key);
     secureStorage.setItem('vantage_access_token', access);
     secureStorage.setItem('vantage_refresh_token', refresh);
-    localStorage.setItem('vantage_user', JSON.stringify(userData)); // non-sensitive profile data
+    localStorage.setItem('vantage_user', JSON.stringify(enriched)); // non-sensitive profile data
   };
 
   const handleLogout = async () => {

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import {
     Building2, CheckCircle, Copy, AlertCircle, Mail, Lock,
     User, UserPlus, LogIn, ArrowRight, TrendingUp, Sparkles,
-    ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2, KeyRound, Loader2
+    ShieldCheck, Globe, Zap, Link as LinkIcon, Trash2, KeyRound, Loader2,
+    ChevronLeft, Terminal
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { secureStorage } from '../../lib/secureStorage';
@@ -91,12 +92,9 @@ function LoginForm({ onLoginSuccess, setError, setActiveTab, isLoading, setIsLoa
                 return;
             }
 
-            onLoginSuccess(
-                authRes.api_key,
-                authRes.access_token,
-                authRes.refresh_token,
-                authRes.user || authRes
-            );
+            // Merge active_workspace_id (top-level) into the user object
+            const userData = { ...(authRes.user || authRes), active_workspace_id: authRes.active_workspace_id };
+            onLoginSuccess(authRes.api_key, authRes.access_token, authRes.refresh_token, userData);
         } catch (err: any) {
             setError(err.message || 'Login failed');
         } finally {
@@ -252,47 +250,131 @@ function SSOLoginButton() {
     );
 }
 
-function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess }: RegisterFormProps & { onLoginSuccess?: any }) {
-    const [orgName, setOrgName] = useState('');
-    const [regEmail, setRegEmail] = useState('');
-    const [regPassword, setRegPassword] = useState('');
+// ── Individual registration form ───────────────────────────────────────────────
+
+function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSuccess, onBack }: {
+    setError: (e: string | null) => void;
+    isLoading: boolean;
+    setIsLoading: (v: boolean) => void;
+    onLoginSuccess?: any;
+    onBack: () => void;
+}) {
+    const [email, setEmail]       = useState('');
+    const [password, setPassword] = useState('');
+    const [name, setName]         = useState('');
+
+    const hasLength  = password.length >= 8;
+    const hasSpecial = /[\d\W]/.test(password);
+    const meetsRules = hasLength && hasSpecial;
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email.trim() || !password.trim()) { setError('Email and password are required.'); return; }
+        if (!meetsRules) { setError('Password must be at least 8 characters with a digit or special character.'); return; }
+        setIsLoading(true); setError(null);
+        try {
+            const res = await api.post<any>('/workspaces/register-individual', {
+                email, password, display_name: name || email.split('@')[0]
+            });
+            const apiKey = res.api_key || '';
+            secureStorage.setItem('vantage_access_token', res.access_token);
+            secureStorage.setItem('vantage_refresh_token', res.refresh_token);
+            if (apiKey) secureStorage.setItem('vantage_api_key', apiKey);
+            const userData = { ...(res.user || res), active_workspace_id: res.active_workspace_id };
+            localStorage.setItem('vantage_user', JSON.stringify(userData));
+            onLoginSuccess?.(apiKey, res.access_token, res.refresh_token, userData);
+        } catch (err: any) {
+            setError(err.message || 'Registration failed.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-5">
+            <button type="button" onClick={onBack} className="flex items-center gap-1 text-xs text-slate-400 hover:text-blue-600 transition-colors font-bold uppercase tracking-widest mb-2">
+                <ChevronLeft size={14} /> Back
+            </button>
+
+            <div className="p-3 bg-blue-50/60 rounded-2xl border border-blue-100/50 flex gap-3 items-center">
+                <User size={16} className="text-blue-500 shrink-0" />
+                <p className="text-[11px] text-blue-700 font-semibold leading-tight">
+                    Personal workspace · no organisation needed. You can create or join one later.
+                </p>
+            </div>
+
+            <div className="space-y-4">
+                <InputField id="i-name" icon={User} label="Display Name" value={name}
+                    onChange={(e: any) => setName(e.target.value)} placeholder="Alex" />
+                <InputField id="i-email" icon={Mail} label="Email" type="email" value={email}
+                    onChange={(e: any) => setEmail(e.target.value)} placeholder="you@example.com" />
+                <div>
+                    <InputField id="i-password" icon={Lock} label="Password" type="password" value={password}
+                        onChange={(e: any) => setPassword(e.target.value)} placeholder="••••••••" />
+                    <PasswordStrengthBar password={password} />
+                </div>
+            </div>
+
+            <button type="submit" disabled={isLoading || !email.trim() || !meetsRules}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98]">
+                {isLoading ? 'CREATING ACCOUNT…' : 'CREATE PERSONAL ACCOUNT'}
+            </button>
+        </form>
+    );
+}
+
+// ── Organisation registration form (existing multi-step flow) ─────────────────
+
+function OrgRegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess, onBack }: RegisterFormProps & { onLoginSuccess?: any; onBack: () => void }) {
+    const [orgName, setOrgName]           = useState('');
+    const [regEmail, setRegEmail]         = useState('');
+    const [regPassword, setRegPassword]   = useState('');
     const [regDisplayName, setRegDisplayName] = useState('');
+    // Domain verification state
+    const [domainStep, setDomainStep]     = useState<'form' | 'dns' | 'verify'>('form');
+    const [domain, setDomain]             = useState('');
+    const [dnsRecord, setDnsRecord]       = useState<{ name: string; value: string } | null>(null);
+    const [dnsVerified, setDnsVerified]   = useState(false);
+    const [verifyLoading, setVerifyLoading] = useState(false);
+    const [accessToken, setAccessToken]   = useState('');
 
     const handleRegister = async () => {
         if (!orgName.trim() || !regEmail.trim() || !regPassword.trim()) {
             setError('All fields are required.');
             return;
         }
-
-        setIsLoading(true);
-        setError(null);
-
+        setIsLoading(true); setError(null);
         try {
             const orgRes = await api.post<{ api_key: string }>('/auth/register', {
-                name: orgName,
-                email: regEmail
+                name: orgName, email: regEmail,
             });
-
             const apiKey = orgRes.api_key;
-            // Store silently — users never need to see or manage the org key
             secureStorage.setItem('vantage_api_key', apiKey);
             setNewApiKey(apiKey);
 
             const authRes = await api.post<any>('/auth/register-first-user', {
-                email: regEmail,
-                password: regPassword,
-                display_name: regDisplayName || regEmail.split('@')[0]
+                email: regEmail, password: regPassword,
+                display_name: regDisplayName || regEmail.split('@')[0],
             });
-
             secureStorage.setItem('vantage_access_token', authRes.access_token);
             secureStorage.setItem('vantage_refresh_token', authRes.refresh_token);
             localStorage.setItem('vantage_user', JSON.stringify(authRes.user || authRes));
+            setAccessToken(authRes.access_token);
 
-            // Skip the key-display step — go straight into the app
-            if (onLoginSuccess) {
-                onLoginSuccess(apiKey, authRes.access_token, authRes.refresh_token, authRes.user || authRes);
+            // If domain provided, start DNS verification; otherwise go straight in
+            if (domain.trim()) {
+                try {
+                    const dnsRes = await api.post<any>('/workspaces/org/initiate-domain', { domain }, {
+                        headers: { Authorization: `Bearer ${authRes.access_token}` }
+                    });
+                    setDnsRecord({ name: dnsRes.txt_record_name, value: dnsRes.txt_record_value });
+                    setDomainStep('dns');
+                } catch {
+                    // DNS initiation failed — just log in
+                    onLoginSuccess?.(apiKey, authRes.access_token, authRes.refresh_token, authRes.user || authRes);
+                }
             } else {
-                setStep(2);
+                onLoginSuccess?.(apiKey, authRes.access_token, authRes.refresh_token, authRes.user || authRes);
             }
         } catch (err: any) {
             setError(err.message || 'Registration failed.');
@@ -301,69 +383,212 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
         }
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        handleRegister();
+    const handleVerifyDomain = async () => {
+        setVerifyLoading(true); setError(null);
+        try {
+            const res = await api.post<{ verified: boolean }>('/workspaces/org/verify-domain', { domain }, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            });
+            if (res.verified) {
+                setDnsVerified(true);
+                setDomainStep('verify');
+                // Create the org workspace
+                await api.post<any>('/workspaces/org/create', { org_name: orgName, domain }, {
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                });
+            } else {
+                setError('DNS record not found yet. It can take up to 48 hours to propagate.');
+            }
+        } catch (err: any) {
+            setError(err.message || 'Verification failed.');
+        } finally {
+            setVerifyLoading(false);
+        }
     };
 
-    return (
-        <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-4">
-                <InputField
-                    id="reg-org"
-                    icon={Building2}
-                    label="Company Name"
-                    value={orgName}
-                    onChange={(e: any) => setOrgName(e.target.value)}
-                    placeholder="e.g. Nexus Forge"
-                />
+    const handleContinue = () => {
+        const apiKey = secureStorage.getItem('vantage_api_key') || '';
+        const at = secureStorage.getItem('vantage_access_token') || '';
+        const rt = secureStorage.getItem('vantage_refresh_token') || '';
+        const user = JSON.parse(localStorage.getItem('vantage_user') || '{}');
+        onLoginSuccess?.(apiKey, at, rt, user);
+    };
 
-                <InputField
-                    id="reg-email"
-                    icon={Mail}
-                    label="Work Email"
-                    type="email"
-                    value={regEmail}
-                    onChange={(e: any) => setRegEmail(e.target.value)}
-                    placeholder="name@company.com"
-                />
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <InputField
-                        id="reg-nickname"
-                        icon={User}
-                        label="Nick Name"
-                        value={regDisplayName}
-                        onChange={(e: any) => setRegDisplayName(e.target.value)}
-                        placeholder="Alex"
-                    />
-                    <InputField
-                        id="reg-password"
-                        icon={Lock}
-                        label="Password"
-                        type="password"
-                        value={regPassword}
-                        onChange={(e: any) => setRegPassword(e.target.value)}
-                        placeholder="••••••••"
-                    />
+    // DNS record display step
+    if (domainStep === 'dns' && dnsRecord) {
+        return (
+            <div className="space-y-6 animate-in fade-in duration-500">
+                <button type="button" onClick={() => setDomainStep('form')} className="flex items-center gap-1 text-xs text-slate-400 hover:text-blue-600 transition-colors font-bold uppercase tracking-widest">
+                    <ChevronLeft size={14} /> Back
+                </button>
+                <div className="text-center space-y-2">
+                    <div className="inline-flex items-center justify-center w-14 h-14 bg-amber-50 rounded-full mb-2">
+                        <Terminal size={28} className="text-amber-600" />
+                    </div>
+                    <h3 className="text-xl font-black text-slate-900">Add DNS Record</h3>
+                    <p className="text-sm text-slate-500">Publish this TXT record on your domain to verify ownership.</p>
+                </div>
+                <div className="bg-slate-900 rounded-2xl p-4 space-y-3 font-mono text-xs">
+                    <div>
+                        <p className="text-slate-500 mb-1">Name</p>
+                        <p className="text-emerald-400 break-all">{dnsRecord.name}</p>
+                    </div>
+                    <div>
+                        <p className="text-slate-500 mb-1">Value</p>
+                        <p className="text-blue-300 break-all">{dnsRecord.value}</p>
+                    </div>
+                </div>
+                <p className="text-[11px] text-slate-400 text-center">DNS changes can take up to 48 hours to propagate. Once published, click Verify.</p>
+                <div className="space-y-3">
+                    <button onClick={handleVerifyDomain} disabled={verifyLoading}
+                        className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                        {verifyLoading ? <><Loader2 className="size-5 animate-spin" /> Checking…</> : 'Verify Domain'}
+                    </button>
+                    <button onClick={handleContinue} className="w-full py-3 text-sm text-slate-400 hover:text-slate-700 transition-colors font-bold">
+                        Skip for now → Enter app
+                    </button>
                 </div>
             </div>
+        );
+    }
 
-            <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100/50 flex gap-3 items-center">
-                <div className="p-2 bg-white rounded-lg text-blue-500 shadow-sm"><Globe size={16} /></div>
-                <p className="text-[11px] text-blue-600 font-bold leading-tight">
-                    A dedicated database and secure workspace will be provisioned on the fly.
+    // Success step
+    if (domainStep === 'verify' && dnsVerified) {
+        return (
+            <div className="space-y-6 animate-in fade-in zoom-in-95 duration-500 text-center">
+                <div className="inline-flex items-center justify-center w-20 h-20 bg-emerald-50 text-emerald-500 rounded-full shadow-inner">
+                    <Sparkles size={40} className="animate-bounce" />
+                </div>
+                <div>
+                    <h3 className="text-2xl font-black text-slate-900">Organisation Created!</h3>
+                    <p className="text-slate-500 mt-1">Domain verified. Your workspace is ready.</p>
+                </div>
+                <button onClick={handleContinue}
+                    className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all flex items-center justify-center gap-3">
+                    GET STARTED <ArrowRight size={20} />
+                </button>
+            </div>
+        );
+    }
+
+    return (
+        <form onSubmit={(e) => { e.preventDefault(); handleRegister(); }} className="space-y-5">
+            <button type="button" onClick={onBack} className="flex items-center gap-1 text-xs text-slate-400 hover:text-blue-600 transition-colors font-bold uppercase tracking-widest mb-2">
+                <ChevronLeft size={14} /> Back
+            </button>
+
+            <div className="p-3 bg-indigo-50/60 rounded-2xl border border-indigo-100/50 flex gap-3 items-center">
+                <Building2 size={16} className="text-indigo-500 shrink-0" />
+                <p className="text-[11px] text-indigo-700 font-semibold leading-tight">
+                    Organisation workspace · you become the admin. Invite employees after setup.
                 </p>
             </div>
 
-            <button
-                type="submit"
-                disabled={isLoading || !orgName.trim() || !regEmail.trim() || !regPassword.trim()}
-                className="w-full py-4.5 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98] mt-2 mb-4"
-            >
-                {isLoading ? 'INITIATING...' : 'CREATE WORKSPACE'}
+            <div className="space-y-4">
+                <InputField id="org-company" icon={Building2} label="Company Name" value={orgName}
+                    onChange={(e: any) => setOrgName(e.target.value)} placeholder="Nexus Forge Inc." />
+                <InputField id="org-email" icon={Mail} label="Work Email" type="email" value={regEmail}
+                    onChange={(e: any) => setRegEmail(e.target.value)} placeholder="name@company.com" />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <InputField id="org-name" icon={User} label="Your Name" value={regDisplayName}
+                        onChange={(e: any) => setRegDisplayName(e.target.value)} placeholder="Alex" />
+                    <InputField id="org-password" icon={Lock} label="Password" type="password" value={regPassword}
+                        onChange={(e: any) => setRegPassword(e.target.value)} placeholder="••••••••" />
+                </div>
+                {/* Optional domain for verification */}
+                <div className="space-y-1.5 group">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1">
+                        Company Domain <span className="normal-case font-normal text-slate-300">(optional — for DNS verification)</span>
+                    </label>
+                    <div className="relative">
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <Globe size={18} />
+                        </div>
+                        <input
+                            value={domain}
+                            onChange={(e) => setDomain(e.target.value)}
+                            placeholder="acme.com"
+                            className="w-full pl-11 pr-4 py-3 bg-white/50 backdrop-blur-sm border border-slate-200/60 rounded-xl focus:border-blue-500/50 focus:bg-white focus:ring-4 focus:ring-blue-500/5 outline-none text-slate-800 placeholder:text-slate-300 shadow-sm"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" disabled={isLoading || !orgName.trim() || !regEmail.trim() || !regPassword.trim()}
+                className="w-full py-4 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-lg shadow-xl shadow-slate-900/10 transition-all disabled:opacity-50 active:scale-[0.98]">
+                {isLoading ? 'CREATING…' : 'CREATE ORGANISATION'}
             </button>
         </form>
+    );
+}
+
+// ── Registration type picker ──────────────────────────────────────────────────
+
+function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess }: RegisterFormProps & { onLoginSuccess?: any }) {
+    const [regType, setRegType] = useState<'individual' | 'org' | null>(null);
+
+    if (regType === 'individual') {
+        return (
+            <IndividualRegisterForm
+                setError={setError}
+                isLoading={isLoading}
+                setIsLoading={setIsLoading}
+                onLoginSuccess={onLoginSuccess}
+                onBack={() => setRegType(null)}
+            />
+        );
+    }
+
+    if (regType === 'org') {
+        return (
+            <OrgRegisterForm
+                setNewApiKey={setNewApiKey}
+                setStep={setStep}
+                setError={setError}
+                isLoading={isLoading}
+                setIsLoading={setIsLoading}
+                onLoginSuccess={onLoginSuccess}
+                onBack={() => setRegType(null)}
+            />
+        );
+    }
+
+    // Type picker
+    return (
+        <div className="space-y-5 animate-in fade-in duration-400">
+            <div className="text-center space-y-1 mb-2">
+                <p className="text-sm font-bold text-slate-600">How will you use Vantage AI?</p>
+                <p className="text-xs text-slate-400">You can always create or join an organisation later.</p>
+            </div>
+
+            <button
+                onClick={() => { setError(null); setRegType('individual'); }}
+                className="w-full flex items-center gap-4 p-5 bg-white border-2 border-slate-200 hover:border-blue-500 hover:bg-blue-50/30 rounded-2xl transition-all group text-left"
+            >
+                <div className="size-12 bg-blue-50 group-hover:bg-blue-100 rounded-2xl flex items-center justify-center shrink-0 transition-colors">
+                    <User size={22} className="text-blue-600" />
+                </div>
+                <div className="flex-1">
+                    <p className="font-black text-slate-900 text-base leading-tight">Individual</p>
+                    <p className="text-xs text-slate-500 mt-0.5 font-medium">Personal workspace for solo use. Free to start.</p>
+                </div>
+                <ChevronLeft size={18} className="text-slate-300 group-hover:text-blue-500 rotate-180 transition-colors shrink-0" />
+            </button>
+
+            <button
+                onClick={() => { setError(null); setRegType('org'); }}
+                className="w-full flex items-center gap-4 p-5 bg-white border-2 border-slate-200 hover:border-indigo-500 hover:bg-indigo-50/30 rounded-2xl transition-all group text-left"
+            >
+                <div className="size-12 bg-indigo-50 group-hover:bg-indigo-100 rounded-2xl flex items-center justify-center shrink-0 transition-colors">
+                    <Building2 size={22} className="text-indigo-600" />
+                </div>
+                <div className="flex-1">
+                    <p className="font-black text-slate-900 text-base leading-tight">Organisation</p>
+                    <p className="text-xs text-slate-500 mt-0.5 font-medium">Shared workspace for teams with admin controls.</p>
+                </div>
+                <ChevronLeft size={18} className="text-slate-300 group-hover:text-indigo-500 rotate-180 transition-colors shrink-0" />
+            </button>
+        </div>
     );
 }
 
