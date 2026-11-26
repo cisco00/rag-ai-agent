@@ -850,9 +850,11 @@ app.mount("/uploads", StaticFiles(directory=uploads_root), name="uploads")
 @app.get("/{full_path:path}")
 async def serve_spa(request: Request, full_path: str):
     # API Guard: Never serve HTML for paths that should be handled by API routers
+    # Also exclude FastAPI's built-in docs routes so Swagger UI remains reachable.
     if any(full_path.startswith(p) for p in [
         "auth", "data", "integrations", "analytics", "branding", "sessions",
         "transformations", "alerts", "dashboards", "insights", "org_context", "admin",
+        "docs", "redoc", "openapi.json",
     ]):
         return JSONResponse(status_code=404, content={"detail": f"Route '{full_path}' not found in API."})
 
