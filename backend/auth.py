@@ -659,9 +659,18 @@ def register_individual(email: str, password: str,
     Returns full login payload.
     """
     email = email.lower().strip()
-    if get_user_by_email_global(email):
-        raise HTTPException(status_code=400,
-                            detail="An account with this email already exists.")
+    existing = get_user_by_email_global(email)
+    if existing:
+        # Attempt to log in with the supplied password — if correct, return the
+        # session transparently (idempotent registration for returning users).
+        try:
+            return login_user(email=email, password=password)
+        except HTTPException:
+            # Wrong password — tell the user to log in with their real password
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Please log in instead.",
+            )
     validate_password_strength(password)
     pw_hash = hash_password(password)
     name = display_name or email.split("@")[0]

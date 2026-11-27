@@ -252,16 +252,18 @@ function SSOLoginButton() {
 
 // ── Individual registration form ───────────────────────────────────────────────
 
-function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSuccess, onBack }: {
+function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSuccess, onBack, onSwitchToLogin }: {
     setError: (e: string | null) => void;
     isLoading: boolean;
     setIsLoading: (v: boolean) => void;
     onLoginSuccess?: any;
     onBack: () => void;
+    onSwitchToLogin?: () => void;
 }) {
-    const [email, setEmail]       = useState('');
-    const [password, setPassword] = useState('');
-    const [name, setName]         = useState('');
+    const [email, setEmail]           = useState('');
+    const [password, setPassword]     = useState('');
+    const [name, setName]             = useState('');
+    const [alreadyExists, setAlreadyExists] = useState(false);
 
     const hasLength  = password.length >= 8;
     const hasSpecial = /[\d\W]/.test(password);
@@ -269,6 +271,7 @@ function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSucc
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        setAlreadyExists(false);
         if (!email.trim() || !password.trim()) { setError('Email and password are required.'); return; }
         if (!meetsRules) { setError('Password must be at least 8 characters with a digit or special character.'); return; }
         setIsLoading(true); setError(null);
@@ -284,7 +287,11 @@ function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSucc
             localStorage.setItem('vantage_user', JSON.stringify(userData));
             onLoginSuccess?.(apiKey, res.access_token, res.refresh_token, userData);
         } catch (err: any) {
-            setError(err.message || 'Registration failed.');
+            const msg: string = err.message || 'Registration failed.';
+            if (msg.toLowerCase().includes('already exists')) {
+                setAlreadyExists(true);
+            }
+            setError(msg);
         } finally {
             setIsLoading(false);
         }
@@ -307,7 +314,7 @@ function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSucc
                 <InputField id="i-name" icon={User} label="Display Name" value={name}
                     onChange={(e: any) => setName(e.target.value)} placeholder="Alex" />
                 <InputField id="i-email" icon={Mail} label="Email" type="email" value={email}
-                    onChange={(e: any) => setEmail(e.target.value)} placeholder="you@example.com" />
+                    onChange={(e: any) => { setEmail(e.target.value); setAlreadyExists(false); }} placeholder="you@example.com" />
                 <div>
                     <InputField id="i-password" icon={Lock} label="Password" type="password" value={password}
                         onChange={(e: any) => setPassword(e.target.value)} placeholder="••••••••" />
@@ -319,6 +326,16 @@ function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSucc
                 className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-500/20 transition-all disabled:opacity-50 active:scale-[0.98]">
                 {isLoading ? 'CREATING ACCOUNT…' : 'CREATE PERSONAL ACCOUNT'}
             </button>
+
+            {alreadyExists && onSwitchToLogin && (
+                <button
+                    type="button"
+                    onClick={onSwitchToLogin}
+                    className="w-full py-3 border-2 border-blue-500 text-blue-600 hover:bg-blue-50 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2"
+                >
+                    <LogIn size={16} /> Log in with this email instead
+                </button>
+            )}
         </form>
     );
 }
@@ -524,7 +541,7 @@ function OrgRegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoad
 
 // ── Registration type picker ──────────────────────────────────────────────────
 
-function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess }: RegisterFormProps & { onLoginSuccess?: any }) {
+function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess, onSwitchToLogin }: RegisterFormProps & { onLoginSuccess?: any; onSwitchToLogin?: () => void }) {
     const [regType, setRegType] = useState<'individual' | 'org' | null>(null);
 
     if (regType === 'individual') {
@@ -535,6 +552,7 @@ function RegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading
                 setIsLoading={setIsLoading}
                 onLoginSuccess={onLoginSuccess}
                 onBack={() => setRegType(null)}
+                onSwitchToLogin={onSwitchToLogin}
             />
         );
     }
@@ -1309,6 +1327,7 @@ export function AuthPage({ onLoginSuccess, isSettingsMode = false, user, existin
                                     isLoading={isLoading}
                                     setIsLoading={setIsLoading}
                                     onLoginSuccess={onLoginSuccess}
+                                    onSwitchToLogin={() => { setActiveTab('login'); setError(null); }}
                                 />
                             </div>
                         ) : activeTab === 'login' ? (
