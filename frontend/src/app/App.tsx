@@ -173,11 +173,13 @@ export default function App() {
     }
   }, []);
 
-  const isAuthenticated = desktop ? desktopReady : !!(apiKey && accessToken);
+  // apiKey is an org-level identifier — individual users have none.
+  // accessToken (JWT) is the real auth credential and is sufficient on its own.
+  const isAuthenticated = desktop ? desktopReady : !!accessToken;
 
   // Proactively refresh token on startup if it's expired or nearly expired
   useEffect(() => {
-    if (!accessToken || !apiKey) return;
+    if (!accessToken) return;
     if (!isTokenExpiredOrExpiring(accessToken)) return;
 
     const refreshToken = secureStorage.getItem('vantage_refresh_token');
