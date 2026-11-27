@@ -29,42 +29,65 @@ export const clearSession = () => {
   localStorage.removeItem('vantage_branding');
 };
 
+/**
+ * Singleton refresh promise — prevents concurrent 401 responses from each
+ * triggering a separate refresh call. The backend rotates the refresh token
+ * on every use (old token deleted), so a second concurrent call with the
+ * same token would invalidate the first and cascade into a logout.
+ */
+let _refreshInFlight: Promise<string | null> | null = null;
+
 /** Attempt to refresh access token. Returns new token or null on failure. */
 async function tryRefreshToken(): Promise<string | null> {
+  // If a refresh is already in flight, piggyback on it rather than starting
+  // a new one (which would race against the token rotation).
+  if (_refreshInFlight) return _refreshInFlight;
+
   const refreshToken = secureStorage.getItem('vantage_refresh_token');
   if (!refreshToken) {
     console.warn('[api] No refresh token available.');
     return null;
   }
 
-  try {
-    const res = await fetch(
-      `${getBaseUrl()}/auth/refresh`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+  _refreshInFlight = (async () => {
+    try {
+      const res = await fetch(
+        `${getBaseUrl()}/auth/refresh`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        }
+      );
+
+      if (!res.ok) {
+        console.warn('[api] Refresh token rejected by server.');
+        return null;
       }
-    );
 
-    if (!res.ok) {
-      console.warn('[api] Refresh token rejected by server.');
+      const data = await res.json();
+      if (!data.access_token) {
+        console.warn('[api] Refresh response missing access_token.');
+        return null;
+      }
+
+      secureStorage.setItem('vantage_access_token', data.access_token);
+      // The backend rotates the refresh token on every use — save the new one
+      // so subsequent refreshes don't use the now-invalidated old token.
+      if (data.refresh_token) {
+        secureStorage.setItem('vantage_refresh_token', data.refresh_token);
+      }
+      console.log('[api] Token successfully refreshed.');
+      return data.access_token;
+    } catch (err) {
+      console.error('[api] Error during token refresh:', err);
       return null;
+    } finally {
+      _refreshInFlight = null;
     }
+  })();
 
-    const data = await res.json();
-    if (!data.access_token) {
-      console.warn('[api] Refresh response missing access_token.');
-      return null;
-    }
-
-    secureStorage.setItem('vantage_access_token', data.access_token);
-    console.log('[api] Token successfully refreshed.');
-    return data.access_token;
-  } catch (err) {
-    console.error('[api] Error during token refresh:', err);
-    return null;
-  }
+  return _refreshInFlight;
 }
 
 /** Sleep helper */
