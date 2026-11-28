@@ -6,7 +6,7 @@ import { DatabaseConfig } from './components/DatabaseConfig';
 import { FileImport } from './components/FileImport';
 import { QueryInterface } from './components/QueryInterface';
 import { Reports } from './components/Reports';
-import { AuthPage } from './components/AuthPage';
+import { AuthPage, OrgRegisterForm } from './components/AuthPage';
 import { ScheduledReports } from './components/ScheduledReports';
 import { DataTransformation } from './components/DataTransformation';
 import { AdvancedAnalytics } from './components/AdvancedAnalytics';
@@ -98,6 +98,7 @@ export default function App() {
   } | undefined>(undefined);
   const [publicScreen, setPublicScreen] = useState<PublicScreen>('landing');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
 
   const [apiKey, setApiKey] = useState<string | null>(getApiKey());
   const [accessToken, setAccessToken] = useState<string | null>(getAccessToken());
@@ -397,6 +398,7 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           onClose={() => setIsSidebarOpen(false)}
+          onCreateOrg={() => setCreateOrgOpen(true)}
           updateAvailable={updateStatus?.update_available}
           currentVersion={updateStatus?.current_version}
         />
@@ -606,6 +608,68 @@ export default function App() {
           )}
           {currentView === 'api-keys' && <ApiKeyManager />}
         </main>
+      </div>
+
+      {/* Create Organisation modal — available to individual users from workspace switcher */}
+      {createOrgOpen && (
+        <CreateOrgModal
+          onClose={() => setCreateOrgOpen(false)}
+          onLoginSuccess={(key, access, refresh, userData) => {
+            handleLoginSuccess(key, access, refresh, userData);
+            setCreateOrgOpen(false);
+            window.location.reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Create Organisation modal ─────────────────────────────────────────────────
+
+function CreateOrgModal({
+  onClose,
+  onLoginSuccess,
+}: {
+  onClose: () => void;
+  onLoginSuccess: (key: string, access: string, refresh: string, user: any) => void;
+}) {
+  const [, setNewApiKey] = useState('');
+  const [, setStep] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-2">
+          <h2 className="text-lg font-bold text-slate-900">Create Organisation</h2>
+          <button
+            onClick={onClose}
+            className="size-8 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
+          >
+            ✕
+          </button>
+        </div>
+
+        {error && (
+          <div className="mx-6 mt-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="p-6 pt-3">
+          <OrgRegisterForm
+            setNewApiKey={setNewApiKey}
+            setStep={setStep}
+            setError={setError}
+            isLoading={isLoading}
+            setIsLoading={setIsLoading}
+            onLoginSuccess={onLoginSuccess}
+            onBack={onClose}
+          />
+        </div>
       </div>
     </div>
   );

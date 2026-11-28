@@ -26,9 +26,11 @@ interface WorkspaceSwitcherProps {
     collapsed?: boolean;
     /** Called after a successful switch so the parent can react without a full reload. */
     onSwitch?: (workspaceId: number) => void;
+    /** Called when the user clicks "Create Organisation" so the parent can open the registration flow. */
+    onCreateOrg?: () => void;
 }
 
-export function WorkspaceSwitcher({ currentWorkspaceId, collapsed, onSwitch }: WorkspaceSwitcherProps) {
+export function WorkspaceSwitcher({ currentWorkspaceId, collapsed, onSwitch, onCreateOrg }: WorkspaceSwitcherProps) {
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
     const [current, setCurrent] = useState<Workspace | null>(null);
     const [open, setOpen] = useState(false);
@@ -105,6 +107,7 @@ export function WorkspaceSwitcher({ currentWorkspaceId, collapsed, onSwitch }: W
                         current={current}
                         switching={switching}
                         onSelect={handleSwitch}
+                        onCreateOrg={onCreateOrg}
                         className="absolute left-12 top-0 z-50"
                     />
                 )}
@@ -144,6 +147,7 @@ export function WorkspaceSwitcher({ currentWorkspaceId, collapsed, onSwitch }: W
                     current={current}
                     switching={switching}
                     onSelect={handleSwitch}
+                    onCreateOrg={onCreateOrg}
                     className="absolute left-0 right-0 bottom-full mb-1 z-50"
                 />
             )}
@@ -158,12 +162,14 @@ function WorkspaceDropdown({
     current,
     switching,
     onSelect,
+    onCreateOrg,
     className,
 }: {
     workspaces: Workspace[];
     current: Workspace | null;
     switching: number | null;
     onSelect: (ws: Workspace) => void;
+    onCreateOrg?: () => void;
     className?: string;
 }) {
     const personal = workspaces.filter(w => w.type === 'personal');
@@ -181,10 +187,10 @@ function WorkspaceDropdown({
             )}
 
             {/* Create org shortcut — only visible if user has no org workspace yet */}
-            {orgs.length === 0 && (
+            {orgs.length === 0 && onCreateOrg && (
                 <div className="p-2 border-t border-slate-700">
                     <button
-                        onClick={() => { window.location.hash = '#create-org'; }}
+                        onClick={onCreateOrg}
                         className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-700 transition-all text-[12px] font-semibold"
                     >
                         <Plus size={14} />

@@ -1175,6 +1175,7 @@ def login_user(email: str, password: str, org_id: Optional[int] = None) -> dict:
         "workspaces":         workspaces,
         "user": {
             "id":           user["id"],
+            "org_id":       user.get("org_id"),    # None for individual users, set for org members
             "email":        user["email"],
             "display_name": user["display_name"],
             "role":         user["role"],

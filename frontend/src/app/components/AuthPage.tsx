@@ -342,7 +342,7 @@ function IndividualRegisterForm({ setError, isLoading, setIsLoading, onLoginSucc
 
 // ── Organisation registration form (existing multi-step flow) ─────────────────
 
-function OrgRegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess, onBack }: RegisterFormProps & { onLoginSuccess?: any; onBack: () => void }) {
+export function OrgRegisterForm({ setNewApiKey, setStep, setError, isLoading, setIsLoading, onLoginSuccess, onBack }: RegisterFormProps & { onLoginSuccess?: any; onBack: () => void }) {
     const [orgName, setOrgName]           = useState('');
     const [regEmail, setRegEmail]         = useState('');
     const [regPassword, setRegPassword]   = useState('');

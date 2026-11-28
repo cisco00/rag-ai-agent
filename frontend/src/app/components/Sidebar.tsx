@@ -59,9 +59,11 @@ interface SidebarProps {
     permissions?: string[];
     is_superuser?: boolean;
     workspace_id?: number;
+    org_id?: number | null;
   };
   onLogout?: () => void;
   onClose?: () => void;
+  onCreateOrg?: () => void;
   updateAvailable?: boolean;
   currentVersion?: string;
 }
@@ -76,6 +78,7 @@ export function Sidebar({
   user,
   onLogout,
   onClose,
+  onCreateOrg,
   updateAvailable = false,
   currentVersion,
 }: SidebarProps) {
@@ -147,7 +150,7 @@ export function Sidebar({
     { id: 'scheduled', label: 'Scheduled', icon: Calendar, disabled: !isConfigured, hide: !hasPerm('VIEW_REPORTS') },
     { id: 'billing', label: 'Usage & Billing', icon: Activity, hide: !hasPerm('MANAGE_ORG') },
     { id: 'branding', label: 'Branding', icon: Settings, hide: !hasPerm('MANAGE_ORG') },
-    { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') },
+    { id: 'settings', label: 'Invite Members', icon: UserPlus, hide: !hasPerm('MANAGE_USERS') || !user?.org_id },
     { id: 'admin', label: 'Admin Console', icon: Shield, hide: !user?.is_superuser, badge: updateAvailable ? '!' : undefined },
   ].filter(item => !item.hide);
 
@@ -395,6 +398,7 @@ export function Sidebar({
         <WorkspaceSwitcher
           currentWorkspaceId={user?.workspace_id}
           collapsed={collapsed}
+          onCreateOrg={onCreateOrg}
         />
 
         {user && !collapsed && (
